@@ -1377,7 +1377,7 @@ static void sdhci_init_readonly_registers(SDHCIState *s, Error **errp)
     ERRP_GUARD();
 
     switch (s->sd_spec_version) {
-    case 2 ... 3:
+    case 2 ... 4:
         break;
     default:
         error_setg(errp, "Only Spec v2/v3 are supported");
