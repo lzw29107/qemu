@@ -8837,7 +8837,30 @@ void register_cp_regs_for_features(ARMCPU *cpu)
             .fgt = FGT_CLIDR_EL1,
             .resetvalue = cpu->clidr
         };
+        ARMCPRegInfo v7_idregs[] = {
+            { .name = "PMCEID0", .state = ARM_CP_STATE_AA32,
+              .cp = 15, .opc1 = 0, .crn = 9, .crm = 12, .opc2 = 6,
+              .access = PL0_R, .accessfn = pmreg_access, .type = ARM_CP_CONST,
+              .fgt = FGT_PMCEIDN_EL0,
+              .resetvalue = extract64(cpu->pmceid0, 0, 32) },
+            { .name = "PMCEID0_EL0", .state = ARM_CP_STATE_AA64,
+              .opc0 = 3, .opc1 = 3, .crn = 9, .crm = 12, .opc2 = 6,
+              .access = PL0_R, .accessfn = pmreg_access, .type = ARM_CP_CONST,
+              .fgt = FGT_PMCEIDN_EL0,
+              .resetvalue = cpu->pmceid0 },
+            { .name = "PMCEID1", .state = ARM_CP_STATE_AA32,
+              .cp = 15, .opc1 = 0, .crn = 9, .crm = 12, .opc2 = 7,
+              .access = PL0_R, .accessfn = pmreg_access, .type = ARM_CP_CONST,
+              .fgt = FGT_PMCEIDN_EL0,
+              .resetvalue = extract64(cpu->pmceid1, 0, 32) },
+            { .name = "PMCEID1_EL0", .state = ARM_CP_STATE_AA64,
+              .opc0 = 3, .opc1 = 3, .crn = 9, .crm = 12, .opc2 = 7,
+              .access = PL0_R, .accessfn = pmreg_access, .type = ARM_CP_CONST,
+              .fgt = FGT_PMCEIDN_EL0,
+              .resetvalue = cpu->pmceid1 },
+        };
         define_one_arm_cp_reg(cpu, &clidr);
+        define_arm_cp_regs(cpu, v7_idregs);
         define_arm_cp_regs(cpu, v7_cp_reginfo);
         define_debug_regs(cpu);
         define_pmu_regs(cpu);
@@ -9096,26 +9119,6 @@ void register_cp_regs_for_features(ARMCPU *cpu)
               .access = PL1_R, .type = ARM_CP_CONST,
               .accessfn = access_aa64_tid3,
               .resetvalue = 0 },
-            { .name = "PMCEID0", .state = ARM_CP_STATE_AA32,
-              .cp = 15, .opc1 = 0, .crn = 9, .crm = 12, .opc2 = 6,
-              .access = PL0_R, .accessfn = pmreg_access, .type = ARM_CP_CONST,
-              .fgt = FGT_PMCEIDN_EL0,
-              .resetvalue = extract64(cpu->pmceid0, 0, 32) },
-            { .name = "PMCEID0_EL0", .state = ARM_CP_STATE_AA64,
-              .opc0 = 3, .opc1 = 3, .crn = 9, .crm = 12, .opc2 = 6,
-              .access = PL0_R, .accessfn = pmreg_access, .type = ARM_CP_CONST,
-              .fgt = FGT_PMCEIDN_EL0,
-              .resetvalue = cpu->pmceid0 },
-            { .name = "PMCEID1", .state = ARM_CP_STATE_AA32,
-              .cp = 15, .opc1 = 0, .crn = 9, .crm = 12, .opc2 = 7,
-              .access = PL0_R, .accessfn = pmreg_access, .type = ARM_CP_CONST,
-              .fgt = FGT_PMCEIDN_EL0,
-              .resetvalue = extract64(cpu->pmceid1, 0, 32) },
-            { .name = "PMCEID1_EL0", .state = ARM_CP_STATE_AA64,
-              .opc0 = 3, .opc1 = 3, .crn = 9, .crm = 12, .opc2 = 7,
-              .access = PL0_R, .accessfn = pmreg_access, .type = ARM_CP_CONST,
-              .fgt = FGT_PMCEIDN_EL0,
-              .resetvalue = cpu->pmceid1 },
         };
 #ifdef CONFIG_USER_ONLY
         static const ARMCPRegUserSpaceInfo v8_user_idregs[] = {
