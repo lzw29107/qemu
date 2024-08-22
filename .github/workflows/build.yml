@@ -14,7 +14,7 @@ jobs:
       matrix:
         include:
           - { icon: '🟦', sys: mingw64, mode: dynamic }
-          - { icon: '🟦', sys: mingw64, mode: static}
+          - { icon: '🟦', sys: mingw64, mode: static }
 
     name: 🚧${{ matrix.icon }} ${{ matrix.sys }} Build ${{ matrix.mode }}
     defaults:
@@ -83,7 +83,7 @@ jobs:
 
     - name: '🚧 Build QEMU (arm & aarch64) ${{ matrix.mode }}'
       env:
-        arg: ${{ matrix.mode == 'dynamic' && '--enable-gtk --enable-sdl --enable-fdt=system --enable-avx2 --target-list=arm-softmmu,aarch64-softmmu' || '--disable-gtk --disable-spice --disable-usb-redir --disable-smartcard --disable-gnutls --disable-vnc-sasl --disable-libssh --enable-sdl --enable-fdt=system --enable-avx2 --target-list=arm-softmmu,aarch64-softmmu --static --extra-cflags="-DCURL_STATICLIB -DLIBSSH_STATIC -DLIBSLIRP_STATIC -DCAIRO_WIN32_STATIC_BUILD"' }}
+        arg: ${{ matrix.mode == 'dynamic' && '--enable-gtk --enable-sdl --enable-fdt=system --enable-avx2 --target-list=arm-softmmu,aarch64-softmmu' || '--disable-gtk --disable-spice --disable-usb-redir --disable-smartcard --disable-gnutls --disable-libssh --enable-sdl --enable-fdt=system --enable-avx2 --target-list=arm-softmmu,aarch64-softmmu --static --extra-cflags="-DCURL_STATICLIB -DLIBSSH_STATIC -DLIBSLIRP_STATIC -DCAIRO_WIN32_STATIC_BUILD"' }}
       run: |
           ./configure ${{ env.arg }}
           make -j16
@@ -112,5 +112,57 @@ jobs:
       uses: actions/upload-artifact@main
       with:
         name: QEMU (${{ matrix.mode }} build)
+        path: ${{ github.workspace }}/artifacts
+        compression-level: 9
+
+
+  build_linux:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64 }
+          - { arch: aarch64 }
+
+    name: Build Linux ${{ matrix.arch }}
+
+    steps:
+
+    - name: '🧰 Checkout'
+      uses: actions/checkout@main
+
+    - name: 'Install software packages'
+      if: ${{ matrix.arch == 'x64' }}
+      run: |
+          sudo apt update
+          sudo apt-get install libglib2.0-dev libfdt-dev libpixman-1-dev ninja-build libaio-dev libbluetooth-dev libcapstone-dev libbrlapi-dev libbz2-dev libcap-ng-dev libcurl4-gnutls-dev libgtk-3-dev libibverbs-dev libjpeg8-dev  libnuma-dev librbd-dev librdmacm-dev libsasl2-dev libsdl2-dev libseccomp-dev libsnappy-dev libssh-dev libvde-dev libvdeplug-dev libvte-2.91-dev libxen-dev liblzo2-dev valgrind xfslibs-dev libnfs-dev libiscsi-dev
+
+    - name: 'Install software packages (for cross build)'
+      if: ${{ matrix.arch == 'aarch64' }}
+      run: |
+          sudo apt update
+          sudo apt-get install gcc-aarch64-linux-gnu ninja-build
+          sudo dpkg --add-architecture arm64
+          sudo sed -i '/Types/{N;N;N;N;N;N;N;N;N;N;N;N;s/\(Types.*\n.*\)archive\(.*\)\/ubuntu\(.*\n.*\n.*\n.*gpg\)\(\n\n.*\n.*\n\)\(Types.*\n.*\)archive\(.*\)\/ubuntu\(.*\n.*\n.*\n.*gpg\)/\1archive\2\/ubuntu\3\nArchitectures: amd64\n\n\1ports\2\/ubuntu-ports\3\nArchitectures: arm64\4\5archive\6\/ubuntu\7\nArchitectures: amd64\n\n\5ports\6\/ubuntu-ports\7\nArchitectures: arm64/}' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt update
+          sudo apt-get install libglib2.0-dev:arm64 libfdt-dev:arm64 libpixman-1-dev:arm64 libaio-dev:arm64 libbluetooth-dev:arm64 libcapstone-dev:arm64 libbrlapi-dev:arm64 libbz2-dev:arm64 libcap-ng-dev:arm64 libcurl4-gnutls-dev:arm64 libgtk-3-dev:arm64 libibverbs-dev:arm64 libjpeg8-dev:arm64  libnuma-dev:arm64 librbd-dev:arm64 librdmacm-dev:arm64 libsasl2-dev:arm64 libsdl2-dev:arm64 libseccomp-dev:arm64 libsnappy-dev:arm64 libssh-dev:arm64 libvde-dev:arm64 libvdeplug-dev:arm64 libvte-2.91-dev:arm64 libxen-dev:arm64 liblzo2-dev:arm64 valgrind:arm64 xfslibs-dev:arm64 libnfs-dev:arm64 libiscsi-dev:arm64
+
+    - name: '🚧 Build QEMU Linux (arm & aarch64) ${{ matrix.mode }}'
+      env:
+        arg: ${{ matrix.arch == 'x64' && '--enable-gtk --enable-sdl --enable-avx2 --target-list=arm-softmmu,aarch64-softmmu' || '--enable-gtk --enable-sdl --enable-kvm --target-list=arm-softmmu,aarch64-softmmu --cross-prefix=aarch64-linux-gnu-' }}
+      run: |
+          ./configure ${{ env.arg }}
+          make -j16
+
+    - name: Prepare Artifacts
+      run: |
+          mkdir artifacts
+          mv build/* artifacts/
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@main
+      with:
+        name: QEMU Linux (${{ matrix.arch }} build)
         path: ${{ github.workspace }}/artifacts
         compression-level: 9
