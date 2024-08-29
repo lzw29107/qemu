@@ -13,8 +13,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { icon: '🟦', sys: mingw64, mode: dynamic }
-          - { icon: '🟦', sys: mingw64, mode: static }
+          - { icon: '🟦', sys: clang64, mode: dynamic }
+          - { icon: '🟦', sys: clang64, mode: static }
 
     name: 🚧${{ matrix.icon }} ${{ matrix.sys }} Build ${{ matrix.mode }}
     defaults:
