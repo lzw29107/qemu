@@ -34,6 +34,7 @@
 #include "qemu/option.h"
 #include "monitor/qdev.h"
 #include "hw/sysbus.h"
+#include "hw/usb/hcd-xhci.h"
 #include "hw/arm/boot.h"
 #include "hw/arm/primecell.h"
 #include "hw/arm/virt.h"
@@ -181,7 +182,7 @@ static const MemMapEntry base_memmap[] = {
     [VIRT_NVDIMM_ACPI] =        { 0x09090000, NVDIMM_ACPI_IO_LEN},
     [VIRT_PVTIME] =             { 0x090a0000, 0x00010000 },
     [VIRT_SECURE_GPIO] =        { 0x090b0000, 0x00001000 },
-    [VIRT_EHCI] =               { 0x090c0000, 0x00010000 },
+    [VIRT_XHCI] =               { 0x090c0000, XHCI_LEN_REGS },
     [VIRT_SDHCI] =              { 0x090d0000, 0x00010000 },
     [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
@@ -225,7 +226,7 @@ static const int a15irqmap[] = {
     [VIRT_GPIO] = 7,
     [VIRT_UART1] = 8,
     [VIRT_ACPI_GED] = 9,
-    [VIRT_EHCI] = 11,
+    [VIRT_XHCI] = 11,
     [VIRT_SDHCI] = 12,
     [VIRT_MMIO] = 16, /* ...to 16 + NUM_VIRTIO_TRANSPORTS - 1 */
     [VIRT_GIC_V2M] = 48, /* ...to 48 + NUM_GICV2M_SPIS - 1 */
@@ -1425,13 +1426,16 @@ static void sdhci_attach_drive(DeviceState *sdhci, DriveInfo *dinfo, bool emmc)
                                &error_fatal);
 }
 
-static void create_ehci(const VirtMachineState *vms)
+static void create_xhci(const VirtMachineState *vms)
 {
-    hwaddr base = vms->memmap[VIRT_EHCI].base;
-    int irq = vms->irqmap[VIRT_EHCI];
+    hwaddr base = vms->memmap[VIRT_XHCI].base;
+    int irq = vms->irqmap[VIRT_XHCI];
+    DeviceState *dev = qdev_new(TYPE_XHCI_SYSBUS);
+    qdev_prop_set_uint32(dev, "slots", XHCI_MAXSLOTS);
 
-    sysbus_create_simple("platform-ehci-usb", base,
-                         qdev_get_gpio_in(vms->gic, irq));
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, qdev_get_gpio_in(vms->gic, irq));
 }
 
 static void create_sdhci(const VirtMachineState *vms)
@@ -2452,8 +2456,8 @@ static void machvirt_init(MachineState *machine)
      */
     create_virtio_devices(vms);
 
-    /* Create platform EHCI controller device */
-    create_ehci(vms);
+    /* Create platform XHCI controller device */
+    create_xhci(vms);
 
     /* Create platform SD host controller device */
     create_sdhci(vms);

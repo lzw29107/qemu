@@ -63,7 +63,7 @@ enum {
     VIRT_GIC_REDIST,
     VIRT_SMMU,
     VIRT_UART0,
-    VIRT_EHCI,
+    VIRT_XHCI,
     VIRT_SDHCI,
     VIRT_MMIO,
     VIRT_RTC,
@@ -190,6 +190,9 @@ struct VirtMachineState {
 
 
 #define VIRT_SDHCI_CAPABILITIES 0x180028073ff8ffbf
+
+#undef XHCI_LEN_REGS
+#define XHCI_LEN_REGS 0x10000
 
 #define TYPE_VIRT_MACHINE   MACHINE_TYPE_NAME("virt")
 OBJECT_DECLARE_TYPE(VirtMachineState, VirtMachineClass, VIRT_MACHINE)
