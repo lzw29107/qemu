@@ -187,6 +187,9 @@ dtb-kaslr-seed
 pci
   Set ``on``/``off`` to enable/disable PCI bus. The default is ``on``
 
+xhci
+  Set ``on``/``off`` to use xHCI as the USB host controller instead of EHCI. The default is ``off``
+
 force_el3
   Set ``on``/``off`` to enable/disable EL3 without secure. The default is ``off``
 

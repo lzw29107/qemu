@@ -60,7 +60,7 @@ enum {
     VIRT_GIC_REDIST,
     VIRT_SMMU,
     VIRT_UART0,
-    VIRT_EHCI,
+    VIRT_EHCI_XHCI,
     VIRT_SDHCI,
     VIRT_MMIO,
     VIRT_RTC,
@@ -155,6 +155,7 @@ struct VirtMachineState {
     bool dtb_randomness;
     bool second_ns_uart_present;
     bool pci;
+    bool xhci;
     bool force_el3;
     bool force_psci;
     OnOffAuto acpi;
