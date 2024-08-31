@@ -47,6 +47,7 @@
 #include "hw/pci/pci.h"
 #include "hw/pci/pci_bus.h"
 #include "hw/pci-host/gpex.h"
+#include "hw/usb/xhci.h"
 #include "hw/arm/virt.h"
 #include "hw/intc/arm_gicv3_its_common.h"
 #include "hw/mem/nvdimm.h"
@@ -126,7 +127,6 @@ static void acpi_dsdt_add_ehci(Aml *scope, const MemMapEntry *ehci_memmap,
     Aml *dev = aml_device("USB0");
     aml_append(dev, aml_name_decl("_HID", aml_string("PNP0D20")));
     aml_append(dev, aml_name_decl("_UID", aml_int(0)));
-
     Aml *crs = aml_resource_template();
     aml_append(crs, 
                aml_memory32_fixed(ehci_memmap->base, 
@@ -136,6 +136,12 @@ static void acpi_dsdt_add_ehci(Aml *scope, const MemMapEntry *ehci_memmap,
                              AML_EXCLUSIVE, &ehci_irq, 1));
     aml_append(dev, aml_name_decl("_CRS", crs));
     aml_append(scope, dev);
+}
+
+static void acpi_dsdt_add_xhci(Aml *scope, const MemMapEntry *xhci_memmap,
+                              uint32_t xhci_irq)
+{
+    xhci_sysbus_build_aml(scope, xhci_memmap->base, xhci_irq);
 }
 
 static void acpi_dsdt_add_pci(Aml *scope, const MemMapEntry *memmap,
@@ -932,7 +938,11 @@ build_dsdt(GArray *table_data, BIOSLinker *linker, VirtMachineState *vms)
     if (vms->pci) {
         acpi_dsdt_add_pci(scope, memmap, irqmap[VIRT_PCIE] + ARM_SPI_BASE, vms);
     }
-    acpi_dsdt_add_ehci(scope, &memmap[VIRT_EHCI], irqmap[VIRT_EHCI] + ARM_SPI_BASE);
+    if (vms->xhci) {
+        acpi_dsdt_add_xhci(scope, &memmap[VIRT_EHCI_XHCI], irqmap[VIRT_EHCI_XHCI] + ARM_SPI_BASE);
+    } else {
+        acpi_dsdt_add_ehci(scope, &memmap[VIRT_EHCI_XHCI], irqmap[VIRT_EHCI_XHCI] + ARM_SPI_BASE);
+    }
     acpi_dsdt_add_mmci(scope, &memmap[VIRT_SDHCI], irqmap[VIRT_SDHCI] + ARM_SPI_BASE);
     if (vms->acpi_dev) {
         build_ged_aml(scope, "\\_SB."GED_DEVICE,
