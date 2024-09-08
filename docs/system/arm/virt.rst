@@ -187,6 +187,9 @@ dtb-kaslr-seed
 pci
   Set ``on``/``off`` to enable/disable PCI bus. The default is ``on``
 
+madt
+  Set ``on``/``off`` to enable/disable ACPI MADT (Multiple APIC Description Table). The default is ``on``
+
 force_el3
   Set ``on``/``off`` to enable/disable EL3 without secure. The default is ``off``
 
