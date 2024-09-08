@@ -1022,8 +1022,10 @@ void virt_acpi_build(VirtMachineState *vms, AcpiBuildTables *tables)
     acpi_add_table(table_offsets, tables_blob);
     build_fadt_rev6(tables_blob, tables->linker, vms, dsdt);
 
-    acpi_add_table(table_offsets, tables_blob);
-    build_madt(tables_blob, tables->linker, vms);
+    if (vms->madt) {
+        acpi_add_table(table_offsets, tables_blob);
+        build_madt(tables_blob, tables->linker, vms);
+    }
 
     if (!vmc->no_cpu_topology) {
         acpi_add_table(table_offsets, tables_blob);

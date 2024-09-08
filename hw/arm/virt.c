@@ -2817,6 +2817,20 @@ static void virt_set_pci(Object *obj, bool value, Error **errp)
     vms->pci = value;
 }
 
+static bool virt_get_madt(Object *obj, Error **errp)
+{
+    VirtMachineState *vms = VIRT_MACHINE(obj);
+
+    return vms->madt;
+}
+
+static void virt_set_madt(Object *obj, bool value, Error **errp)
+{
+    VirtMachineState *vms = VIRT_MACHINE(obj);
+
+    vms->madt = value;
+}
+
 static bool virt_get_force_el3(Object *obj, Error **errp)
 {
     VirtMachineState *vms = VIRT_MACHINE(obj);
@@ -3338,6 +3352,7 @@ static void virt_machine_class_init(ObjectClass *oc, void *data)
                                           "in ACPI table header."
                                           "The string may be up to 8 bytes in size");
  
+ 
     object_class_property_add_bool(oc, "pci",
                                    virt_get_pci,
                                    virt_set_pci);
@@ -3350,6 +3365,13 @@ static void virt_machine_class_init(ObjectClass *oc, void *data)
                                    virt_set_xhci);
     object_class_property_set_description(oc, "xhci",
                                           "Use xHCI as the USB host controller instead of EHCI");
+ 
+ 
+    object_class_property_add_bool(oc, "madt",
+                                   virt_get_madt,
+                                   virt_set_madt);
+    object_class_property_set_description(oc, "madt",
+                                          "Enable ACPI MADT (Multiple APIC Description Table)");
  
  
     object_class_property_add_bool(oc, "force-el3",
@@ -3426,6 +3448,7 @@ static void virt_instance_init(Object *obj)
     
     vms->pci = true;
     vms->xhci = false;
+    vms->madt = true;
     vms->force_el3 = false;
     vms->force_psci = false;
 }

@@ -190,6 +190,9 @@ pci
 xhci
   Set ``on``/``off`` to use xHCI as the USB host controller instead of EHCI. The default is ``off``
 
+madt
+  Set ``on``/``off`` to enable/disable ACPI MADT (Multiple APIC Description Table). The default is ``on``
+
 force_el3
   Set ``on``/``off`` to enable/disable EL3 without secure. The default is ``off``
 
