@@ -182,7 +182,7 @@ static const MemMapEntry base_memmap[] = {
     [VIRT_NVDIMM_ACPI] =        { 0x09090000, NVDIMM_ACPI_IO_LEN},
     [VIRT_PVTIME] =             { 0x090a0000, 0x00010000 },
     [VIRT_SECURE_GPIO] =        { 0x090b0000, 0x00001000 },
-    [VIRT_XHCI] =               { 0x090c0000, XHCI_LEN_REGS },
+    [VIRT_EHCI_XHCI] =               { 0x090c0000, XHCI_LEN_REGS },
     [VIRT_SDHCI] =              { 0x090d0000, 0x00010000 },
     [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
@@ -226,7 +226,7 @@ static const int a15irqmap[] = {
     [VIRT_GPIO] = 7,
     [VIRT_UART1] = 8,
     [VIRT_ACPI_GED] = 9,
-    [VIRT_XHCI] = 11,
+    [VIRT_EHCI_XHCI] = 11,
     [VIRT_SDHCI] = 12,
     [VIRT_MMIO] = 16, /* ...to 16 + NUM_VIRTIO_TRANSPORTS - 1 */
     [VIRT_GIC_V2M] = 48, /* ...to 48 + NUM_GICV2M_SPIS - 1 */
@@ -1426,10 +1426,19 @@ static void sdhci_attach_drive(DeviceState *sdhci, DriveInfo *dinfo, bool emmc)
                                &error_fatal);
 }
 
+static void create_ehci(const VirtMachineState *vms)
+{
+    hwaddr base = vms->memmap[VIRT_EHCI_XHCI].base;
+    int irq = vms->irqmap[VIRT_EHCI_XHCI];
+
+    sysbus_create_simple("platform-ehci-usb", base,
+                         qdev_get_gpio_in(vms->gic, irq));
+}
+
 static void create_xhci(const VirtMachineState *vms)
 {
-    hwaddr base = vms->memmap[VIRT_XHCI].base;
-    int irq = vms->irqmap[VIRT_XHCI];
+    hwaddr base = vms->memmap[VIRT_EHCI_XHCI].base;
+    int irq = vms->irqmap[VIRT_EHCI_XHCI];
     DeviceState *dev = qdev_new(TYPE_XHCI_SYSBUS);
     qdev_prop_set_uint32(dev, "slots", XHCI_MAXSLOTS);
 
@@ -2460,8 +2469,12 @@ static void machvirt_init(MachineState *machine)
      */
     create_virtio_devices(vms);
 
-    /* Create platform XHCI controller device */
-    create_xhci(vms);
+    /* Create platform EHCI/XHCI controller device */
+    if (vms->xhci) {
+        create_xhci(vms);
+    } else {
+        create_ehci(vms);
+    }
 
     /* Create platform SD host controller device */
     create_sdhci(vms);
@@ -2828,6 +2841,20 @@ static void virt_set_madt(Object *obj, bool value, Error **errp)
     VirtMachineState *vms = VIRT_MACHINE(obj);
 
     vms->madt = value;
+}
+
+static bool virt_get_xhci(Object *obj, Error **errp)
+{
+    VirtMachineState *vms = VIRT_MACHINE(obj);
+
+    return vms->xhci;
+}
+
+static void virt_set_xhci(Object *obj, bool value, Error **errp)
+{
+    VirtMachineState *vms = VIRT_MACHINE(obj);
+
+    vms->xhci = value;
 }
 
 static bool virt_get_force_el3(Object *obj, Error **errp)
@@ -3355,7 +3382,14 @@ static void virt_machine_class_init(ObjectClass *oc, void *data)
                                           "Enable ACPI MADT (Multiple APIC Description Table)");
  
  
-    object_class_property_add_bool(oc, "force-el3",
+    object_class_property_add_bool(oc, "xhci",
+                                   virt_get_xhci,
+                                   virt_set_xhci);
+    object_class_property_set_description(oc, "xhci",
+                                          "Use xHCI as the USB host controller instead of EHCI");
+ 
+ 
+     object_class_property_add_bool(oc, "force-el3",
                                    virt_get_force_el3,
                                    virt_set_force_el3);
     object_class_property_set_description(oc, "force-el3",
@@ -3429,6 +3463,7 @@ static void virt_instance_init(Object *obj)
     
     vms->pci = true;
     vms->madt = true;
+    vms->xhci = false;
     vms->force_el3 = false;
     vms->force_psci = false;
 }

@@ -121,6 +121,24 @@ static void acpi_dsdt_add_flash(Aml *scope, const MemMapEntry *flash_memmap)
     aml_append(scope, dev);
 }
 
+static void acpi_dsdt_add_ehci(Aml *scope, const MemMapEntry *ehci_memmap,
+                              uint32_t ehci_irq)
+{
+    Aml *dev = aml_device("USB0");
+    aml_append(dev, aml_name_decl("_HID", aml_string("PNP0D20")));
+    aml_append(dev, aml_name_decl("_UID", aml_int(0)));
+
+    Aml *crs = aml_resource_template();
+    aml_append(crs, 
+               aml_memory32_fixed(ehci_memmap->base, 
+                                  ehci_memmap->size, AML_READ_WRITE));
+    aml_append(crs, 
+               aml_interrupt(AML_CONSUMER, AML_LEVEL, AML_ACTIVE_HIGH, 
+                             AML_EXCLUSIVE, &ehci_irq, 1));
+    aml_append(dev, aml_name_decl("_CRS", crs));
+    aml_append(scope, dev);
+}
+
 static void acpi_dsdt_add_xhci(Aml *scope, const MemMapEntry *xhci_memmap,
                               uint32_t xhci_irq)
 {
@@ -921,7 +939,11 @@ build_dsdt(GArray *table_data, BIOSLinker *linker, VirtMachineState *vms)
     if (vms->pci) {
         acpi_dsdt_add_pci(scope, memmap, irqmap[VIRT_PCIE] + ARM_SPI_BASE, vms);
     }
-    acpi_dsdt_add_xhci(scope, &memmap[VIRT_XHCI], irqmap[VIRT_XHCI] + ARM_SPI_BASE);
+    if (vms->xhci) {
+        acpi_dsdt_add_xhci(scope, &memmap[VIRT_EHCI_XHCI], irqmap[VIRT_EHCI_XHCI] + ARM_SPI_BASE);
+    } else {
+        acpi_dsdt_add_ehci(scope, &memmap[VIRT_EHCI_XHCI], irqmap[VIRT_EHCI_XHCI] + ARM_SPI_BASE);
+    }
     acpi_dsdt_add_mmci(scope, &memmap[VIRT_SDHCI], irqmap[VIRT_SDHCI] + ARM_SPI_BASE);
     if (vms->acpi_dev) {
         build_ged_aml(scope, "\\_SB."GED_DEVICE,
