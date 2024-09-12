@@ -1412,34 +1412,71 @@ static void create_pcie_irq_map(const MachineState *ms,
 
 static void create_ehci(const VirtMachineState *vms)
 {
+    MachineState *ms = MACHINE(vms);
     hwaddr base = vms->memmap[VIRT_EHCI_XHCI].base;
+    hwaddr size = vms->memmap[VIRT_EHCI_XHCI].size;
     int irq = vms->irqmap[VIRT_EHCI_XHCI];
+
+    const char compat[] = "generic-ehci";
+    const char irq_names[] = "usb";
+    char *node;
+
     sysbus_create_simple("platform-ehci-usb", base,
                          qdev_get_gpio_in(vms->gic, irq));
+
+    node = g_strdup_printf("/usb@%" PRIx64, base);
+    qemu_fdt_add_subnode(ms->fdt, node);
+    qemu_fdt_setprop(ms->fdt, node, "compatible", compat, sizeof(compat));
+    qemu_fdt_setprop_sized_cells(ms->fdt, node, "reg", 2, base, 2, size);
+    qemu_fdt_setprop(ms->fdt, node, "dma-coherent", NULL, 0);
+    qemu_fdt_setprop_cells(ms->fdt, node, "interrupts", irq, 0);
+    qemu_fdt_setprop(ms->fdt, node, "interrupt-names", irq_names,
+                     sizeof(irq_names));
+    g_free(node);
 }
 
 static void create_xhci(const VirtMachineState *vms)
 {
+    MachineState *ms = MACHINE(vms);
     hwaddr base = vms->memmap[VIRT_EHCI_XHCI].base;
+    hwaddr size = vms->memmap[VIRT_EHCI_XHCI].size;
     int irq = vms->irqmap[VIRT_EHCI_XHCI];
+    const char compat[] = "generic-xhci";
+    const char irq_names[] = "usb";
+    char *node;
+
     DeviceState *dev = qdev_new(TYPE_XHCI_SYSBUS);
     qdev_prop_set_uint32(dev, "slots", XHCI_MAXSLOTS);
 
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, base);
     sysbus_connect_irq(SYS_BUS_DEVICE(dev), 0, qdev_get_gpio_in(vms->gic, irq));
+
+    node = g_strdup_printf("/usb@%" PRIx64, base);
+    qemu_fdt_add_subnode(ms->fdt, node);
+    qemu_fdt_setprop(ms->fdt, node, "compatible", compat, sizeof(compat));
+    qemu_fdt_setprop_sized_cells(ms->fdt, node, "reg", 2, base, 2, size);
+    qemu_fdt_setprop(ms->fdt, node, "dma-coherent", NULL, 0);
+    qemu_fdt_setprop_cells(ms->fdt, node, "#stream-id-cells", 1);
+    qemu_fdt_setprop_cells(ms->fdt, node, "interrupts", irq, 0);
+    qemu_fdt_setprop(ms->fdt, node, "interrupt-names", irq_names,
+                     sizeof(irq_names));
+    g_free(node);
 }
 
 static void create_sdhci(const VirtMachineState *vms)
 {
-
+    MachineState *ms = MACHINE(vms);
     hwaddr base = vms->memmap[VIRT_SDHCI].base;
+    hwaddr size = vms->memmap[VIRT_SDHCI].size;
     int irq = vms->irqmap[VIRT_SDHCI];
     DeviceState *dev;
     SysBusDevice *busdev;
     DriveInfo *di;
     BlockBackend *blk;
     DeviceState *carddev;
+    const char compat[] = "sdhci";
+    const char irq_names[] = "sdhci";
 
     dev = qdev_new(TYPE_SYSBUS_SDHCI);
     qdev_prop_set_uint64(dev, "capareg", VIRT_SDHCI_CAPABILITIES);
@@ -1449,7 +1486,6 @@ static void create_sdhci(const VirtMachineState *vms)
     sysbus_mmio_map(busdev, 0, base);
     sysbus_connect_irq(busdev, 0, qdev_get_gpio_in(vms->gic, irq));
 
-
     di = drive_get(IF_SD, 0, 0);
     blk = di ? blk_by_legacy_dinfo(di) : NULL;
     carddev = qdev_new(TYPE_SD_CARD);
@@ -1457,6 +1493,14 @@ static void create_sdhci(const VirtMachineState *vms)
     qdev_realize_and_unref(carddev, qdev_get_child_bus(dev, "sd-bus"),
                             &error_fatal);
 
+    char *node = g_strdup_printf("/sdhci@%" PRIx64, base);
+    qemu_fdt_add_subnode(ms->fdt, node);
+    qemu_fdt_setprop_cells(ms->fdt, node, "interrupts", irq, 0);
+    qemu_fdt_setprop_sized_cells(ms->fdt, node, "reg", 2, base, 2, size);
+    qemu_fdt_setprop(ms->fdt, node, "compatible", compat, sizeof(compat));
+    qemu_fdt_setprop(ms->fdt, node, "interrupt-names", irq_names,
+                     sizeof(irq_names));
+    g_free(node);
 }
 
 static void create_smmu(const VirtMachineState *vms,
