@@ -118,6 +118,13 @@ jobs:
         path: ${{ github.workspace }}/artifacts
         compression-level: 9
 
+    - name: Upload logs
+      uses: actions/upload-artifact@main
+      with:
+        name: QEMU (${{ matrix.mode }} build) logs
+        path: ${{ github.workspace }}/artifacts
+        compression-level: 9
+
   build_linux:
     runs-on: ubuntu-24.04
     strategy:
