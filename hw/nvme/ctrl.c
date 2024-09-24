@@ -4474,7 +4474,7 @@ static uint16_t nvme_io_mgmt_recv_ruhs(NvmeCtrl *n, NvmeRequest *req,
 
     nruhsd = ns->fdp.nphs * endgrp->fdp.nrg;
     trans_len = sizeof(NvmeRuhStatus) + nruhsd * sizeof(NvmeRuhStatusDescr);
-    buf = g_malloc(trans_len);
+    buf = g_malloc0(trans_len);
 
     trans_len = MIN(trans_len, len);
 
@@ -8845,7 +8845,7 @@ static void nvme_class_init(ObjectClass *oc, void *data)
     dc->desc = "Non-Volatile Memory Express";
     device_class_set_props(dc, nvme_props);
     dc->vmsd = &nvme_vmstate;
-    dc->reset = nvme_pci_reset;
+    device_class_set_legacy_reset(dc, nvme_pci_reset);
 }
 
 static void nvme_instance_init(Object *obj)

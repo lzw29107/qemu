@@ -47,6 +47,7 @@ tests = {
   'test-logging': [],
   'test-qapi-util': [],
   'test-interval-tree': [],
+  'test-fifo': [],
 }
 
 if have_system or have_tools
@@ -121,9 +122,7 @@ if have_block
   if config_host_data.get('CONFIG_REPLICATION')
     tests += {'test-replication': [testblock]}
   endif
-  if nettle.found() or gcrypt.found()
-    tests += {'test-crypto-pbkdf': [io]}
-  endif
+  tests += {'test-crypto-pbkdf': [io]}
 endif
 
 if have_system
