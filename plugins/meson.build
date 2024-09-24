@@ -4,7 +4,7 @@ endif
 
 # Modules need more symbols than just those in plugins/qemu-plugins.symbols
 if not enable_modules
-  if host_os == 'darwin'
+  if host_os == 'darwin' or host_os == 'windows'
     configure_file(
       input: files('qemu-plugins.symbols'),
       output: 'qemu-plugins-ld64.symbols',
