@@ -119,6 +119,7 @@ jobs:
         compression-level: 9
 
     - name: Upload logs
+      if: ${{ failure() }}
       uses: actions/upload-artifact@main
       with:
         name: QEMU (${{ matrix.mode }} build) logs
