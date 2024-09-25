@@ -79,9 +79,9 @@ jobs:
     - name: 'Modify pkgconfig to avoid linker issues'
       if: ${{ matrix.mode == 'static' }}
       run: |
-             PKGCONFIG_FILE="$MINGW_PREFIX/lib/pkgconfig/gpg-error.pc"
-             sed -i 's#'$MINGW_PREFIX'/lib/libintl.dll.a#-llibintl#g' "$PKGCONFIG_FILE"
-             sed -i 's#'$MINGW_PREFIX'/lib/libiconv.dll.a#-llibiconv#g' "$PKGCONFIG_FILE"
+             PKGCONFIG_FILE="/usr/lib/pkgconfig/gpg-error.pc"
+             sed -i 's#/clangarm64/lib/libintl.dll.a#-llibintl#g' "$PKGCONFIG_FILE"
+             sed -i 's#/clangarm64/lib/libiconv.dll.a#-llibiconv#g' "$PKGCONFIG_FILE"
 
     - name: '🚧 Build QEMU (arm & aarch64) ${{ matrix.mode }}'
       env:
