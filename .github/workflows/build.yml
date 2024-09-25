@@ -73,6 +73,7 @@ jobs:
           usbredir:p
           zstd:p
           libslirp:p
+          mold:p
 
     - name: 'Modify pkgconfig to avoid linker issues'
       if: ${{ matrix.mode == 'static' }}
