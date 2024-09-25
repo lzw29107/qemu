@@ -79,7 +79,7 @@ jobs:
     - name: 'Modify pkgconfig to avoid linker issues'
       if: ${{ matrix.mode == 'static' }}
       run: |
-             PKGCONFIG_FILE="/usr/lib/pkgconfig/gpg-error.pc"
+             PKGCONFIG_FILE="/clangarm64/lib/pkgconfig/gpg-error.pc"
              sed -i 's#/clangarm64/lib/libintl.dll.a#-llibintl#g' "$PKGCONFIG_FILE"
              sed -i 's#/clangarm64/lib/libiconv.dll.a#-llibiconv#g' "$PKGCONFIG_FILE"
 
