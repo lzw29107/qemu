@@ -41,6 +41,7 @@ jobs:
           base-devel
           python
           python-setuptools
+          ninja
           mingw-w64-cross-toolchain
         pacboy: >-
           toolchain:p
@@ -74,6 +75,37 @@ jobs:
           usbredir:p
           zstd:p
           libslirp:p
+          toolchain:a
+          binutils:a
+          capstone:a
+          ccache:a
+          curl:a
+          cyrus-sasl:a
+          dtc:a
+          gcc:a
+          glib2:a
+          gnutls:a
+          gtk3:a
+          libgcrypt:a
+          libjpeg-turbo:a
+          libnfs:a
+          libpng:a
+          libssh:a
+          libtasn1:a
+          libusb:a
+          lzo2:a
+          nettle:a
+          ninja:a
+          pixman:a
+          pkgconf:a
+          python:a
+          SDL2:a
+          SDL2_image:a
+          snappy:a
+          spice:a
+          usbredir:a
+          zstd:a
+          libslirp:a
 
     - name: 'Modify pkgconfig to avoid linker issues'
       if: ${{ matrix.mode == 'static' }}
@@ -86,6 +118,7 @@ jobs:
       env:
         arg: ${{ matrix.mode == 'dynamic' && '--enable-gtk --enable-sdl --enable-fdt=system --enable-avx2 --target-list=arm-softmmu,aarch64-softmmu --extra-cflags="-Wno-missing-prototypes -Wno-sometimes-uninitialized -Wno-pragma-pack"' || '--disable-gtk --disable-spice --disable-usb-redir --disable-smartcard --disable-gnutls --disable-vnc-sasl --disable-libssh --enable-sdl --enable-fdt=system --enable-avx2 --target-list=arm-softmmu,aarch64-softmmu --static --extra-cflags="-Wno-missing-prototypes -Wno-sometimes-uninitialized -Wno-pragma-pack -DCURL_STATICLIB -DLIBSSH_STATIC -DLIBSLIRP_STATIC -DCAIRO_WIN32_STATIC_BUILD"' }}
       run: |
+          cp -rf /clangarm64/lib/pkgconfig/* /usr/lib/pkgconfig/
           sed -i 's/gcc_struct, //' include/qemu/compiler.h
           sed -i 's/gcc_struct, //' scripts/cocci-macro-file.h
           sed -i 's/gcc_struct, //' subprojects/libvhost-user/libvhost-user.h
