@@ -26,7 +26,6 @@ jobs:
       uses: actions/checkout@main
 
     - name: '${{ matrix.icon }} Setup MSYS2'
-      continue-on-error: true
       uses: msys2/setup-msys2@v2
       with:
         msystem: ${{ matrix.sys }}
@@ -45,37 +44,6 @@ jobs:
           ninja
           mingw-w64-cross-toolchain
         pacboy: >-
-          toolchain:p
-          binutils:p
-          capstone:p
-          ccache:p
-          curl:p
-          cyrus-sasl:p
-          dtc:p
-          gcc:p
-          glib2:p
-          gnutls:p
-          gtk3:p
-          libgcrypt:p
-          libjpeg-turbo:p
-          libnfs:p
-          libpng:p
-          libssh:p
-          libtasn1:p
-          libusb:p
-          lzo2:p
-          nettle:p
-          ninja:p
-          pixman:p
-          pkgconf:p
-          python:p
-          SDL2:p
-          SDL2_image:p
-          snappy:p
-          spice:p
-          usbredir:p
-          zstd:p
-          libslirp:p
           toolchain:a
           binutils:a
           capstone:a
