@@ -13,8 +13,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { icon: '🟦', sys: clang64, mode: dynamic }
           - { icon: '🟦', sys: clang64, mode: static }
+          - { icon: '🟦', sys: clangarm64, mode: static }
 
     name: 🚧${{ matrix.icon }} ${{ matrix.sys }} Build ${{ matrix.mode }}
     defaults:
@@ -73,7 +73,6 @@ jobs:
           usbredir:p
           zstd:p
           libslirp:p
-          mold:p
 
     - name: 'Modify pkgconfig to avoid linker issues'
       if: ${{ matrix.mode == 'static' }}
@@ -84,7 +83,7 @@ jobs:
 
     - name: '🚧 Build QEMU (arm & aarch64) ${{ matrix.mode }}'
       env:
-        arg: ${{ matrix.mode == 'dynamic' && '--enable-gtk --enable-sdl --enable-fdt=system --enable-avx2 --target-list=arm-softmmu,aarch64-softmmu --extra-cflags="-fuse-ld=mold -Wno-missing-prototypes -Wno-sometimes-uninitialized -Wno-pragma-pack"' || '--disable-gtk --disable-spice --disable-usb-redir --disable-smartcard --disable-gnutls --disable-vnc-sasl --disable-libssh --enable-sdl --enable-fdt=system --enable-avx2 --target-list=arm-softmmu,aarch64-softmmu --static --extra-cflags="-fuse-ld=mold -Wno-missing-prototypes -Wno-sometimes-uninitialized -Wno-pragma-pack -DCURL_STATICLIB -DLIBSSH_STATIC -DLIBSLIRP_STATIC -DCAIRO_WIN32_STATIC_BUILD"' }}
+        arg: ${{ matrix.mode == 'dynamic' && '--enable-gtk --enable-sdl --enable-fdt=system --enable-avx2 --target-list=arm-softmmu,aarch64-softmmu --extra-cflags="-Wno-missing-prototypes -Wno-sometimes-uninitialized -Wno-pragma-pack"' || '--disable-gtk --disable-spice --disable-usb-redir --disable-smartcard --disable-gnutls --disable-vnc-sasl --disable-libssh --enable-sdl --enable-fdt=system --enable-avx2 --target-list=arm-softmmu,aarch64-softmmu --static --extra-cflags="-Wno-missing-prototypes -Wno-sometimes-uninitialized -Wno-pragma-pack -DCURL_STATICLIB -DLIBSSH_STATIC -DLIBSLIRP_STATIC -DCAIRO_WIN32_STATIC_BUILD"' }}
       run: |
           sed -i 's/gcc_struct, //' include/qemu/compiler.h
           sed -i 's/gcc_struct, //' scripts/cocci-macro-file.h
