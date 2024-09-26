@@ -1737,7 +1737,7 @@ if not gnutls_crypto.found()
     if gcrypt.found() and get_option('prefer_static')
       gcrypt = declare_dependency(dependencies:
         [gcrypt,
-         cc.find_library('gpg-error', required: true)],
+         dependency('gpg-error', required: true)],
         version: gcrypt.version())
     endif
     crypto_sm4 = gcrypt
