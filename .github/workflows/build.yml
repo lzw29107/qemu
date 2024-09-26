@@ -43,6 +43,7 @@ jobs:
           python-setuptools
           ninja
           pkgconf
+          gcc
           mingw-w64-cross-toolchain
         pacboy: >-
           toolchain:a
