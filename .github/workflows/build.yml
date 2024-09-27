@@ -91,7 +91,7 @@ jobs:
           export PKG_CONFIG_PATH=/clangarm64/lib/pkgconfig:/clangarm64/share/pkgconfig:$PKG_CONFIG_PATH
           export PKG_CONFIG_SYSTEM_INCLUDE_PATH=/clangarm64/include:$PKG_CONFIG_SYSTEM_INCLUDE_PATH
           export PKG_CONFIG_SYSTEM_LIBRARY_PATH=/clangarm64/lib:$PKG_CONFIG_SYSTEM_LIBRARY_PATH
-          ./configure ${{ env.arg }}
+          ./configure ${{ env.arg }} --cross-prefix="" --cpu=aarch64
           make -j16
 
     - name: Prepare Artifacts
