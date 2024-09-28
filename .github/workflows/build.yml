@@ -87,10 +87,11 @@ jobs:
       run: |
           sed -i 's/\[clangarm64\]/\[cross-clang\]\nServer = https\:\/\/github.com\/msys2\-arm\/cross\-clang\/releases\/download\/repo\n\SigLevel = Never\n\[clangarm64\]/' /etc/pacman.conf
           pacman -Sy
-          pacman -S mingw-w64-clang-x86_64-cross-clang-aarch64 --noconfirm
+          pacman --noconfirm -S mingw-w64-clang-x86_64-cross-clang-aarch64
           sed -i 's/gcc_struct, //' include/qemu/compiler.h
           sed -i 's/gcc_struct, //' scripts/cocci-macro-file.h
           sed -i 's/gcc_struct, //' subprojects/libvhost-user/libvhost-user.h
+          ln /clang64/bin/aarch64-w64-mingw32-pkg-config.exe /clang64/bin/pkg-config.exe
           export PKG_CONFIG_PATH=/clangarm64/lib/pkgconfig:/clangarm64/share/pkgconfig:$PKG_CONFIG_PATH
           export PKG_CONFIG_SYSTEM_INCLUDE_PATH=/clangarm64/include:$PKG_CONFIG_SYSTEM_INCLUDE_PATH
           export PKG_CONFIG_SYSTEM_LIBRARY_PATH=/clangarm64/lib:$PKG_CONFIG_SYSTEM_LIBRARY_PATH
@@ -112,7 +113,7 @@ jobs:
       if: ${{ matrix.mode == 'dynamic' }}
       run: |
           cd ${{ github.workspace }}\artifacts
-          copy D:\a\_temp\msys64\mingw64\bin\*.dll
+          copy ${{ steps.msys2.outputs.msys2-location }}\mingw64\bin\*.dll
           md lib\gdk-pixbuf-2.0\2.10.0
           fsutil file createNew lib\gdk-pixbuf-2.0\2.10.0\loaders.cache 0
           move D:\a\qemu\qemu\build\po share\locale
