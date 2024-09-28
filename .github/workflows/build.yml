@@ -87,7 +87,7 @@ jobs:
       run: |
           sed -i 's/\[clangarm64\]/\[cross-clang\]\nServer = https\:\/\/github.com\/msys2\-arm\/cross\-clang\/releases\/download\/repo\n\SigLevel = Never\n\[clangarm64\]/' /etc/pacman.conf
           pacman -Sy
-          pacman -S mingw-w64-clang-x86_64-cross-clang-aarch64
+          pacman -S mingw-w64-clang-x86_64-cross-clang-aarch64 --noconfirm
           sed -i 's/gcc_struct, //' include/qemu/compiler.h
           sed -i 's/gcc_struct, //' scripts/cocci-macro-file.h
           sed -i 's/gcc_struct, //' subprojects/libvhost-user/libvhost-user.h
