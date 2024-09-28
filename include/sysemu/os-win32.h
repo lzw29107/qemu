@@ -52,7 +52,7 @@ typedef struct sockaddr_un {
 extern "C" {
 #endif
 
-#if defined(__aarch64__) && defined (_INC_SETJMPEX)
+#if defined(__aarch64__)
 /*
  * On windows-arm64, setjmp is available in only one variant, and longjmp always
  * does stack unwinding. This crash with generated code.
