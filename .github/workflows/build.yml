@@ -92,6 +92,7 @@ jobs:
           sed -i 's/gcc_struct, //' scripts/cocci-macro-file.h
           sed -i 's/gcc_struct, //' subprojects/libvhost-user/libvhost-user.h
           ln /clang64/bin/pkg-config.exe /clang64/bin/aarch64-w64-mingw32-pkg-config.exe
+          ln /clang64/bin/windmc.exe /clang64/bin/aarch64-w64-mingw32-windmc.exe
           export PKG_CONFIG_PATH=/clangarm64/lib/pkgconfig:/clangarm64/share/pkgconfig:$PKG_CONFIG_PATH
           export PKG_CONFIG_SYSTEM_INCLUDE_PATH=/clangarm64/include:$PKG_CONFIG_SYSTEM_INCLUDE_PATH
           export PKG_CONFIG_SYSTEM_LIBRARY_PATH=/clangarm64/lib:$PKG_CONFIG_SYSTEM_LIBRARY_PATH
