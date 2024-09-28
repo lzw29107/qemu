@@ -73,7 +73,9 @@ jobs:
           usbredir:a
           zstd:a
           libslirp:a
-
+          cmake:p
+          z3:p
+          python-sphinx:p
     - name: 'Modify pkgconfig to avoid linker issues'
       if: ${{ matrix.mode == 'static' }}
       run: |
