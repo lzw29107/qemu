@@ -90,20 +90,12 @@ jobs:
           cd ../
           git clone https://github.com/lzw29107/MINGW-packages
           cd MINGW-packages/mingw-w64-llvm
-          makepkg-mingw --skippgpcheck
-          ls
+          makepkg-mingw --cleanbuild --syncdeps --force --install --noconfirm --skippgpcheck
           cd ../mingw-w64-cross-compiler-rt
-          makepkg-mingw --skippgpcheck
-          ls
+          makepkg-mingw --cleanbuild --syncdeps --force --install --noconfirm --skippgpcheck
           cd ../mingw-w64-cross-compiler-rt
-          makepkg-mingw --skippgpcheck
-          ls
-          sed -i 's/\[clangarm64\]/\[cross-clang\]\nServer = https\:\/\/github.com\/msys2\-arm\/cross\-clang\/releases\/download\/repo\n\SigLevel = Never\n\[clangarm64\]/' /etc/pacman.conf
-          pacman -Sy
-          pacman --noconfirm -S mingw-w64-clang-x86_64-cross-clang-aarch64
-          sed -i 's/gcc_struct, //' include/qemu/compiler.h
-          sed -i 's/gcc_struct, //' scripts/cocci-macro-file.h
-          sed -i 's/gcc_struct, //' subprojects/libvhost-user/libvhost-user.h
+          makepkg-mingw --cleanbuild --syncdeps --force --install --noconfirm
+          cd ../qemu
           ln /clang64/bin/pkg-config.exe /clang64/bin/aarch64-w64-mingw32-pkg-config.exe
           ln /usr/bin/windmc.exe /clang64/bin/aarch64-w64-mingw32-windmc.exe
           sed -i -s 's/bindir=\${prefix}\/bin/bindir=\/clang64\/bin/' /clangarm64/lib/pkgconfig/*.pc
