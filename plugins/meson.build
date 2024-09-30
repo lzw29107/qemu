@@ -28,12 +28,21 @@ if host_os == 'windows'
     capture: true,
     command: ['sed', '-e', '0,/^/s//EXPORTS/; s/[{};]//g', '@INPUT@'])
   # then use dlltool to assemble a delaylib.
-  win32_qemu_plugin_api_lib = configure_file(
+  if compiler.get_id() == 'clang'
+    win32_qemu_plugin_api_lib = configure_file(
     input: win32_plugin_def,
     output: 'libqemu_plugin_api.a',
-    command: [dlltool, '--input-def', '@INPUT@',
-              '--output-delaylib', '@OUTPUT@', '--dllname', 'qemu.exe']
-  )
+    command: [dlltool, '-d', '@INPUT@',
+              '-l', '@OUTPUT@', '-D', 'qemu.exe']
+    )
+  else
+    win32_qemu_plugin_api_lib = configure_file(
+      input: win32_plugin_def,
+      output: 'libqemu_plugin_api.a',
+      command: [dlltool, '--input-def', '@INPUT@',
+                '--output-delaylib', '@OUTPUT@', '--dllname', 'qemu.exe']
+    )
+  endif
 endif
 specific_ss.add(files(
   'loader.c',
