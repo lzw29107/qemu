@@ -214,7 +214,7 @@ static int is_tap_win32_dev(const char *guid)
 
     for (;;) {
         char enum_name[256];
-        char unit_string[256];
+        char unit_string[512];
         HKEY unit_key;
         char component_id_string[] = "ComponentId";
         char component_id[256];
@@ -315,7 +315,7 @@ static int get_device_guid(
     while (!stop)
     {
         char enum_name[256];
-        char connection_string[256];
+        char connection_string[512];
         HKEY connection_key;
         char name_data[256];
         DWORD name_type;
@@ -595,7 +595,7 @@ static void tap_win32_free_buffer(tap_win32_overlapped_t *overlapped,
 static int tap_win32_open(tap_win32_overlapped_t **phandle,
                           const char *preferred_name)
 {
-    char device_path[256];
+    char device_path[512];
     char device_guid[0x100];
     int rc;
     HANDLE handle;
