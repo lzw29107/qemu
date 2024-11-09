@@ -824,8 +824,8 @@ vhdx_parse_metadata(BlockDriverState *bs, BDRVVHDXState *s)
         goto exit;
     }
 
-    /* Currently we only support 512 */
-    if (s->logical_sector_size != 512) {
+    /* Currently we only support 512 and 4096 */
+    if (s->logical_sector_size != 512 && s->logical_sector_size != 4096) {
         ret = -ENOTSUP;
         goto exit;
     }
@@ -1060,7 +1060,7 @@ static int vhdx_open(BlockDriverState *bs, QDict *options, int flags,
 
     /* the VHDX spec dictates that virtual_disk_size is always a multiple of
      * logical_sector_size */
-    bs->total_sectors = s->virtual_disk_size >> s->logical_sector_size_bits;
+    bs->total_sectors = s->virtual_disk_size >> BDRV_SECTOR_BITS;
 
     vhdx_calc_bat_entries(s);
 
@@ -1178,11 +1178,52 @@ vhdx_co_get_info(BlockDriverState *bs, BlockDriverInfo *bdi)
 }
 
 
+/*
+ * Converts bdrv sectors to sectors of s->logical_sector_size.
+ */
+static void bdrv_sectors_to_sectors(const int64_t bdrv_sector_num,
+                                    const int bdrv_nb_sectors,
+                                    const BDRVVHDXState *const s,
+                                    int64_t * const out_sector_num,
+                                    int * const out_nb_sectors,
+                                    /* in bytes */
+                                    int * const out_begin_skip,
+                                    /* in bytes */
+                                    int * const out_end_skip) {
+    if (bdrv_nb_sectors == 0) {
+        *out_nb_sectors = 0;
+        return;
+    }
+    const int64_t begin_off = bdrv_sector_num * BDRV_SECTOR_SIZE;
+    const int64_t sector_num = begin_off >> s->logical_sector_size_bits;
+    const int begin_skip = begin_off - sector_num * s->logical_sector_size;
+    const int64_t end_off = (bdrv_sector_num + bdrv_nb_sectors) *
+                            BDRV_SECTOR_SIZE;
+    const int64_t end_sector_num = (end_off + s->logical_sector_size - 1) >>
+                                   s->logical_sector_size_bits;
+    const int end_skip = end_sector_num * s->logical_sector_size - end_off;
+    const int nb_sectors = end_sector_num - sector_num;
+    *out_sector_num = sector_num;
+    *out_nb_sectors = nb_sectors;
+    *out_begin_skip = begin_skip;
+    *out_end_skip = end_skip;
+}
+
+
 static int coroutine_fn GRAPH_RDLOCK
 vhdx_co_readv(BlockDriverState *bs, int64_t sector_num, int nb_sectors,
               QEMUIOVector *qiov)
 {
     BDRVVHDXState *s = bs->opaque;
+    int begin_skip, end_skip;
+    bdrv_sectors_to_sectors(sector_num,
+                            nb_sectors,
+                            s,
+                            &sector_num,
+                            &nb_sectors,
+                            &begin_skip,
+                            &end_skip);
+
     int ret = 0;
     VHDXSectorInfo sinfo;
     uint64_t bytes_done = 0;
@@ -1216,9 +1257,16 @@ vhdx_co_readv(BlockDriverState *bs, int64_t sector_num, int nb_sectors,
                 qemu_iovec_memset(&hd_qiov, 0, 0, sinfo.bytes_avail);
                 break;
             case PAYLOAD_BLOCK_FULLY_PRESENT:
+                if (bytes_done == 0) {
+                    sinfo.file_offset += begin_skip;
+                    sinfo.bytes_avail -= begin_skip;
+                }
+                if (nb_sectors - sinfo.sectors_avail <= 0) {
+                    sinfo.bytes_avail -= end_skip;
+                }
                 qemu_co_mutex_unlock(&s->lock);
                 ret = bdrv_co_preadv(bs->file, sinfo.file_offset,
-                                     sinfo.sectors_avail * BDRV_SECTOR_SIZE,
+                                     sinfo.bytes_avail,
                                      &hd_qiov, 0);
                 qemu_co_mutex_lock(&s->lock);
                 if (ret < 0) {
@@ -1336,8 +1384,17 @@ static int coroutine_fn GRAPH_RDLOCK
 vhdx_co_writev(BlockDriverState *bs, int64_t sector_num, int nb_sectors,
                QEMUIOVector *qiov, int flags)
 {
-    int ret = -ENOTSUP;
     BDRVVHDXState *s = bs->opaque;
+    int begin_skip, end_skip;
+    bdrv_sectors_to_sectors(sector_num,
+                            nb_sectors,
+                            s,
+                            &sector_num,
+                            &nb_sectors,
+                            &begin_skip,
+                            &end_skip);
+
+    int ret = -ENOTSUP;
     VHDXSectorInfo sinfo;
     uint64_t bytes_done = 0;
     uint64_t bat_entry = 0;
@@ -1451,9 +1508,16 @@ vhdx_co_writev(BlockDriverState *bs, int64_t sector_num, int nb_sectors,
                                       sinfo.bytes_avail);
                 }
                 /* block exists, so we can just overwrite it */
+                if (bytes_done == 0) {
+                    sinfo.file_offset += begin_skip;
+                    sinfo.bytes_avail -= begin_skip;
+                }
+                if (nb_sectors - sinfo.sectors_avail <= 0) {
+                    sinfo.bytes_avail -= end_skip;
+                }
                 qemu_co_mutex_unlock(&s->lock);
                 ret = bdrv_co_pwritev(bs->file, sinfo.file_offset,
-                                      sectors_to_write * BDRV_SECTOR_SIZE,
+                                      sinfo.bytes_avail,
                                       &hd_qiov, 0);
                 qemu_co_mutex_lock(&s->lock);
                 if (ret < 0) {
