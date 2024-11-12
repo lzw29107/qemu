@@ -1,0 +1,20 @@
+QA output created by 315
+
+=== Verify pattern 0xaa, 1024MB - 1088MB ===
+read 67108864/67108864 bytes at offset 1073741824
+64 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+
+=== Verify pattern 0x00, 1088MB - 1152MB ===
+read 67108864/67108864 bytes at offset 1140850688
+64 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+
+=== Verify pattern write, 0xbb 1072MB - 1104MB ===
+wrote 33554432/33554432 bytes at offset 1124073472
+32 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+read 50331648/50331648 bytes at offset 1073741824
+48 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+read 50331648/50331648 bytes at offset 1157627904
+48 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+read 33554432/33554432 bytes at offset 1124073472
+32 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+*** done

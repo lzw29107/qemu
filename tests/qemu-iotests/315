@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# group: rw quick
+#
+# Test VHDX read/write from a 4k sector size sample image created with Hyper-V
+#
+# Copyright (C) 2013 Red Hat, Inc.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+# creator
+owner=takeshibaconsuzuki@gmail.com
+
+seq=`basename $0`
+echo "QA output created by $seq"
+
+status=1	# failure is the default!
+
+_cleanup()
+{
+    _cleanup_test_img
+}
+trap "_cleanup; exit \$status" 0 1 2 3 15
+
+# get standard environment, filters and checks
+. ./common.rc
+. ./common.filter
+
+_supported_fmt vhdx
+_supported_proto generic
+_supported_os Linux
+
+_use_sample_img 4k.vhdx.bz2
+
+echo
+echo "=== Verify pattern 0xaa, 1024MB - 1088MB ==="
+$QEMU_IO -r -c "read -pP 0xaa 1024M 64M" "$TEST_IMG" | _filter_qemu_io
+echo
+echo "=== Verify pattern 0x00, 1088MB - 1152MB ==="
+$QEMU_IO -r -c "read -pP 0x00 1088M 64M" "$TEST_IMG" | _filter_qemu_io
+
+echo
+echo "=== Verify pattern write, 0xbb 1072MB - 1104MB ==="
+$QEMU_IO -c "write -pP 0xbb 1072M 32M" "$TEST_IMG" | _filter_qemu_io
+# first verify we didn't write where we should not have
+$QEMU_IO -r -c "read -pP 0xaa 1024M 48M" "$TEST_IMG" | _filter_qemu_io
+$QEMU_IO -r -c "read -pP 0x00 1104M 48M" "$TEST_IMG" | _filter_qemu_io
+# now verify what we should have actually written
+$QEMU_IO -r -c "read -pP 0xbb 1072M 32M" "$TEST_IMG" | _filter_qemu_io
+
+# success, all done
+echo "*** done"
+rm -f $seq.full
+status=0
