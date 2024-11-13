@@ -2270,6 +2270,26 @@ static int GRAPH_RDLOCK vhdx_has_zero_init(BlockDriverState *bs)
     return 1;
 }
 
+static ImageInfoSpecific * GRAPH_RDLOCK
+vhdx_get_specific_info(BlockDriverState *bs, Error **errp)
+{
+    const BDRVVHDXState *const s = bs->opaque;
+    ImageInfoSpecific *const spec_info = g_new0(ImageInfoSpecific, 1);
+
+    *spec_info = (ImageInfoSpecific){
+        .type = IMAGE_INFO_SPECIFIC_KIND_VHDX,
+        .u = {
+            .vhdx.data = g_new0(ImageInfoSpecificVHDX, 1),
+        },
+    };
+
+    *spec_info->u.vhdx.data = (ImageInfoSpecificVHDX) {
+        .logical_sector_size = s->logical_sector_size,
+    };
+
+    return spec_info;
+}
+
 static QemuOptsList vhdx_create_opts = {
     .name = "vhdx-create-opts",
     .head = QTAILQ_HEAD_INITIALIZER(vhdx_create_opts.head),
@@ -2321,6 +2341,7 @@ static BlockDriver bdrv_vhdx = {
     .bdrv_co_writev         = vhdx_co_writev,
     .bdrv_co_create         = vhdx_co_create,
     .bdrv_co_create_opts    = vhdx_co_create_opts,
+    .bdrv_get_specific_info = vhdx_get_specific_info,
     .bdrv_co_get_info       = vhdx_co_get_info,
     .bdrv_co_check          = vhdx_co_check,
     .bdrv_has_zero_init     = vhdx_has_zero_init,

@@ -180,6 +180,18 @@
   } }
 
 ##
+# @ImageInfoSpecificVHDX:
+#
+# @logical-sector-size: Logical sector size
+#
+# Since: 9.2
+##
+{ 'struct': 'ImageInfoSpecificVHDX',
+  'data': {
+      'logical-sector-size': 'int'
+  } }
+
+##
 # @ImageInfoSpecificKind:
 #
 # @luks: Since 2.7
@@ -191,7 +203,7 @@
 # Since: 1.7
 ##
 { 'enum': 'ImageInfoSpecificKind',
-  'data': [ 'qcow2', 'vmdk', 'luks', 'rbd', 'file' ] }
+  'data': [ 'qcow2', 'vmdk', 'luks', 'rbd', 'file', 'vhdx' ] }
 
 ##
 # @ImageInfoSpecificQCow2Wrapper:
@@ -247,6 +259,16 @@
   'data': { 'data': 'ImageInfoSpecificFile' } }
 
 ##
+# @ImageInfoSpecificVHDXWrapper:
+#
+# @data: image information specific to VHDX
+#
+# Since: 9.2
+##
+{ 'struct': 'ImageInfoSpecificVHDXWrapper',
+  'data': { 'data': 'ImageInfoSpecificVHDX' } }
+
+##
 # @ImageInfoSpecific:
 #
 # A discriminated record of image format specific information
@@ -264,7 +286,8 @@
       'vmdk': 'ImageInfoSpecificVmdkWrapper',
       'luks': 'ImageInfoSpecificLUKSWrapper',
       'rbd': 'ImageInfoSpecificRbdWrapper',
-      'file': 'ImageInfoSpecificFileWrapper'
+      'file': 'ImageInfoSpecificFileWrapper',
+      'vhdx': 'ImageInfoSpecificVHDXWrapper'
   } }
 
 ##
