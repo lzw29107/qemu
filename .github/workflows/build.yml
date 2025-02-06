@@ -13,10 +13,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { icon: '🟦', sys: mingw64, mode: dynamic }
-          - { icon: '🟦', sys: mingw64, mode: static }
+          - { icon: '🟦', sys: mingw64, mode: dynamic, cross: false }
+          - { icon: '🟦', sys: mingw64, mode: static, cross: false }
+          - { icon: '🟨', sys: ucrt64, mode: dynamic, cross: false }
+          - { icon: '🟨', sys: ucrt64, mode: static, cross: false }
+          - { icon: '🟧', sys: clang64, mode: dynamic, cross: false }
+          - { icon: '🟧', sys: clang64, mode: static, cross: false }
+          - { icon: '🟧', sys: clang64, mode: dynamic, cross: true, cross_arch: aarch64 }
+          - { icon: '🟧', sys: clang64, mode: static, cross: true, cross_arch: aarch64 }
+    env:
+      dynamic_flags: '--enable-gtk'
+      static_flags: '--disable-gtk --disable-spice --disable-usb-redir --disable-smartcard --disable-gnutls --disable-libssh --disable-vnc-sasl --static'
+      static_extra_cflags: '-DCURL_STATICLIB -DLIBSSH_STATIC -DLIBSLIRP_STATIC -DCAIRO_WIN32_STATIC_BUILD'
+      clang_extra_cflags: '-Wno-missing-prototypes -Wno-sometimes-uninitialized -Wno-pragma-pack'
+      clang_cross_flags: '--cross-prefix="aarch64-w64-mingw32-"'
 
-    name: 🚧${{ matrix.icon }} ${{ matrix.sys }} Build ${{ matrix.mode }}
+    name: ${{ format('🚧{0} {1} Build {2} {3}', matrix.icon, matrix.sys, matrix.mode, matrix.cross && matrix.cross_arch || '') }}
     defaults:
       run:
         shell: msys2 {0}
@@ -27,6 +39,8 @@ jobs:
 
     - name: '${{ matrix.icon }} Setup MSYS2'
       uses: msys2/setup-msys2@v2
+      env:
+        library_prefix: ${{ (matrix.cross && matrix.cross_arch == 'aarch64') && 'a' || 'p' }}
       with:
         msystem: ${{ matrix.sys }}
         update: true
@@ -36,85 +50,117 @@ jobs:
           bison
           diffutils
           flex
-          grep
-          sed
           base-devel
           python
           python-setuptools
         pacboy: >-
           toolchain:p
-          binutils:p
-          capstone:p
-          ccache:p
-          curl:p
-          cyrus-sasl:p
-          dtc:p
-          gcc:p
-          glib2:p
-          gnutls:p
-          gtk3:p
-          libgcrypt:p
-          libjpeg-turbo:p
-          libnfs:p
-          libpng:p
-          libssh:p
-          libtasn1:p
-          libusb:p
-          lzo2:p
-          nettle:p
+          toolchain:${{ env.library_prefix }}
+          binutils:${{ env.library_prefix }}
+          capstone:${{ env.library_prefix }}
+          ccache:${{ env.library_prefix }}
+          curl:${{ env.library_prefix }}
+          cyrus-sasl:${{ env.library_prefix }}
+          dtc:${{ env.library_prefix }}
+          gcc:${{ env.library_prefix }}
+          glib2:${{ env.library_prefix }}
+          gnutls:${{ env.library_prefix }}
+          gtk3:${{ env.library_prefix }}
+          libgcrypt:${{ env.library_prefix }}
+          libjpeg-turbo:${{ env.library_prefix }}
+          libnfs:${{ env.library_prefix }}
+          libpng:${{ env.library_prefix }}
+          libssh:${{ env.library_prefix }}
+          libtasn1:${{ env.library_prefix }}
+          libusb:${{ env.library_prefix }}
+          lzo2:${{ env.library_prefix }}
+          nettle:${{ env.library_prefix }}
           ninja:p
-          pixman:p
+          pixman:${{ env.library_prefix }}
           pkgconf:p
           python:p
-          SDL2:p
-          SDL2_image:p
-          snappy:p
-          spice:p
-          usbredir:p
-          zstd:p
-          libslirp:p
+          SDL2:${{ env.library_prefix }}
+          SDL2_image:${{ env.library_prefix }}
+          snappy:${{ env.library_prefix }}
+          spice:${{ env.library_prefix }}
+          usbredir:${{ env.library_prefix }}
+          zstd:${{ env.library_prefix }}
+          libslirp:${{ env.library_prefix }}
+          nsis:p
+
+    - name: 'Clang cross build workaround'
+      if: ${{ matrix.cross && matrix.cross_arch == 'aarch64' }}
+      run: |
+          sed -i 's/\[clangarm64\]/\[cross-clang\]\nServer = https:\/\/github.com\/msys2-arm\/cross-clang\/releases\/download\/repo\/\nSigLevel = Never\n\n\[clangarm64\]/' /etc/pacman.conf
+          pacboy --noconfirm -Sy cross-clang-aarch64:p
+          ln /${{ matrix.sys }}/bin/pkg-config.exe /${{ matrix.sys }}/bin/aarch64-w64-mingw32-pkg-config.exe
+          ln /usr/bin/windmc.exe /${{ matrix.sys }}/bin/aarch64-w64-mingw32-windmc.exe
+          sed -i -s 's/bindir=\${prefix}\/bin/bindir=\/${{ matrix.sys }}\/bin/' /clangarm64/lib/pkgconfig/*.pc
 
     - name: 'Modify pkgconfig to avoid linker issues'
       if: ${{ matrix.mode == 'static' }}
-      run: |
-             PKGCONFIG_FILE="$MINGW_PREFIX/lib/pkgconfig/gpg-error.pc"
-             sed -i 's#'$MINGW_PREFIX'/lib/libintl.dll.a#-llibintl#g' "$PKGCONFIG_FILE"
-             sed -i 's#'$MINGW_PREFIX'/lib/libiconv.dll.a#-llibiconv#g' "$PKGCONFIG_FILE"
-
-    - name: '🚧 Build QEMU (arm & aarch64) ${{ matrix.mode }}'
       env:
-        arg: ${{ matrix.mode == 'dynamic' && '--enable-gtk --enable-sdl --enable-fdt=system --enable-avx2 --target-list=arm-softmmu,aarch64-softmmu' || '--disable-gtk --disable-spice --disable-usb-redir --disable-smartcard --disable-gnutls --disable-libssh --enable-sdl --enable-fdt=system --enable-avx2 --target-list=arm-softmmu,aarch64-softmmu --static --extra-cflags="-DCURL_STATICLIB -DLIBSSH_STATIC -DLIBSLIRP_STATIC -DCAIRO_WIN32_STATIC_BUILD"' }}
+        prefix: ${{ (matrix.cross && matrix.cross_arch == 'aarch64') && 'clangarm64' || matrix.sys }}
       run: |
-          ./configure ${{ env.arg }}
+          PKGCONFIG_FILE="/$prefix/lib/pkgconfig/gpg-error.pc"
+          sed -i "s#/$prefix/lib/libintl.dll.a#-llibintl#g" "$PKGCONFIG_FILE"
+          sed -i "s#/$prefix/lib/libiconv.dll.a#-llibiconv#g" "$PKGCONFIG_FILE"
+
+    - name: ${{ format ('🚧 Build QEMU (arm & aarch64) {0} {1}', matrix.mode, matrix.cross && matrix.cross_arch || '') }}
+      env:
+        mode_flags: ${{ matrix.mode == 'dynamic' && env.dynamic_flags || env.static_flags }}
+        extra_cflags: ${{ (matrix.mode == 'static' || startsWith(matrix.sys, 'clang')) && format('--extra-cflags="{0} {1}"', matrix.mode == 'static' && env.static_extra_cflags || '', startsWith(matrix.sys, 'clang') && env.clang_extra_cflags || '') || '' }}
+        arch_flags: ${{ (matrix.cross && matrix.cross_arch == 'aarch64') && env.clang_cross_flags || '--enable-avx2' }}
+      run: |
+          if [ ${{ matrix.cross && matrix.cross_arch == 'aarch64' }} == true ];
+          then
+            PKG_CONFIG_PATH=/clangarm64/lib/pkgconfig:/clangarm64/share/pkgconfig:$PKG_CONFIG_PATH
+            PKG_CONFIG_SYSTEM_INCLUDE=/clangarm64/include:$PKG_CONFIG_SYSTEM_INCLUDE_PATH
+            PKG_CONFIG_SYSTEM_LIBRARY=/clangarm64/lib:$PKG_CONFIG_SYSTEM_LIBRARY_PATH
+          fi
+          ./configure --enable-sdl --enable-fdt=system --disable-docs --target-list=arm-softmmu,aarch64-softmmu --prefix="$(cygpath -u '${{ github.workspace }}')/artifacts" ${{ format('{0} {1} {2}', env.arch_flags, env.mode_flags, env.extra_cflags) }}
           make -j16
+          echo "version=v$(cat VERSION)-$(git rev-parse --short HEAD)" > $GITHUB_ENV
 
-    - name: Prepare Artifacts
-      shell: cmd
+    - name: 'Prepare Artifacts (static)'
+      if: ${{ matrix.mode == 'static' }}
       run: |
-          md ${{ github.workspace }}\artifacts
-          cd ${{ github.workspace }}\artifacts
-          move D:\a\qemu\qemu\build\*.exe
-          move D:\a\qemu\qemu\build\pc-bios share
-          robocopy D:\a\qemu\qemu\pc-bios share /xn /xo /mov
-          del share\*.bz2
+          make install
 
-    - name: Prepare Artifacts (dynamic only)
-      shell: cmd
+    - name: 'Prepare Artifacts (dynamic)'
       if: ${{ matrix.mode == 'dynamic' }}
       run: |
-          cd ${{ github.workspace }}\artifacts
-          copy D:\a\_temp\msys64\mingw64\bin\*.dll
-          md lib\gdk-pixbuf-2.0\2.10.0
-          fsutil file createNew lib\gdk-pixbuf-2.0\2.10.0\loaders.cache 0
-          move D:\a\qemu\qemu\build\po share\locale
+          if [ ${{ matrix.cross && matrix.cross_arch == 'aarch64' }} == true ];
+          then
+            binpath=$(cygpath -m /clangarm64/bin)
+            sed -i "s#\"/${{ matrix.sys }}/bin\"#\"$binpath\"#" build/build.ninja
+          fi
+          make installer
+          mv -v build/qemu-setup*.exe qemu-setup-${version}.exe;
 
-    - name: Upload artifact
+    - name: 'Upload artifact (dynamic)'
+      if: ${{ matrix.mode == 'dynamic' }}
       uses: actions/upload-artifact@main
       with:
-        name: QEMU (${{ matrix.mode }} build)
-        path: ${{ github.workspace }}/artifacts
+        name: ${{ format('QEMU {0} {1} ({2} {3} build)', env.version, matrix.cross && matrix.cross_arch || '', matrix.sys, matrix.mode) }}
+        path: ${{ github.workspace }}\qemu-setup-${{ env.version }}.exe
         compression-level: 9
 
+    - name: 'Upload artifact (static)'
+      if: ${{ matrix.mode == 'static' }}
+      uses: actions/upload-artifact@main
+      with:
+        name: ${{ format('QEMU {0} {1} ({2} {3} build)', env.version, matrix.cross && matrix.cross_arch || '', matrix.sys, matrix.mode) }}
+        path: ${{ github.workspace }}\artifacts
+        compression-level: 9
+
+    - name: 'Upload logs'
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@main
+      with:
+        name: ${{ format('QEMU {0} {1} ({2} {3} build) logs', env.version, matrix.cross && matrix.cross_arch || '', matrix.sys, matrix.mode) }}
+        path: ${{ github.workspace }}/build
+        compression-level: 9
 
   build_linux:
     runs-on: ubuntu-24.04
@@ -122,47 +168,68 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { arch: x64 }
-          - { arch: aarch64 }
+          - { system: 24.04, arch: x64 }
+          - { system: 24.04, arch: aarch64 }
+          - { system: devel, arch: x64 }
+          - { system: devel, arch: aarch64 }
 
-    name: Build Linux ${{ matrix.arch }}
+    name: Build Linux (Ubuntu ${{ matrix.system }} ${{ matrix.arch }})
 
     steps:
 
     - name: '🧰 Checkout'
       uses: actions/checkout@main
 
-    - name: 'Install software packages'
-      if: ${{ matrix.arch == 'x64' }}
+    - name: 'Update system to devel'
+      if: ${{ matrix.system == 'devel' }}
       run: |
-          sudo apt update
-          sudo apt-get install libglib2.0-dev libfdt-dev libpixman-1-dev ninja-build libaio-dev libbluetooth-dev libcapstone-dev libbrlapi-dev libbz2-dev libcap-ng-dev libcurl4-gnutls-dev libgtk-3-dev libibverbs-dev libjpeg8-dev  libnuma-dev librbd-dev librdmacm-dev libsasl2-dev libsdl2-dev libseccomp-dev libsnappy-dev libssh-dev libvde-dev libvdeplug-dev libvte-2.91-dev libxen-dev liblzo2-dev valgrind xfslibs-dev libnfs-dev libiscsi-dev
+        sudo sed -i 's/noble/devel/g' /etc/apt/sources.list.d/ubuntu.sources
+        sudo apt update
+        sudo apt-mark hold cloud-init-base
+        sudo apt full-upgrade
 
     - name: 'Install software packages (for cross build)'
       if: ${{ matrix.arch == 'aarch64' }}
       run: |
           sudo apt update
-          sudo apt-get install gcc-aarch64-linux-gnu ninja-build
+          sudo apt-get install gcc-aarch64-linux-gnu
           sudo dpkg --add-architecture arm64
-          sudo sed -i '/Types/{N;N;N;N;N;N;N;N;N;N;N;N;s/\(Types.*\n.*\)archive\(.*\)\/ubuntu\(.*\n.*\n.*\n.*gpg\)\(\n\n.*\n.*\n\)\(Types.*\n.*\)archive\(.*\)\/ubuntu\(.*\n.*\n.*\n.*gpg\)/\1archive\2\/ubuntu\3\nArchitectures: amd64\n\n\1ports\2\/ubuntu-ports\3\nArchitectures: arm64\4\5archive\6\/ubuntu\7\nArchitectures: amd64\n\n\5ports\6\/ubuntu-ports\7\nArchitectures: arm64/}' /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt update
-          sudo apt-get install libglib2.0-dev:arm64 libfdt-dev:arm64 libpixman-1-dev:arm64 libaio-dev:arm64 libbluetooth-dev:arm64 libcapstone-dev:arm64 libbrlapi-dev:arm64 libbz2-dev:arm64 libcap-ng-dev:arm64 libcurl4-gnutls-dev:arm64 libgtk-3-dev:arm64 libibverbs-dev:arm64 libjpeg8-dev:arm64  libnuma-dev:arm64 librbd-dev:arm64 librdmacm-dev:arm64 libsasl2-dev:arm64 libsdl2-dev:arm64 libseccomp-dev:arm64 libsnappy-dev:arm64 libssh-dev:arm64 libvde-dev:arm64 libvdeplug-dev:arm64 libvte-2.91-dev:arm64 libxen-dev:arm64 liblzo2-dev:arm64 valgrind:arm64 xfslibs-dev:arm64 libnfs-dev:arm64 libiscsi-dev:arm64
+          sudo bash -c 'cat << EOF >> /etc/apt/apt-mirrors-arm64.txt
+            http://azure.ports.ubuntu.com/ubuntu-ports/	priority:1
+            http://ports.ubuntu.com/ubuntu-ports/	priority:2
+            EOF'
+          sudo sed -i '/Suites/{N;N;s/\(Suites.*\nComponents.*\nSigned-By.*\)/\1\nArchitectures: amd64\n\nTypes: deb\nURIs: mirror+file:\/etc\/apt\/apt-mirrors-arm64.txt\n\1\nArchitectures: arm64/}' /etc/apt/sources.list.d/ubuntu.sources
 
-    - name: '🚧 Build QEMU Linux (arm & aarch64) ${{ matrix.mode }}'
+    - name: 'Install software packages'
       env:
-        arg: ${{ matrix.arch == 'x64' && '--enable-gtk --enable-sdl --enable-avx2 --target-list=arm-softmmu,aarch64-softmmu' || '--enable-gtk --enable-sdl --enable-kvm --target-list=arm-softmmu,aarch64-softmmu --cross-prefix=aarch64-linux-gnu-' }}
+        library-suffix: ${{ matrix.arch == 'aarch64' && 'arm64' || 'amd64'}}
       run: |
-          ./configure ${{ env.arg }}
+          sudo apt update
+          sudo apt-get install ninja-build valgrind libglib2.0-dev:${{ env.library-suffix}} libfdt-dev:${{ env.library-suffix}} libpixman-1-dev:${{ env.library-suffix}} libaio-dev:${{ env.library-suffix}} libbluetooth-dev:${{ env.library-suffix}} libcapstone-dev:${{ env.library-suffix}} libbrlapi-dev:${{ env.library-suffix}} libbz2-dev:${{ env.library-suffix}} libcap-ng-dev:${{ env.library-suffix}} libcurl4-gnutls-dev:${{ env.library-suffix}} libgtk-3-dev:${{ env.library-suffix}} libibverbs-dev:${{ env.library-suffix}} libjpeg8-dev:${{ env.library-suffix}} libnuma-dev:${{ env.library-suffix}} librbd-dev:${{ env.library-suffix}} librdmacm-dev:${{ env.library-suffix}} libsasl2-dev:${{ env.library-suffix}} libsdl2-dev:${{ env.library-suffix}} libseccomp-dev:${{ env.library-suffix}} libsnappy-dev:${{ env.library-suffix}} libssh-dev:${{ env.library-suffix}} libvde-dev:${{ env.library-suffix}} libvdeplug-dev:${{ env.library-suffix}} libvte-2.91-dev:${{ env.library-suffix}} libxen-dev:${{ env.library-suffix}} liblzo2-dev:${{ env.library-suffix}} xfslibs-dev:${{ env.library-suffix}} libnfs-dev:${{ env.library-suffix}} libiscsi-dev:${{ env.library-suffix}} xfsprogs:${{ env.library-suffix}}
+
+    - name: '🚧 Build QEMU Linux (arm & aarch64) (Ubuntu ${{ matrix.system }} ${{ matrix.arch }})'
+      env:
+        build_flags: ${{ matrix.arch == 'x64' && '--enable-avx2' || '--enable-kvm --cross-prefix=aarch64-linux-gnu-' }}
+      run: |
+          ./configure --disable-docs --enable-gtk --enable-sdl --target-list=arm-softmmu,aarch64-softmmu --prefix='${{ github.workspace }}/artifacts' ${{ env.build_flags }}
           make -j16
+          echo "version=v$(cat VERSION)-$(git rev-parse --short HEAD)" > $GITHUB_ENV
 
-    - name: Prepare Artifacts
+    - name: 'Prepare Artifacts'
       run: |
-          mkdir artifacts
-          mv build/* artifacts/
+          make install
 
-    - name: Upload artifact
+    - name: 'Upload artifact'
       uses: actions/upload-artifact@main
       with:
-        name: QEMU Linux (${{ matrix.arch }} build)
+        name: ${{ format('QEMU {0} Linux {1} (Ubuntu {2} build)', env.version, matrix.arch, matrix.system) }}
         path: ${{ github.workspace }}/artifacts
+        compression-level: 9
+
+    - name: 'Upload logs'
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@main
+      with:
+        name: ${{ format('QEMU {0} Linux {1} (Ubuntu {2} build) logs', env.version, matrix.arch, matrix.system) }}
+        path: ${{ github.workspace }}/build
         compression-level: 9
