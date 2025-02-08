@@ -222,7 +222,8 @@
 ##
 { 'struct': 'CanHostSocketcanProperties',
   'data': { 'if': 'str',
-            'canbus': 'str' } }
+            'canbus': 'str' },
+  'if': 'CONFIG_LINUX' }
 
 ##
 # @ColoCompareProperties:
@@ -305,7 +306,8 @@
 ##
 { 'struct': 'CryptodevVhostUserProperties',
   'base': 'CryptodevBackendProperties',
-  'data': { 'chardev': 'str' } }
+  'data': { 'chardev': 'str' },
+  'if': 'CONFIG_VHOST_CRYPTO' }
 
 ##
 # @DBusVMStateProperties:
@@ -354,7 +356,7 @@
 #     filter list.  "head" means the filter is inserted at the head of
 #     the filter list, before any existing filters.  "tail" means the
 #     filter is inserted at the tail of the filter list, behind any
-#     existing filters (default). "id=<id>" means the filter is
+#     existing filters (default).  "id=<id>" means the filter is
 #     inserted before or behind the filter specified by <id>,
 #     depending on the @insert property.  (default: "tail")
 #
@@ -514,7 +516,8 @@
   'data': { 'evdev': 'str',
             '*grab_all': 'bool',
             '*repeat': 'bool',
-            '*grab-toggle': 'GrabToggleKeys' } }
+            '*grab-toggle': 'GrabToggleKeys' },
+  'if': 'CONFIG_LINUX' }
 
 ##
 # @EventLoopBaseProperties:
@@ -617,8 +620,8 @@
 # .. note:: prealloc=true and reserve=false cannot be set at the same
 #    time.  With reserve=true, the behavior depends on the operating
 #    system: for example, Linux will not reserve swap space for shared
-#    file mappings -- "not applicable". In contrast, reserve=false will
-#    bail out if it cannot be configured accordingly.
+#    file mappings -- "not applicable".  In contrast, reserve=false
+#    will bail out if it cannot be configured accordingly.
 #
 # Since: 2.1
 ##
@@ -643,9 +646,9 @@
 # @align: the base address alignment when QEMU mmap(2)s @mem-path.
 #     Some backend stores specified by @mem-path require an alignment
 #     different than the default one used by QEMU, e.g. the device DAX
-#     /dev/dax0.0 requires 2M alignment rather than 4K. In such cases,
-#     users can specify the required alignment via this option.  0
-#     selects a default alignment (currently the page size).
+#     /dev/dax0.0 requires 2M alignment rather than 4K.  In such
+#     cases, users can specify the required alignment via this option.
+#     0 selects a default alignment (currently the page size).
 #     (default: 0)
 #
 # @offset: the offset into the target file that the region starts at.
@@ -706,7 +709,7 @@
 #
 # @hugetlbsize: the hugetlb page size on systems that support multiple
 #     hugetlb page sizes (it must be a power of 2 value supported by
-#     the system). 0 selects a default page size.  This option is
+#     the system).  0 selects a default page size.  This option is
 #     ignored if @hugetlb is false.  (default: 0)
 #
 # @seal: if true, create a sealed-file, which will block further
@@ -718,7 +721,8 @@
   'base': 'MemoryBackendProperties',
   'data': { '*hugetlb': 'bool',
             '*hugetlbsize': 'size',
-            '*seal': 'bool' } }
+            '*seal': 'bool' },
+  'if': 'CONFIG_LINUX' }
 
 ##
 # @MemoryBackendShmProperties:
@@ -748,7 +752,8 @@
 ##
 { 'struct': 'MemoryBackendEpcProperties',
   'base': 'MemoryBackendProperties',
-  'data': {} }
+  'data': {},
+  'if': 'CONFIG_LINUX' }
 
 ##
 # @PrManagerHelperProperties:
@@ -761,7 +766,8 @@
 # Since: 2.11
 ##
 { 'struct': 'PrManagerHelperProperties',
-  'data': { 'path': 'str' } }
+  'data': { 'path': 'str' },
+  'if': 'CONFIG_LINUX' }
 
 ##
 # @QtestProperties:
@@ -839,6 +845,45 @@
             'node': 'uint32' } }
 
 ##
+# @AcpiGenericPortProperties:
+#
+# Properties for acpi-generic-port objects.
+#
+# @pci-bus: QOM path of the PCI bus of the hostbridge associated with
+#     this SRAT Generic Port Affinity Structure.  This is the same as
+#     the bus parameter for the root ports attached to this host
+#     bridge.  The resulting SRAT Generic Port Affinity Structure will
+#     refer to the ACPI object in DSDT that represents the host bridge
+#     (e.g.  ACPI0016 for CXL host bridges).  See ACPI 6.5 Section
+#     5.2.16.7 for more information.
+#
+# @node: Similar to a NUMA node ID, but instead of providing a
+#     reference point used for defining NUMA distances and access
+#     characteristics to memory or from an initiator (e.g. CPU), this
+#     node defines the boundary point between non-discoverable system
+#     buses which must be described by firmware, and a discoverable
+#     bus.  NUMA distances and access characteristics are defined to
+#     and from that point.  For system software to establish full
+#     initiator to target characteristics this information must be
+#     combined with information retrieved from the discoverable part
+#     of the path.  An example would use CDAT (see UEFI.org)
+#     information read from devices and switches in conjunction with
+#     link characteristics read from PCIe Configuration space.
+#     To get the full path latency from CPU to CXL attached DRAM
+#     CXL device:  Add the latency from CPU to Generic Port (from
+#     HMAT indexed via the the node ID in this SRAT structure) to
+#     that for CXL bus links, the latency across intermediate switches
+#     and from the EP port to the actual memory.  Bandwidth is more
+#     complex as there may be interleaving across multiple devices
+#     and shared links in the path.
+#
+# Since: 9.2
+##
+{ 'struct': 'AcpiGenericPortProperties',
+  'data': { 'pci-bus': 'str',
+            'node': 'uint32' } }
+
+##
 # @RngProperties:
 #
 # Properties for objects of classes derived from rng.
@@ -884,7 +929,8 @@
 ##
 { 'struct': 'RngRandomProperties',
   'base': 'RngProperties',
-  'data': { '*filename': 'str' } }
+  'data': { '*filename': 'str' },
+  'if': 'CONFIG_POSIX' }
 
 ##
 # @SevCommonProperties:
@@ -923,17 +969,17 @@
 #
 # @handle: SEV firmware handle (default: 0)
 #
-# @legacy-vm-type: Use legacy KVM_SEV_INIT KVM interface for creating the VM.
-#                  The newer KVM_SEV_INIT2 interface, from Linux >= 6.10, syncs
-#                  additional vCPU state when initializing the VMSA structures,
-#                  which will result in a different guest measurement. Set
-#                  this to 'on' to force compatibility with older QEMU or kernel
-#                  versions that rely on legacy KVM_SEV_INIT behavior. 'auto'
-#                  will behave identically to 'on', but will automatically
-#                  switch to using KVM_SEV_INIT2 if the user specifies any
-#                  additional options that require it. If set to 'off', QEMU
-#                  will require KVM_SEV_INIT2 unconditionally.
-#                  (default: off) (since 9.1)
+# @legacy-vm-type: Use legacy KVM_SEV_INIT KVM interface for creating
+#    the VM.  The newer KVM_SEV_INIT2 interface, from Linux >= 6.10,
+#    syncs additional vCPU state when initializing the VMSA
+#    structures, which will result in a different guest measurement.
+#    Set this to 'on' to force compatibility with older QEMU or kernel
+#    versions that rely on legacy KVM_SEV_INIT behavior.  'auto' will
+#    behave identically to 'on', but will automatically switch to
+#    using KVM_SEV_INIT2 if the user specifies any additional options
+#    that require it.  If set to 'off', QEMU will require
+#    KVM_SEV_INIT2 unconditionally.
+#    (default: off) (since 9.1)
 #
 # Since: 2.12
 ##
@@ -985,7 +1031,7 @@
 # @vcek-disabled: Guests are by default allowed to choose between VLEK
 #     (Versioned Loaded Endorsement Key) or VCEK (Versioned Chip
 #     Endorsement Key) when requesting attestation reports from
-#     firmware. Set this to true to disable the use of VCEK.
+#     firmware.  Set this to true to disable the use of VCEK.
 #     (default: false) (since: 9.1)
 #
 # Since: 9.1
@@ -1036,6 +1082,7 @@
 { 'enum': 'ObjectType',
   'data': [
     'acpi-generic-initiator',
+    'acpi-generic-port',
     'authz-list',
     'authz-listfile',
     'authz-pam',
@@ -1111,6 +1158,7 @@
   'discriminator': 'qom-type',
   'data': {
       'acpi-generic-initiator':     'AcpiGenericInitiatorProperties',
+      'acpi-generic-port':          'AcpiGenericPortProperties',
       'authz-list':                 'AuthZListProperties',
       'authz-listfile':             'AuthZListFileProperties',
       'authz-pam':                  'AuthZPAMProperties',

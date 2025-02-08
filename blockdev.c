@@ -31,8 +31,8 @@
  */
 
 #include "qemu/osdep.h"
-#include "sysemu/block-backend.h"
-#include "sysemu/blockdev.h"
+#include "system/block-backend.h"
+#include "system/blockdev.h"
 #include "hw/block/block.h"
 #include "block/blockjob.h"
 #include "block/dirty-bitmap.h"
@@ -53,12 +53,12 @@
 #include "qapi/qmp/qerror.h"
 #include "qapi/qmp/qlist.h"
 #include "qapi/qobject-output-visitor.h"
-#include "sysemu/sysemu.h"
-#include "sysemu/iothread.h"
+#include "system/system.h"
+#include "system/iothread.h"
 #include "block/block_int.h"
 #include "block/trace.h"
-#include "sysemu/runstate.h"
-#include "sysemu/replay.h"
+#include "system/runstate.h"
+#include "system/replay.h"
 #include "qemu/cutils.h"
 #include "qemu/help_option.h"
 #include "qemu/main-loop.h"
@@ -2654,6 +2654,9 @@ static BlockJob *do_backup_common(BackupCommon *backup,
         }
         if (backup->x_perf->has_max_chunk) {
             perf.max_chunk = backup->x_perf->max_chunk;
+        }
+        if (backup->x_perf->has_min_cluster_size) {
+            perf.min_cluster_size = backup->x_perf->min_cluster_size;
         }
     }
 

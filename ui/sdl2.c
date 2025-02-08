@@ -29,11 +29,12 @@
 #include "ui/console.h"
 #include "ui/input.h"
 #include "ui/sdl2.h"
-#include "sysemu/runstate.h"
-#include "sysemu/runstate-action.h"
-#include "sysemu/sysemu.h"
+#include "system/runstate.h"
+#include "system/runstate-action.h"
+#include "system/system.h"
 #include "ui/win32-kbd-hook.h"
 #include "qemu/log.h"
+#include "qemu-main.h"
 
 static int sdl2_num_outputs;
 static struct sdl2_console *sdl2_console;
@@ -107,7 +108,7 @@ void sdl2_window_create(struct sdl2_console *scon)
     if (scon->opengl) {
         const char *driver = "opengl";
 
-        if (scon->opts->gl == DISPLAYGL_MODE_ES) {
+        if (scon->opts->gl == DISPLAY_GL_MODE_ES) {
             driver = "opengles2";
         }
 
@@ -115,6 +116,7 @@ void sdl2_window_create(struct sdl2_console *scon)
         SDL_SetHint(SDL_HINT_RENDER_BATCHING, "1");
 
         scon->winctx = SDL_GL_CreateContext(scon->real_window);
+        SDL_GL_SetSwapInterval(0);
     } else {
         /* The SDL renderer is only used by sdl2-2D, when OpenGL is disabled */
         scon->real_renderer = SDL_CreateRenderer(scon->real_window, -1, 0);
@@ -388,11 +390,12 @@ static void handle_keydown(SDL_Event *ev)
     int win;
     struct sdl2_console *scon = get_scon_from_window(ev->key.windowID);
     int gui_key_modifier_pressed = get_mod_state();
-    int gui_keysym = 0;
 
     if (!scon) {
         return;
     }
+
+    scon->gui_keysym = false;
 
     if (!scon->ignore_hotkeys && gui_key_modifier_pressed && !ev->key.repeat) {
         switch (ev->key.keysym.scancode) {
@@ -418,15 +421,16 @@ static void handle_keydown(SDL_Event *ev)
                         SDL_ShowWindow(sdl2_console[win].real_window);
                     }
                 }
-                gui_keysym = 1;
+                sdl2_release_modifiers(scon);
+                scon->gui_keysym = true;
             }
             break;
         case SDL_SCANCODE_F:
             toggle_full_screen(scon);
-            gui_keysym = 1;
+            scon->gui_keysym = true;
             break;
         case SDL_SCANCODE_G:
-            gui_keysym = 1;
+            scon->gui_keysym = true;
             if (!gui_grab) {
                 sdl_grab_start(scon);
             } else if (!gui_fullscreen) {
@@ -439,7 +443,7 @@ static void handle_keydown(SDL_Event *ev)
                 /* re-create scon->texture */
                 sdl2_2d_switch(&scon->dcl, scon->surface);
             }
-            gui_keysym = 1;
+            scon->gui_keysym = true;
             break;
 #if 0
         case SDL_SCANCODE_KP_PLUS:
@@ -458,14 +462,14 @@ static void handle_keydown(SDL_Event *ev)
                         __func__, width, height);
                 sdl_scale(scon, width, height);
                 sdl2_redraw(scon);
-                gui_keysym = 1;
+                scon->gui_keysym = true;
             }
 #endif
         default:
             break;
         }
     }
-    if (!gui_keysym) {
+    if (!scon->gui_keysym) {
         sdl2_process_key(scon, &ev->key);
     }
 }
@@ -491,7 +495,7 @@ static void handle_textinput(SDL_Event *ev)
         return;
     }
 
-    if (QEMU_IS_TEXT_CONSOLE(con)) {
+    if (!scon->gui_keysym && QEMU_IS_TEXT_CONSOLE(con)) {
         qemu_text_console_put_string(QEMU_TEXT_CONSOLE(con), ev->text.text, strlen(ev->text.text));
     }
 }
@@ -962,6 +966,9 @@ static void sdl2_display_init(DisplayState *ds, DisplayOptions *o)
     }
 
     atexit(sdl_cleanup);
+
+    /* SDL's event polling (in dpy_refresh) must happen on the main thread. */
+    qemu_main = NULL;
 }
 
 static QemuDisplay qemu_display_sdl2 = {

@@ -16,7 +16,7 @@
 #include <sys/ioctl.h>
 #include "qapi/error.h"
 #include "hw/vfio/vfio-common.h"
-#include "sysemu/iommufd.h"
+#include "system/iommufd.h"
 #include "hw/s390x/ap-device.h"
 #include "qemu/error-report.h"
 #include "qemu/event_notifier.h"
@@ -191,13 +191,12 @@ static void vfio_ap_unrealize(DeviceState *dev)
     g_free(vapdev->vdev.name);
 }
 
-static Property vfio_ap_properties[] = {
+static const Property vfio_ap_properties[] = {
     DEFINE_PROP_STRING("sysfsdev", VFIOAPDevice, vdev.sysfsdev),
 #ifdef CONFIG_IOMMUFD
     DEFINE_PROP_LINK("iommufd", VFIOAPDevice, vdev.iommufd,
                      TYPE_IOMMUFD_BACKEND, IOMMUFDBackend *),
 #endif
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void vfio_ap_reset(DeviceState *dev)
@@ -256,7 +255,7 @@ static void vfio_ap_class_init(ObjectClass *klass, void *data)
     dc->realize = vfio_ap_realize;
     dc->unrealize = vfio_ap_unrealize;
     dc->hotpluggable = true;
-    dc->reset = vfio_ap_reset;
+    device_class_set_legacy_reset(dc, vfio_ap_reset);
     dc->bus_type = TYPE_AP_BUS;
 }
 

@@ -267,7 +267,6 @@ struct ArchCPU {
 /**
  * AlphaCPUClass:
  * @parent_realize: The parent class' realize handler.
- * @parent_reset: The parent class' reset handler.
  *
  * An Alpha CPU model.
  */
@@ -275,7 +274,6 @@ struct AlphaCPUClass {
     CPUClass parent_class;
 
     DeviceRealize parent_realize;
-    DeviceReset parent_reset;
 };
 
 #ifndef CONFIG_USER_ONLY
@@ -433,6 +431,8 @@ enum {
 };
 
 void alpha_translate_init(void);
+void alpha_translate_code(CPUState *cs, TranslationBlock *tb,
+                          int *max_insns, vaddr pc, void *host_pc);
 
 #define CPU_RESOLVING_TYPE TYPE_ALPHA_CPU
 

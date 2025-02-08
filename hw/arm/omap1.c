@@ -29,13 +29,14 @@
 #include "hw/qdev-properties.h"
 #include "hw/arm/boot.h"
 #include "hw/arm/omap.h"
-#include "sysemu/blockdev.h"
-#include "sysemu/sysemu.h"
+#include "hw/sd/sd.h"
+#include "system/blockdev.h"
+#include "system/system.h"
 #include "hw/arm/soc_dma.h"
-#include "sysemu/qtest.h"
-#include "sysemu/reset.h"
-#include "sysemu/runstate.h"
-#include "sysemu/rtc.h"
+#include "system/qtest.h"
+#include "system/reset.h"
+#include "system/runstate.h"
+#include "system/rtc.h"
 #include "qemu/range.h"
 #include "hw/sysbus.h"
 #include "qemu/cutils.h"
@@ -2170,29 +2171,27 @@ struct omap_uwire_s {
     uint16_t rxbuf;
     uint16_t control;
     uint16_t setup[5];
-
-    uWireSlave *chip[4];
 };
 
 static void omap_uwire_transfer_start(struct omap_uwire_s *s)
 {
     int chipselect = (s->control >> 10) & 3;		/* INDEX */
-    uWireSlave *slave = s->chip[chipselect];
 
     if ((s->control >> 5) & 0x1f) {			/* NB_BITS_WR */
-        if (s->control & (1 << 12))			/* CS_CMD */
-            if (slave && slave->send)
-                slave->send(slave->opaque,
-                                s->txbuf >> (16 - ((s->control >> 5) & 0x1f)));
+        if (s->control & (1 << 12)) {       /* CS_CMD */
+            qemu_log_mask(LOG_UNIMP, "uWireSlave TX CS:%d data:0x%04x\n",
+                          chipselect,
+                          s->txbuf >> (16 - ((s->control >> 5) & 0x1f)));
+        }
         s->control &= ~(1 << 14);			/* CSRB */
         /* TODO: depending on s->setup[4] bits [1:0] assert an IRQ or
          * a DRQ.  When is the level IRQ supposed to be reset?  */
     }
 
     if ((s->control >> 0) & 0x1f) {			/* NB_BITS_RD */
-        if (s->control & (1 << 12))			/* CS_CMD */
-            if (slave && slave->receive)
-                s->rxbuf = slave->receive(slave->opaque);
+        if (s->control & (1 << 12)) {       /* CS_CMD */
+            qemu_log_mask(LOG_UNIMP, "uWireSlave RX CS:%d\n", chipselect);
+        }
         s->control |= 1 << 15;				/* RDRB */
         /* TODO: depending on s->setup[4] bits [1:0] assert an IRQ or
          * a DRQ.  When is the level IRQ supposed to be reset?  */
@@ -2319,17 +2318,6 @@ static struct omap_uwire_s *omap_uwire_init(MemoryRegion *system_memory,
     memory_region_add_subregion(system_memory, base, &s->iomem);
 
     return s;
-}
-
-void omap_uwire_attach(struct omap_uwire_s *s,
-                uWireSlave *slave, int chipselect)
-{
-    if (chipselect < 0 || chipselect > 3) {
-        error_report("%s: Bad chipselect %i", __func__, chipselect);
-        exit(-1);
-    }
-
-    s->chip[chipselect] = slave;
 }
 
 /* Pseudonoise Pulse-Width Light Modulator */
@@ -3729,7 +3717,6 @@ static void omap1_mpu_reset(void *opaque)
     omap_uart_reset(mpu->uart[0]);
     omap_uart_reset(mpu->uart[1]);
     omap_uart_reset(mpu->uart[2]);
-    omap_mmc_reset(mpu->mmc);
     omap_mpuio_reset(mpu->mpuio);
     omap_uwire_reset(mpu->microwire);
     omap_pwl_reset(mpu->pwl);
@@ -3994,11 +3981,25 @@ struct omap_mpu_state_s *omap310_mpu_init(MemoryRegion *dram,
     if (!dinfo && !qtest_enabled()) {
         warn_report("missing SecureDigital device");
     }
-    s->mmc = omap_mmc_init(0xfffb7800, system_memory,
-                           dinfo ? blk_by_legacy_dinfo(dinfo) : NULL,
-                           qdev_get_gpio_in(s->ih[1], OMAP_INT_OQN),
-                           &s->drq[OMAP_DMA_MMC_TX],
-                    omap_findclk(s, "mmc_ck"));
+
+    s->mmc = qdev_new(TYPE_OMAP_MMC);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(s->mmc), &error_fatal);
+    omap_mmc_set_clk(s->mmc, omap_findclk(s, "mmc_ck"));
+
+    memory_region_add_subregion(system_memory, 0xfffb7800,
+                                sysbus_mmio_get_region(SYS_BUS_DEVICE(s->mmc), 0));
+    qdev_connect_gpio_out_named(s->mmc, "dma-tx", 0, s->drq[OMAP_DMA_MMC_TX]);
+    qdev_connect_gpio_out_named(s->mmc, "dma-rx", 0, s->drq[OMAP_DMA_MMC_RX]);
+    sysbus_connect_irq(SYS_BUS_DEVICE(s->mmc), 0,
+                       qdev_get_gpio_in(s->ih[1], OMAP_INT_OQN));
+
+    if (dinfo) {
+        DeviceState *card = qdev_new(TYPE_SD_CARD);
+        qdev_prop_set_drive_err(card, "drive", blk_by_legacy_dinfo(dinfo),
+                                &error_fatal);
+        qdev_realize_and_unref(card, qdev_get_child_bus(s->mmc, "sd-bus"),
+                               &error_fatal);
+    }
 
     s->mpuio = omap_mpuio_init(system_memory, 0xfffb5000,
                                qdev_get_gpio_in(s->ih[1], OMAP_INT_KEYBOARD),

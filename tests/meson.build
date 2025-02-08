@@ -78,10 +78,11 @@ subdir('decode')
 
 if 'CONFIG_TCG' in config_all_accel
   subdir('fp')
-  subdir('plugin')
+  subdir('tcg/plugins')
 endif
 
 subdir('unit')
 subdir('qapi-schema')
 subdir('qtest')
-subdir('migration')
+subdir('migration-stress')
+subdir('functional')

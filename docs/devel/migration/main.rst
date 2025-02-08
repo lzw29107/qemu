@@ -1,3 +1,5 @@
+.. _migration:
+
 ===================
 Migration framework
 ===================
@@ -464,6 +466,12 @@ Examples of such API functions are:
   - memory_region_set_alias_offset()
   - portio_list_set_address()
   - portio_list_set_enabled()
+
+Since the order of device save/restore is not defined, you must
+avoid accessing or changing any other device's state in one of these
+callbacks. (For instance, don't do anything that calls ``update_irq()``
+in a ``post_load`` hook.) Otherwise, restore will not be deterministic,
+and this will break execution record/replay.
 
 Iterative device migration
 --------------------------

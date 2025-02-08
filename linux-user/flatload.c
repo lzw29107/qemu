@@ -34,6 +34,7 @@
 #include "qemu/osdep.h"
 
 #include "qemu.h"
+#include "exec/page-protection.h"
 #include "user-internals.h"
 #include "loader.h"
 #include "user-mmap.h"
@@ -487,7 +488,10 @@ int load_flt_binary(struct linux_binprm *bprm, struct image_info *info)
     stack_len += (bprm->envc + 1) * 4; /* the envp array */
 
 
+    mmap_lock();
     res = load_flat_file(bprm, libinfo, 0, &stack_len);
+    mmap_unlock();
+
     if (is_error(res)) {
             return res;
     }

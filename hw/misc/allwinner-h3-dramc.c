@@ -314,10 +314,9 @@ static void allwinner_h3_dramc_init(Object *obj)
     sysbus_init_mmio(sbd, &s->dramphy_iomem);
 }
 
-static Property allwinner_h3_dramc_properties[] = {
+static const Property allwinner_h3_dramc_properties[] = {
     DEFINE_PROP_UINT64("ram-addr", AwH3DramCtlState, ram_addr, 0x0),
     DEFINE_PROP_UINT32("ram-size", AwH3DramCtlState, ram_size, 256 * MiB),
-    DEFINE_PROP_END_OF_LIST()
 };
 
 static const VMStateDescription allwinner_h3_dramc_vmstate = {
@@ -336,7 +335,7 @@ static void allwinner_h3_dramc_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->reset = allwinner_h3_dramc_reset;
+    device_class_set_legacy_reset(dc, allwinner_h3_dramc_reset);
     dc->vmsd = &allwinner_h3_dramc_vmstate;
     dc->realize = allwinner_h3_dramc_realize;
     device_class_set_props(dc, allwinner_h3_dramc_properties);

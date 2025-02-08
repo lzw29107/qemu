@@ -462,10 +462,9 @@ static void aw_emac_realize(DeviceState *dev, Error **errp)
     fifo8_create(&s->tx_fifo[1], TX_FIFO_SIZE);
 }
 
-static Property aw_emac_properties[] = {
+static const Property aw_emac_properties[] = {
     DEFINE_NIC_PROPERTIES(AwEmacState, conf),
     DEFINE_PROP_UINT8("phy-addr", AwEmacState, phy_addr, 0),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static const VMStateDescription vmstate_mii = {
@@ -521,7 +520,7 @@ static void aw_emac_class_init(ObjectClass *klass, void *data)
 
     dc->realize = aw_emac_realize;
     device_class_set_props(dc, aw_emac_properties);
-    dc->reset = aw_emac_reset;
+    device_class_set_legacy_reset(dc, aw_emac_reset);
     dc->vmsd = &vmstate_aw_emac;
 }
 

@@ -13,6 +13,7 @@
 #include "exec/breakpoint.h"
 #include "exec/hwaddr.h"
 #include "exec/memattrs.h"
+#include "exec/memop.h"
 #include "exec/mmu-access-type.h"
 #include "exec/vaddr.h"
 
@@ -23,6 +24,19 @@ struct TCGCPUOps {
      * Called when the first CPU is realized.
      */
     void (*initialize)(void);
+    /**
+     * @translate_code: Translate guest instructions to TCGOps
+     * @cpu: cpu context
+     * @tb: translation block
+     * @max_insns: max number of instructions to translate
+     * @pc: guest virtual program counter address
+     * @host_pc: host physical program counter address
+     *
+     * This function must be provided by the target, which should create
+     * the target-specific DisasContext, and then invoke translator_loop.
+     */
+    void (*translate_code)(CPUState *cpu, TranslationBlock *tb,
+                           int *max_insns, vaddr pc, void *host_pc);
     /**
      * @synchronize_from_tb: Synchronize state from a TCG #TranslationBlock
      *
@@ -131,6 +145,31 @@ struct TCGCPUOps {
      * same function signature.
      */
     bool (*cpu_exec_halt)(CPUState *cpu);
+    /**
+     * @tlb_fill_align: Handle a softmmu tlb miss
+     * @cpu: cpu context
+     * @out: output page properties
+     * @addr: virtual address
+     * @access_type: read, write or execute
+     * @mmu_idx: mmu context
+     * @memop: memory operation for the access
+     * @size: memory access size, or 0 for whole page
+     * @probe: test only, no fault
+     * @ra: host return address for exception unwind
+     *
+     * If the access is valid, fill in @out and return true.
+     * Otherwise if probe is true, return false.
+     * Otherwise raise an exception and do not return.
+     *
+     * The alignment check for the access is deferred to this hook,
+     * so that the target can determine the priority of any alignment
+     * fault with respect to other potential faults from paging.
+     * Zero may be passed for @memop to skip any alignment check
+     * for non-memory-access operations such as probing.
+     */
+    bool (*tlb_fill_align)(CPUState *cpu, CPUTLBEntryFull *out, vaddr addr,
+                           MMUAccessType access_type, int mmu_idx,
+                           MemOp memop, int size, bool probe, uintptr_t ra);
     /**
      * @tlb_fill: Handle a softmmu tlb miss
      *

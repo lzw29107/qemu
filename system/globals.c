@@ -28,8 +28,8 @@
 #include "hw/loader.h"
 #include "hw/xen/xen.h"
 #include "net/net.h"
-#include "sysemu/cpus.h"
-#include "sysemu/sysemu.h"
+#include "system/cpus.h"
+#include "system/system.h"
 
 enum vga_retrace_method vga_retrace_method = VGA_RETRACE_DUMB;
 int display_opengl;
@@ -40,7 +40,6 @@ int autostart = 1;
 int vga_interface_type = VGA_NONE;
 bool vga_interface_created;
 Chardev *parallel_hds[MAX_PARALLEL_PORTS];
-int graphic_rotate;
 QEMUOptionRom option_rom[MAX_OPTION_ROMS];
 int nb_option_roms;
 int old_param;

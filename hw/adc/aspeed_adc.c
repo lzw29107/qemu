@@ -286,10 +286,9 @@ static const VMStateDescription vmstate_aspeed_adc_engine = {
     }
 };
 
-static Property aspeed_adc_engine_properties[] = {
+static const Property aspeed_adc_engine_properties[] = {
     DEFINE_PROP_UINT32("engine-id", AspeedADCEngineState, engine_id, 0),
     DEFINE_PROP_UINT32("nr-channels", AspeedADCEngineState, nr_channels, 0),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void aspeed_adc_engine_class_init(ObjectClass *klass, void *data)
@@ -297,7 +296,7 @@ static void aspeed_adc_engine_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = aspeed_adc_engine_realize;
-    dc->reset = aspeed_adc_engine_reset;
+    device_class_set_legacy_reset(dc, aspeed_adc_engine_reset);
     device_class_set_props(dc, aspeed_adc_engine_properties);
     dc->desc = "Aspeed Analog-to-Digital Engine";
     dc->vmsd = &vmstate_aspeed_adc_engine;

@@ -23,7 +23,7 @@
 #include "block/dirty-bitmap.h"
 #include "qapi/error.h"
 #include "qemu/cutils.h"
-#include "sysemu/block-backend.h"
+#include "system/block-backend.h"
 #include "qemu/bitmap.h"
 #include "qemu/error-report.h"
 
@@ -458,7 +458,7 @@ BlockJob *backup_job_create(const char *job_id, BlockDriverState *bs,
     }
 
     cbw = bdrv_cbw_append(bs, target, filter_node_name, discard_source,
-                          &bcs, errp);
+                          perf->min_cluster_size, &bcs, errp);
     if (!cbw) {
         goto error;
     }

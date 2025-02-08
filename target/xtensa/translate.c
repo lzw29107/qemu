@@ -37,6 +37,7 @@
 #include "qemu/qemu-print.h"
 #include "semihosting/semihost.h"
 #include "exec/translator.h"
+#include "exec/translation-block.h"
 
 #include "exec/helper-proto.h"
 #include "exec/helper-gen.h"
@@ -521,7 +522,7 @@ static MemOp gen_load_store_alignment(DisasContext *dc, MemOp mop,
         mop |= MO_ALIGN;
     }
     if (!option_enabled(dc, XTENSA_OPTION_UNALIGNED_EXCEPTION)) {
-        tcg_gen_andi_i32(addr, addr, ~0 << get_alignment_bits(mop));
+        tcg_gen_andi_i32(addr, addr, ~0 << memop_alignment_bits(mop));
     }
     return mop;
 }
@@ -1227,8 +1228,8 @@ static const TranslatorOps xtensa_translator_ops = {
     .tb_stop            = xtensa_tr_tb_stop,
 };
 
-void gen_intermediate_code(CPUState *cpu, TranslationBlock *tb, int *max_insns,
-                           vaddr pc, void *host_pc)
+void xtensa_translate_code(CPUState *cpu, TranslationBlock *tb,
+                           int *max_insns, vaddr pc, void *host_pc)
 {
     DisasContext dc = {};
     translator_loop(cpu, tb, max_insns, pc, host_pc,

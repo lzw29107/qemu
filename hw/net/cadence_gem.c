@@ -23,7 +23,7 @@
  */
 
 #include "qemu/osdep.h"
-#include <zlib.h> /* For crc32 */
+#include <zlib.h> /* for crc32 */
 
 #include "hw/irq.h"
 #include "hw/net/cadence_gem.h"
@@ -33,7 +33,7 @@
 #include "qapi/error.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
-#include "sysemu/dma.h"
+#include "system/dma.h"
 #include "net/checksum.h"
 #include "net/eth.h"
 
@@ -1784,7 +1784,7 @@ static const VMStateDescription vmstate_cadence_gem = {
     }
 };
 
-static Property gem_properties[] = {
+static const Property gem_properties[] = {
     DEFINE_NIC_PROPERTIES(CadenceGEMState, conf),
     DEFINE_PROP_UINT32("revision", CadenceGEMState, revision,
                        GEM_MODID_VALUE),
@@ -1799,7 +1799,6 @@ static Property gem_properties[] = {
                        jumbo_max_len, 10240),
     DEFINE_PROP_LINK("dma", CadenceGEMState, dma_mr,
                      TYPE_MEMORY_REGION, MemoryRegion *),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void gem_class_init(ObjectClass *klass, void *data)
@@ -1809,7 +1808,7 @@ static void gem_class_init(ObjectClass *klass, void *data)
     dc->realize = gem_realize;
     device_class_set_props(dc, gem_properties);
     dc->vmsd = &vmstate_cadence_gem;
-    dc->reset = gem_reset;
+    device_class_set_legacy_reset(dc, gem_reset);
 }
 
 static const TypeInfo gem_info = {

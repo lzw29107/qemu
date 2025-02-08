@@ -20,7 +20,7 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  *
- * SPDX-License-Identifier: LGPL-2.0+
+ * SPDX-License-Identifier: LGPL-2.0-or-later
  */
 
 #include "qemu/osdep.h"
@@ -41,8 +41,8 @@
 #endif
 #include "hw/core/cpu.h"
 
-#include "sysemu/hw_accel.h"
-#include "sysemu/runstate.h"
+#include "system/hw_accel.h"
+#include "system/runstate.h"
 #include "exec/replay-core.h"
 #include "exec/hwaddr.h"
 

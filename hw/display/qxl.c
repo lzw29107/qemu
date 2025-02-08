@@ -29,7 +29,7 @@
 #include "qemu/main-loop.h"
 #include "qemu/module.h"
 #include "hw/qdev-properties.h"
-#include "sysemu/runstate.h"
+#include "system/runstate.h"
 #include "migration/vmstate.h"
 #include "trace.h"
 
@@ -50,7 +50,7 @@
 #undef ALIGN
 #define ALIGN(a, b) (((a) + ((b) - 1)) & ~((b) - 1))
 
-#define PIXEL_SIZE 0.2936875 //1280x1024 is 14.8" x 11.9" 
+#define PIXEL_SIZE 0.2936875 /* 1280x1024 is 14.8" x 11.9" */
 
 #define QXL_MODE(_x, _y, _b, _o)                  \
     {   .x_res = _x,                              \
@@ -1301,8 +1301,8 @@ static int qxl_add_memslot(PCIQXLDevice *d, uint32_t slot_id, uint64_t delta,
     };
     uint64_t guest_start;
     uint64_t guest_end;
-    int pci_region;
-    pcibus_t pci_start;
+    int pci_region = -1;
+    pcibus_t pci_start = PCI_BAR_UNMAPPED;
     pcibus_t pci_end;
     MemoryRegion *mr;
     intptr_t virt_start;
@@ -2458,7 +2458,7 @@ static const VMStateDescription qxl_vmstate = {
     }
 };
 
-static Property qxl_properties[] = {
+static const Property qxl_properties[] = {
         DEFINE_PROP_UINT32("ram_size", PCIQXLDevice, vga.vram_size, 64 * MiB),
         DEFINE_PROP_UINT64("vram_size", PCIQXLDevice, vram32_size, 64 * MiB),
         DEFINE_PROP_UINT32("revision", PCIQXLDevice, revision,
@@ -2475,7 +2475,6 @@ static Property qxl_properties[] = {
         DEFINE_PROP_UINT32("xres", PCIQXLDevice, xres, 0),
         DEFINE_PROP_UINT32("yres", PCIQXLDevice, yres, 0),
         DEFINE_PROP_BOOL("global-vmstate", PCIQXLDevice, vga.global_vmstate, false),
-        DEFINE_PROP_END_OF_LIST(),
 };
 
 static void qxl_pci_class_init(ObjectClass *klass, void *data)
@@ -2486,7 +2485,7 @@ static void qxl_pci_class_init(ObjectClass *klass, void *data)
     k->vendor_id = REDHAT_PCI_VENDOR_ID;
     k->device_id = QXL_DEVICE_ID_STABLE;
     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
-    dc->reset = qxl_reset_handler;
+    device_class_set_legacy_reset(dc, qxl_reset_handler);
     dc->vmsd = &qxl_vmstate;
     device_class_set_props(dc, qxl_properties);
 }

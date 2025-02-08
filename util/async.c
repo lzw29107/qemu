@@ -30,11 +30,12 @@
 #include "block/graph-lock.h"
 #include "qemu/main-loop.h"
 #include "qemu/atomic.h"
+#include "qemu/lockcnt.h"
 #include "qemu/rcu_queue.h"
 #include "block/raw-aio.h"
 #include "qemu/coroutine_int.h"
 #include "qemu/coroutine-tls.h"
-#include "sysemu/cpu-timers.h"
+#include "system/cpu-timers.h"
 #include "trace.h"
 
 /***********************************************************/

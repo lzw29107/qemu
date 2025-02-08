@@ -13,7 +13,7 @@
 #include "qapi/error.h"
 #include "exec/address-spaces.h"
 #include "exec/memory.h"
-#include "sysemu/kvm.h"
+#include "system/kvm.h"
 #include "qemu/bitops.h"
 #include "qemu/error-report.h"
 #include "qemu/lockable.h"
@@ -138,7 +138,7 @@ static void synic_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = synic_realize;
-    dc->reset = synic_reset;
+    device_class_set_legacy_reset(dc, synic_reset);
     dc->user_creatable = false;
 }
 

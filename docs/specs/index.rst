@@ -35,3 +35,6 @@ guest hardware that is specific to QEMU.
    vmcoreinfo
    vmgenid
    rapl-msr
+   rocker
+   riscv-iommu
+   riscv-aia

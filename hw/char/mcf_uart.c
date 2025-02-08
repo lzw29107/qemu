@@ -312,9 +312,8 @@ static void mcf_uart_realize(DeviceState *dev, Error **errp)
                              mcf_uart_event, NULL, s, NULL, true);
 }
 
-static Property mcf_uart_properties[] = {
+static const Property mcf_uart_properties[] = {
     DEFINE_PROP_CHR("chardev", mcf_uart_state, chr),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void mcf_uart_class_init(ObjectClass *oc, void *data)
@@ -322,7 +321,7 @@ static void mcf_uart_class_init(ObjectClass *oc, void *data)
     DeviceClass *dc = DEVICE_CLASS(oc);
 
     dc->realize = mcf_uart_realize;
-    dc->reset = mcf_uart_reset;
+    device_class_set_legacy_reset(dc, mcf_uart_reset);
     device_class_set_props(dc, mcf_uart_properties);
     set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
 }

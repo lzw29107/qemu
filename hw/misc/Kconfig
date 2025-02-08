@@ -72,15 +72,22 @@ config IVSHMEM_DEVICE
     default y if PCI_DEVICES
     depends on PCI && LINUX && IVSHMEM && MSI_NONBROKEN
 
+config IVSHMEM_FLAT_DEVICE
+    bool
+    default y
+    depends on LINUX && IVSHMEM
+
 config ECCMEMCTL
     bool
-    select ECC
 
 config IMX
     bool
     select PTIMER
     select SSI
     select USB_EHCI_SYSBUS
+
+config STM32_RCC
+    bool
 
 config STM32F2XX_SYSCFG
     bool

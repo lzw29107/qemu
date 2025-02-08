@@ -65,10 +65,9 @@ static void cswmbcci_exit(PCIDevice *pci_dev)
     /* Nothing to do here yet */
 }
 
-static Property cxl_switch_cci_props[] = {
+static const Property cxl_switch_cci_props[] = {
     DEFINE_PROP_LINK("target", CSWMBCCIDev,
                      target, TYPE_CXL_USP, PCIDevice *),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void cswmbcci_class_init(ObjectClass *oc, void *data)
@@ -89,7 +88,7 @@ static void cswmbcci_class_init(ObjectClass *oc, void *data)
     pc->device_id = 0xa123;
     pc->revision = 0;
     dc->desc = "CXL Switch Mailbox CCI";
-    dc->reset = cswmbcci_reset;
+    device_class_set_legacy_reset(dc, cswmbcci_reset);
     device_class_set_props(dc, cxl_switch_cci_props);
 }
 

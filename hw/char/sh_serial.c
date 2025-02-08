@@ -447,10 +447,9 @@ static void sh_serial_init(Object *obj)
 {
 }
 
-static Property sh_serial_properties[] = {
+static const Property sh_serial_properties[] = {
     DEFINE_PROP_CHR("chardev", SHSerialState, chr),
     DEFINE_PROP_UINT8("features", SHSerialState, feat, 0),
-    DEFINE_PROP_END_OF_LIST()
 };
 
 static void sh_serial_class_init(ObjectClass *oc, void *data)
@@ -459,7 +458,7 @@ static void sh_serial_class_init(ObjectClass *oc, void *data)
 
     device_class_set_props(dc, sh_serial_properties);
     dc->realize = sh_serial_realize;
-    dc->reset = sh_serial_reset;
+    device_class_set_legacy_reset(dc, sh_serial_reset);
     /* Reason: part of SuperH CPU/SoC, needs to be wired up */
     dc->user_creatable = false;
 }

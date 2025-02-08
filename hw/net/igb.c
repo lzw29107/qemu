@@ -44,7 +44,7 @@
 #include "net/tap.h"
 #include "qemu/module.h"
 #include "qemu/range.h"
-#include "sysemu/sysemu.h"
+#include "system/system.h"
 #include "hw/hw.h"
 #include "hw/net/mii.h"
 #include "hw/pci/pci.h"
@@ -446,16 +446,9 @@ static void igb_pci_realize(PCIDevice *pci_dev, Error **errp)
 
     pcie_ari_init(pci_dev, 0x150);
 
-    if (!pcie_sriov_pf_init(pci_dev, IGB_CAP_SRIOV_OFFSET,
-                            TYPE_IGBVF, IGB_82576_VF_DEV_ID,
-                            IGB_MAX_VF_FUNCTIONS, IGB_MAX_VF_FUNCTIONS,
-                            IGB_VF_OFFSET, IGB_VF_STRIDE,
-                            errp)) {
-        pcie_cap_exit(pci_dev);
-        igb_cleanup_msix(s);
-        msi_uninit(pci_dev);
-        return;
-    }
+    pcie_sriov_pf_init(pci_dev, IGB_CAP_SRIOV_OFFSET, TYPE_IGBVF,
+        IGB_82576_VF_DEV_ID, IGB_MAX_VF_FUNCTIONS, IGB_MAX_VF_FUNCTIONS,
+        IGB_VF_OFFSET, IGB_VF_STRIDE);
 
     pcie_sriov_pf_init_vf_bar(pci_dev, IGBVF_MMIO_BAR_IDX,
         PCI_BASE_ADDRESS_MEM_TYPE_64 | PCI_BASE_ADDRESS_MEM_PREFETCH,
@@ -598,10 +591,9 @@ static const VMStateDescription igb_vmstate = {
     }
 };
 
-static Property igb_properties[] = {
+static const Property igb_properties[] = {
     DEFINE_NIC_PROPERTIES(IGBState, conf),
     DEFINE_PROP_BOOL("x-pcie-flr-init", IGBState, has_flr, true),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void igb_class_init(ObjectClass *class, void *data)

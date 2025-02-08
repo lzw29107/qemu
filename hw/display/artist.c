@@ -1474,11 +1474,10 @@ static const VMStateDescription vmstate_artist = {
     }
 };
 
-static Property artist_properties[] = {
+static const Property artist_properties[] = {
     DEFINE_PROP_UINT16("width",        ARTISTState, width, 1280),
     DEFINE_PROP_UINT16("height",       ARTISTState, height, 1024),
     DEFINE_PROP_UINT16("depth",        ARTISTState, depth, 8),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void artist_reset(DeviceState *qdev)
@@ -1491,7 +1490,7 @@ static void artist_class_init(ObjectClass *klass, void *data)
 
     dc->realize = artist_realizefn;
     dc->vmsd = &vmstate_artist;
-    dc->reset = artist_reset;
+    device_class_set_legacy_reset(dc, artist_reset);
     device_class_set_props(dc, artist_properties);
 }
 

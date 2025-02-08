@@ -25,7 +25,7 @@
 #include "qemu/units.h"
 #include "qapi/error.h"
 #include "exec/address-spaces.h"
-#include "sysemu/sysemu.h"
+#include "system/system.h"
 #include "hw/or-irq.h"
 #include "hw/arm/stm32l4x5_soc.h"
 #include "hw/char/stm32l4x5_usart.h"
@@ -236,6 +236,8 @@ static void stm32l4x5_soc_realize(DeviceState *dev_soc, Error **errp)
 
     /* System configuration controller */
     busdev = SYS_BUS_DEVICE(&s->syscfg);
+    qdev_connect_clock_in(DEVICE(&s->syscfg), "clk",
+        qdev_get_clock_out(DEVICE(&(s->rcc)), "syscfg-out"));
     if (!sysbus_realize(busdev, errp)) {
         return;
     }

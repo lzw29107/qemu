@@ -16,7 +16,7 @@
 #include "qemu/error-report.h"
 #include "qemu/module.h"
 #include "qapi/error.h"
-#include "sysemu/kvm.h"
+#include "system/kvm.h"
 #include "hw/s390x/s390_flic.h"
 #include "hw/s390x/adapter.h"
 #include "hw/s390x/css.h"
@@ -679,7 +679,7 @@ static void kvm_s390_flic_class_init(ObjectClass *oc, void *data)
     device_class_set_parent_realize(dc, kvm_s390_flic_realize,
                                     &kfsc->parent_realize);
     dc->vmsd = &kvm_s390_flic_vmstate;
-    dc->reset = kvm_s390_flic_reset;
+    device_class_set_legacy_reset(dc, kvm_s390_flic_reset);
     fsc->register_io_adapter = kvm_s390_register_io_adapter;
     fsc->io_adapter_map = kvm_s390_io_adapter_map;
     fsc->add_adapter_routes = kvm_s390_add_adapter_routes;

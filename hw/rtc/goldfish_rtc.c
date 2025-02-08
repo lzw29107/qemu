@@ -27,8 +27,8 @@
 #include "hw/sysbus.h"
 #include "qemu/bitops.h"
 #include "qemu/timer.h"
-#include "sysemu/sysemu.h"
-#include "sysemu/rtc.h"
+#include "system/system.h"
+#include "system/rtc.h"
 #include "qemu/cutils.h"
 #include "qemu/log.h"
 
@@ -286,10 +286,9 @@ static void goldfish_rtc_realize(DeviceState *d, Error **errp)
     s->timer = timer_new_ns(rtc_clock, goldfish_rtc_interrupt, s);
 }
 
-static Property goldfish_rtc_properties[] = {
+static const Property goldfish_rtc_properties[] = {
     DEFINE_PROP_BOOL("big-endian", GoldfishRTCState, big_endian,
                       false),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void goldfish_rtc_class_init(ObjectClass *klass, void *data)
@@ -298,7 +297,7 @@ static void goldfish_rtc_class_init(ObjectClass *klass, void *data)
 
     device_class_set_props(dc, goldfish_rtc_properties);
     dc->realize = goldfish_rtc_realize;
-    dc->reset = goldfish_rtc_reset;
+    device_class_set_legacy_reset(dc, goldfish_rtc_reset);
     dc->vmsd = &goldfish_rtc_vmstate;
 }
 

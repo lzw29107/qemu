@@ -87,7 +87,7 @@ default_role = 'any'
 
 # General information about the project.
 project = u'QEMU'
-copyright = u'2024, The QEMU Project Developers'
+copyright = u'2025, The QEMU Project Developers'
 author = u'The QEMU Project Developers'
 
 # The version info for the project you're documenting, acts as replacement for
@@ -186,7 +186,7 @@ html_js_files = [
 ]
 
 html_context = {
-    "display_gitlab": True,
+    "source_url_prefix": "https://gitlab.com/qemu-project/qemu/-/blob/master/docs/",
     "gitlab_user": "qemu-project",
     "gitlab_repo": "qemu",
     "gitlab_version": "master",
@@ -275,9 +275,6 @@ man_pages = [
     ('tools/qemu-trace-stap', 'qemu-trace-stap',
      'QEMU SystemTap trace tool',
      [], 1),
-    ('tools/virtfs-proxy-helper', 'virtfs-proxy-helper',
-     'QEMU 9p virtfs proxy filesystem helper',
-     ['M. Mohan Kumar'], 1),
 ]
 man_make_section_directory = False
 

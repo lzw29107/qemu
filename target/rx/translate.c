@@ -25,6 +25,7 @@
 #include "exec/helper-proto.h"
 #include "exec/helper-gen.h"
 #include "exec/translator.h"
+#include "exec/translation-block.h"
 #include "exec/log.h"
 
 #define HELPER_H "helper.h"
@@ -85,7 +86,8 @@ static uint32_t decode_load_bytes(DisasContext *ctx, uint32_t insn,
 
 static uint32_t li(DisasContext *ctx, int sz)
 {
-    int32_t tmp, addr;
+    target_ulong addr;
+    uint32_t tmp;
     CPURXState *env = ctx->env;
     addr = ctx->base.pc_next;
 
@@ -2256,8 +2258,8 @@ static const TranslatorOps rx_tr_ops = {
     .tb_stop            = rx_tr_tb_stop,
 };
 
-void gen_intermediate_code(CPUState *cs, TranslationBlock *tb, int *max_insns,
-                           vaddr pc, void *host_pc)
+void rx_translate_code(CPUState *cs, TranslationBlock *tb,
+                       int *max_insns, vaddr pc, void *host_pc)
 {
     DisasContext dc;
 

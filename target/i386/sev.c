@@ -26,11 +26,11 @@
 #include "qemu/uuid.h"
 #include "qemu/error-report.h"
 #include "crypto/hash.h"
-#include "sysemu/kvm.h"
+#include "system/kvm.h"
 #include "kvm/kvm_i386.h"
 #include "sev.h"
-#include "sysemu/sysemu.h"
-#include "sysemu/runstate.h"
+#include "system/system.h"
+#include "system/runstate.h"
 #include "trace.h"
 #include "migration/blocker.h"
 #include "qom/object.h"
@@ -1883,7 +1883,7 @@ static bool build_kernel_loader_hashes(PaddedSevHashTable *padded_ht,
      * be used.
      */
     hashp = cmdline_hash;
-    if (qcrypto_hash_bytes(QCRYPTO_HASH_ALG_SHA256, ctx->cmdline_data,
+    if (qcrypto_hash_bytes(QCRYPTO_HASH_ALGO_SHA256, ctx->cmdline_data,
                            ctx->cmdline_size, &hashp, &hash_len, errp) < 0) {
         return false;
     }
@@ -1894,7 +1894,7 @@ static bool build_kernel_loader_hashes(PaddedSevHashTable *padded_ht,
      * -initrd, an empty buffer will be used (ctx->initrd_size == 0).
      */
     hashp = initrd_hash;
-    if (qcrypto_hash_bytes(QCRYPTO_HASH_ALG_SHA256, ctx->initrd_data,
+    if (qcrypto_hash_bytes(QCRYPTO_HASH_ALGO_SHA256, ctx->initrd_data,
                            ctx->initrd_size, &hashp, &hash_len, errp) < 0) {
         return false;
     }
@@ -1906,7 +1906,7 @@ static bool build_kernel_loader_hashes(PaddedSevHashTable *padded_ht,
         { .iov_base = ctx->setup_data, .iov_len = ctx->setup_size },
         { .iov_base = ctx->kernel_data, .iov_len = ctx->kernel_size }
     };
-    if (qcrypto_hash_bytesv(QCRYPTO_HASH_ALG_SHA256, iov, ARRAY_SIZE(iov),
+    if (qcrypto_hash_bytesv(QCRYPTO_HASH_ALGO_SHA256, iov, ARRAY_SIZE(iov),
                             &hashp, &hash_len, errp) < 0) {
         return false;
     }
@@ -2422,7 +2422,7 @@ sev_snp_guest_class_init(ObjectClass *oc, void *data)
     object_class_property_add_bool(oc, "author-key-enabled",
                                    sev_snp_guest_get_author_key_enabled,
                                    sev_snp_guest_set_author_key_enabled);
-    object_class_property_add_bool(oc, "vcek-required",
+    object_class_property_add_bool(oc, "vcek-disabled",
                                    sev_snp_guest_get_vcek_disabled,
                                    sev_snp_guest_set_vcek_disabled);
     object_class_property_add_str(oc, "host-data",

@@ -37,8 +37,8 @@
 
 #include "qemu/osdep.h"
 #include "hw/boards.h"
-#include "sysemu/block-backend.h"
-#include "sysemu/blockdev.h"
+#include "system/block-backend.h"
+#include "system/blockdev.h"
 #include "qapi/qapi-commands-block.h"
 #include "qapi/qapi-commands-block-export.h"
 #include "qapi/qmp/qdict.h"
@@ -49,7 +49,7 @@
 #include "qemu/sockets.h"
 #include "qemu/cutils.h"
 #include "qemu/error-report.h"
-#include "sysemu/sysemu.h"
+#include "system/system.h"
 #include "monitor/monitor.h"
 #include "monitor/hmp.h"
 #include "block/nbd.h"
@@ -402,7 +402,8 @@ void hmp_nbd_server_start(Monitor *mon, const QDict *qdict)
         goto exit;
     }
 
-    nbd_server_start(addr, NULL, NULL, 0, &local_err);
+    nbd_server_start(addr, NULL, NULL, NBD_DEFAULT_MAX_CONNECTIONS,
+                     &local_err);
     qapi_free_SocketAddress(addr);
     if (local_err != NULL) {
         goto exit;

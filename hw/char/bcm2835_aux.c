@@ -138,7 +138,7 @@ static uint64_t bcm2835_aux_read(void *opaque, hwaddr offset, unsigned size)
         res = 0x30e; /* space in the output buffer, empty tx fifo, idle tx/rx */
         if (s->read_count > 0) {
             res |= 0x1; /* data in input buffer */
-            assert(s->read_count < BCM2835_AUX_RX_FIFO_LEN);
+            assert(s->read_count <= BCM2835_AUX_RX_FIFO_LEN);
             res |= ((uint32_t)s->read_count) << 16; /* rx fifo fill level */
         }
         return res;
@@ -290,9 +290,8 @@ static void bcm2835_aux_realize(DeviceState *dev, Error **errp)
                              bcm2835_aux_receive, NULL, NULL, s, NULL, true);
 }
 
-static Property bcm2835_aux_props[] = {
+static const Property bcm2835_aux_props[] = {
     DEFINE_PROP_CHR("chardev", BCM2835AuxState, chr),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void bcm2835_aux_class_init(ObjectClass *oc, void *data)

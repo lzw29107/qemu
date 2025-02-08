@@ -445,10 +445,9 @@ static void qemu_s390_flic_instance_init(Object *obj)
     }
 }
 
-static Property qemu_s390_flic_properties[] = {
+static const Property qemu_s390_flic_properties[] = {
     DEFINE_PROP_BOOL("migrate-all-state", QEMUS390FLICState,
                      migrate_all_state, true),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void qemu_s390_flic_class_init(ObjectClass *oc, void *data)
@@ -457,7 +456,7 @@ static void qemu_s390_flic_class_init(ObjectClass *oc, void *data)
     S390FLICStateClass *fsc = S390_FLIC_COMMON_CLASS(oc);
 
     device_class_set_props(dc, qemu_s390_flic_properties);
-    dc->reset = qemu_s390_flic_reset;
+    device_class_set_legacy_reset(dc, qemu_s390_flic_reset);
     dc->vmsd = &qemu_s390_flic_vmstate;
     fsc->register_io_adapter = qemu_s390_register_io_adapter;
     fsc->io_adapter_map = qemu_s390_io_adapter_map;
@@ -471,24 +470,14 @@ static void qemu_s390_flic_class_init(ObjectClass *oc, void *data)
     fsc->inject_crw_mchk = qemu_s390_inject_crw_mchk;
 }
 
-static Property s390_flic_common_properties[] = {
-    DEFINE_PROP_UINT32("adapter_routes_max_batch", S390FLICState,
-                       adapter_routes_max_batch, ADAPTER_ROUTES_MAX_GSI),
+static const Property s390_flic_common_properties[] = {
     DEFINE_PROP_BOOL("migration-enabled", S390FLICState,
                      migration_enabled, true),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void s390_flic_common_realize(DeviceState *dev, Error **errp)
 {
     S390FLICState *fs = S390_FLIC_COMMON(dev);
-    uint32_t max_batch = fs->adapter_routes_max_batch;
-
-    if (max_batch > ADAPTER_ROUTES_MAX_GSI) {
-        error_setg(errp, "flic property adapter_routes_max_batch too big"
-                   " (%d > %d)", max_batch, ADAPTER_ROUTES_MAX_GSI);
-        return;
-    }
 
     fs->ais_supported = s390_has_feat(S390_FEAT_ADAPTER_INT_SUPPRESSION);
 }

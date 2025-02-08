@@ -14,7 +14,7 @@
 #include "qemu/osdep.h"
 #include "hw/irq.h"
 #include "hw/net/ftgmac100.h"
-#include "sysemu/dma.h"
+#include "system/dma.h"
 #include "qapi/error.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
@@ -24,8 +24,7 @@
 #include "hw/qdev-properties.h"
 #include "migration/vmstate.h"
 
-/* For crc32 */
-#include <zlib.h>
+#include <zlib.h> /* for crc32 */
 
 /*
  * FTGMAC100 registers
@@ -1255,11 +1254,10 @@ static const VMStateDescription vmstate_ftgmac100 = {
     }
 };
 
-static Property ftgmac100_properties[] = {
+static const Property ftgmac100_properties[] = {
     DEFINE_PROP_BOOL("aspeed", FTGMAC100State, aspeed, false),
     DEFINE_NIC_PROPERTIES(FTGMAC100State, conf),
     DEFINE_PROP_BOOL("dma64", FTGMAC100State, dma64, false),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void ftgmac100_class_init(ObjectClass *klass, void *data)
@@ -1267,7 +1265,7 @@ static void ftgmac100_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->vmsd = &vmstate_ftgmac100;
-    dc->reset = ftgmac100_reset;
+    device_class_set_legacy_reset(dc, ftgmac100_reset);
     device_class_set_props(dc, ftgmac100_properties);
     set_bit(DEVICE_CATEGORY_NETWORK, dc->categories);
     dc->realize = ftgmac100_realize;
@@ -1416,10 +1414,9 @@ static const VMStateDescription vmstate_aspeed_mii = {
     }
 };
 
-static Property aspeed_mii_properties[] = {
+static const Property aspeed_mii_properties[] = {
     DEFINE_PROP_LINK("nic", AspeedMiiState, nic, TYPE_FTGMAC100,
                      FTGMAC100State *),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void aspeed_mii_class_init(ObjectClass *klass, void *data)
@@ -1427,7 +1424,7 @@ static void aspeed_mii_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->vmsd = &vmstate_aspeed_mii;
-    dc->reset = aspeed_mii_reset;
+    device_class_set_legacy_reset(dc, aspeed_mii_reset);
     dc->realize = aspeed_mii_realize;
     dc->desc = "Aspeed MII controller";
     device_class_set_props(dc, aspeed_mii_properties);

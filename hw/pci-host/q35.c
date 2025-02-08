@@ -170,7 +170,7 @@ static void q35_host_get_pci_hole64_end(Object *obj, Visitor *v,
  * properties need to be initialized manually by
  * q35_host_initfn() after the object_initialize() call.
  */
-static Property q35_host_props[] = {
+static const Property q35_host_props[] = {
     DEFINE_PROP_UINT64(PCIE_HOST_MCFG_BASE, Q35PCIHost, parent_obj.base_addr,
                         MCH_HOST_BRIDGE_PCIEXBAR_DEFAULT),
     DEFINE_PROP_SIZE(PCI_HOST_PROP_PCI_HOLE64_SIZE, Q35PCIHost,
@@ -182,7 +182,6 @@ static Property q35_host_props[] = {
     DEFINE_PROP_BOOL(PCI_HOST_PROP_SMM_RANGES, Q35PCIHost,
                      mch.has_smm_ranges, true),
     DEFINE_PROP_BOOL("x-pci-hole64-fix", Q35PCIHost, pci_hole64_fix, true),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void q35_host_class_init(ObjectClass *klass, void *data)
@@ -662,21 +661,10 @@ static void mch_realize(PCIDevice *d, Error **errp)
                                    OBJECT(&mch->smram));
 }
 
-uint64_t mch_mcfg_base(void)
-{
-    bool ambiguous;
-    Object *o = object_resolve_path_type("", TYPE_MCH_PCI_DEVICE, &ambiguous);
-    if (!o) {
-        return 0;
-    }
-    return MCH_HOST_BRIDGE_PCIEXBAR_DEFAULT;
-}
-
-static Property mch_props[] = {
+static const Property mch_props[] = {
     DEFINE_PROP_UINT16("extended-tseg-mbytes", MCHPCIState, ext_tseg_mbytes,
                        16),
     DEFINE_PROP_BOOL("smbase-smram", MCHPCIState, has_smram_at_smbase, true),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void mch_class_init(ObjectClass *klass, void *data)
@@ -686,7 +674,7 @@ static void mch_class_init(ObjectClass *klass, void *data)
 
     k->realize = mch_realize;
     k->config_write = mch_write_config;
-    dc->reset = mch_reset;
+    device_class_set_legacy_reset(dc, mch_reset);
     device_class_set_props(dc, mch_props);
     set_bit(DEVICE_CATEGORY_BRIDGE, dc->categories);
     dc->desc = "Host bridge";

@@ -25,9 +25,10 @@
 #include "qemu/osdep.h"
 #include "block/block_int.h"
 #include "block/blockjob_int.h"
-#include "sysemu/block-backend.h"
+#include "system/block-backend.h"
 #include "qapi/error.h"
 #include "qemu/main-loop.h"
+#include "qemu/clang-tsa.h"
 #include "iothread.h"
 
 static QemuEvent done_event;
@@ -722,7 +723,7 @@ static void test_blockjob_common_drain_node(enum drain_type drain_type,
     BlockJob *job;
     TestBlockJob *tjob;
     IOThread *iothread = NULL;
-    int ret;
+    int ret = -1;
 
     src = bdrv_new_open_driver(&bdrv_test, "source", BDRV_O_RDWR,
                                &error_abort);

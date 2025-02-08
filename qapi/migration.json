@@ -142,8 +142,8 @@
 #
 # @postcopy-paused: during postcopy but paused.  (since 3.0)
 #
-# @postcopy-recover-setup: setup phase for a postcopy recovery process,
-#     preparing for a recovery phase to start.  (since 9.1)
+# @postcopy-recover-setup: setup phase for a postcopy recovery
+#     process, preparing for a recovery phase to start.  (since 9.1)
 #
 # @postcopy-recover: trying to recover from a paused postcopy.  (since
 #     3.0)
@@ -158,8 +158,11 @@
 #
 # @pre-switchover: Paused before device serialisation.  (since 2.11)
 #
-# @device: During device serialisation when pause-before-switchover is
-#     enabled (since 2.11)
+# @device: During device serialisation (also known as switchover phase).
+#     Before 9.2, this is only used when (1) in precopy, and (2) when
+#     pre-switchover capability is enabled.  After 10.0, this state will
+#     always be present for every migration procedure as the switchover
+#     phase.  (since 2.11)
 #
 # @wait-unplug: wait for device unplug request by guest OS to be
 #     completed.  (since 4.2)
@@ -245,10 +248,10 @@
 #     blocked.  Present and non-empty when migration is blocked.
 #     (since 6.0)
 #
-# @dirty-limit-throttle-time-per-round: Maximum throttle time
-#     (in microseconds) of virtual CPUs each dirty ring full round,
-#     which shows how MigrationCapability dirty-limit affects the
-#     guest during live migration.  (Since 8.1)
+# @dirty-limit-throttle-time-per-round: Maximum throttle time (in
+#     microseconds) of virtual CPUs each dirty ring full round, which
+#     shows how MigrationCapability dirty-limit affects the guest
+#     during live migration.  (Since 8.1)
 #
 # @dirty-limit-ring-full-time: Estimated average dirty ring full time
 #     (in microseconds) for each dirty ring full round.  The value
@@ -381,7 +384,7 @@
 # Migration capabilities enumeration
 #
 # @xbzrle: Migration supports xbzrle (Xor Based Zero Run Length
-#     Encoding). This feature allows us to minimize migration traffic
+#     Encoding).  This feature allows us to minimize migration traffic
 #     for certain work loads, by sending compressed difference of the
 #     pages
 #
@@ -393,8 +396,8 @@
 #     efficiently.  This essentially saves 1MB of zeroes per block on
 #     the wire.  Enabling requires source and target VM to support
 #     this feature.  To enable it is sufficient to enable the
-#     capability on the source VM. The feature is disabled by default.
-#     (since 1.6)
+#     capability on the source VM.  The feature is disabled by
+#     default.  (since 1.6)
 #
 # @events: generate events for each migration state change (since 2.4)
 #
@@ -479,11 +482,14 @@
 # Features:
 #
 # @unstable: Members @x-colo and @x-ignore-shared are experimental.
+# @deprecated: Member @zero-blocks is deprecated as being part of
+#     block migration which was already removed.
 #
 # Since: 1.2
 ##
 { 'enum': 'MigrationCapability',
-  'data': ['xbzrle', 'rdma-pin-all', 'auto-converge', 'zero-blocks',
+  'data': ['xbzrle', 'rdma-pin-all', 'auto-converge',
+           { 'name': 'zero-blocks', 'features': [ 'deprecated' ] },
            'events', 'postcopy-ram',
            { 'name': 'x-colo', 'features': [ 'unstable' ] },
            'release-ram',
@@ -561,18 +567,22 @@
 #
 # @zstd: use zstd compression method.
 #
+# @qatzip: use qatzip compression method.  (Since 9.2)
+#
 # @qpl: use qpl compression method.  Query Processing Library(qpl) is
-#       based on the deflate compression algorithm and use the Intel
-#       In-Memory Analytics Accelerator(IAA) accelerated compression
-#       and decompression.  (Since 9.1)
+#     based on the deflate compression algorithm and use the Intel
+#     In-Memory Analytics Accelerator(IAA) accelerated compression and
+#     decompression.  (Since 9.1)
 #
 # @uadk: use UADK library compression method.  (Since 9.1)
 #
 # Since: 5.0
 ##
 { 'enum': 'MultiFDCompression',
+  'prefix': 'MULTIFD_COMPRESSION',
   'data': [ 'none', 'zlib',
             { 'name': 'zstd', 'if': 'CONFIG_ZSTD' },
+            { 'name': 'qatzip', 'if': 'CONFIG_QATZIP'},
             { 'name': 'qpl', 'if': 'CONFIG_QPL' },
             { 'name': 'uadk', 'if': 'CONFIG_UADK' } ] }
 
@@ -607,9 +617,48 @@
 #     or COLO.
 #
 #     (since 8.2)
+#
+# @cpr-transfer: This mode allows the user to transfer a guest to a
+#     new QEMU instance on the same host with minimal guest pause
+#     time by preserving guest RAM in place.  Devices and their pinned
+#     pages will also be preserved in a future QEMU release.
+#
+#     The user starts new QEMU on the same host as old QEMU, with
+#     command-line arguments to create the same machine, plus the
+#     -incoming option for the main migration channel, like normal
+#     live migration.  In addition, the user adds a second -incoming
+#     option with channel type "cpr".  This CPR channel must support
+#     file descriptor transfer with SCM_RIGHTS, i.e. it must be a
+#     UNIX domain socket.
+#
+#     To initiate CPR, the user issues a migrate command to old QEMU,
+#     adding a second migration channel of type "cpr" in the channels
+#     argument.  Old QEMU stops the VM, saves state to the migration
+#     channels, and enters the postmigrate state.  Execution resumes
+#     in new QEMU.
+#
+#     New QEMU reads the CPR channel before opening a monitor, hence
+#     the CPR channel cannot be specified in the list of channels for
+#     a migrate-incoming command.  It may only be specified on the
+#     command line.
+#
+#     The main channel address cannot be a file type, and for an
+#     inet socket, the port cannot be 0 (meaning dynamically choose
+#     a port).
+#
+#     Memory-backend objects must have the share=on attribute, but
+#     memory-backend-epc is not supported.  The VM must be started
+#     with the '-machine aux-ram-share=on' option.
+#
+#     When using -incoming defer, you must issue the migrate command
+#     to old QEMU before issuing any monitor commands to new QEMU.
+#     However, new QEMU does not open and read the migration stream
+#     until you issue the migrate incoming command.
+#
+#     (since 10.0)
 ##
 { 'enum': 'MigMode',
-  'data': [ 'normal', 'cpr-reboot' ] }
+  'data': [ 'normal', 'cpr-reboot', 'cpr-transfer' ] }
 
 ##
 # @ZeroPageDetection:
@@ -790,13 +839,18 @@
 #     migration, the compression level is an integer between 0 and 9,
 #     where 0 means no compression, 1 means the best compression
 #     speed, and 9 means best compression ratio which will consume
-#     more CPU. Defaults to 1.  (Since 5.0)
+#     more CPU.  Defaults to 1.  (Since 5.0)
+#
+# @multifd-qatzip-level: Set the compression level to be used in live
+#     migration. The level is an integer between 1 and 9, where 1 means
+#     the best compression speed, and 9 means the best compression
+#     ratio which will consume more CPU. Defaults to 1.  (Since 9.2)
 #
 # @multifd-zstd-level: Set the compression level to be used in live
 #     migration, the compression level is an integer between 0 and 20,
 #     where 0 means no compression, 1 means the best compression
 #     speed, and 20 means best compression ratio which will consume
-#     more CPU. Defaults to 1.  (Since 5.0)
+#     more CPU.  Defaults to 1.  (Since 5.0)
 #
 # @block-bitmap-mapping: Maps block nodes and bitmaps on them to
 #     aliases for the purpose of dirty bitmap migration.  Such aliases
@@ -852,6 +906,7 @@
            'xbzrle-cache-size', 'max-postcopy-bandwidth',
            'max-cpu-throttle', 'multifd-compression',
            'multifd-zlib-level', 'multifd-zstd-level',
+           'multifd-qatzip-level',
            'block-bitmap-mapping',
            { 'name': 'x-vcpu-dirty-limit-period', 'features': ['unstable'] },
            'vcpu-dirty-limit',
@@ -965,13 +1020,18 @@
 #     migration, the compression level is an integer between 0 and 9,
 #     where 0 means no compression, 1 means the best compression
 #     speed, and 9 means best compression ratio which will consume
-#     more CPU. Defaults to 1.  (Since 5.0)
+#     more CPU.  Defaults to 1.  (Since 5.0)
+#
+# @multifd-qatzip-level: Set the compression level to be used in live
+#     migration. The level is an integer between 1 and 9, where 1 means
+#     the best compression speed, and 9 means the best compression
+#     ratio which will consume more CPU. Defaults to 1.  (Since 9.2)
 #
 # @multifd-zstd-level: Set the compression level to be used in live
 #     migration, the compression level is an integer between 0 and 20,
 #     where 0 means no compression, 1 means the best compression
 #     speed, and 20 means best compression ratio which will consume
-#     more CPU. Defaults to 1.  (Since 5.0)
+#     more CPU.  Defaults to 1.  (Since 5.0)
 #
 # @block-bitmap-mapping: Maps block nodes and bitmaps on them to
 #     aliases for the purpose of dirty bitmap migration.  Such aliases
@@ -1040,6 +1100,7 @@
             '*max-cpu-throttle': 'uint8',
             '*multifd-compression': 'MultiFDCompression',
             '*multifd-zlib-level': 'uint8',
+            '*multifd-qatzip-level': 'uint8',
             '*multifd-zstd-level': 'uint8',
             '*block-bitmap-mapping': [ 'BitmapMigrationNodeAlias' ],
             '*x-vcpu-dirty-limit-period': { 'type': 'uint64',
@@ -1169,13 +1230,18 @@
 #     migration, the compression level is an integer between 0 and 9,
 #     where 0 means no compression, 1 means the best compression
 #     speed, and 9 means best compression ratio which will consume
-#     more CPU. Defaults to 1.  (Since 5.0)
+#     more CPU.  Defaults to 1.  (Since 5.0)
+#
+# @multifd-qatzip-level: Set the compression level to be used in live
+#     migration. The level is an integer between 1 and 9, where 1 means
+#     the best compression speed, and 9 means the best compression
+#     ratio which will consume more CPU. Defaults to 1.  (Since 9.2)
 #
 # @multifd-zstd-level: Set the compression level to be used in live
 #     migration, the compression level is an integer between 0 and 20,
 #     where 0 means no compression, 1 means the best compression
 #     speed, and 20 means best compression ratio which will consume
-#     more CPU. Defaults to 1.  (Since 5.0)
+#     more CPU.  Defaults to 1.  (Since 5.0)
 #
 # @block-bitmap-mapping: Maps block nodes and bitmaps on them to
 #     aliases for the purpose of dirty bitmap migration.  Such aliases
@@ -1201,7 +1267,7 @@
 #     Defaults to 1.  (Since 8.1)
 #
 # @mode: Migration mode.  See description in @MigMode.  Default is
-#        'normal'.  (Since 8.2)
+#     'normal'.  (Since 8.2)
 #
 # @zero-page-detection: Whether and how to detect zero pages.
 #     See description in @ZeroPageDetection.  Default is 'multifd'.
@@ -1241,6 +1307,7 @@
             '*max-cpu-throttle': 'uint8',
             '*multifd-compression': 'MultiFDCompression',
             '*multifd-zlib-level': 'uint8',
+            '*multifd-qatzip-level': 'uint8',
             '*multifd-zstd-level': 'uint8',
             '*block-bitmap-mapping': [ 'BitmapMigrationNodeAlias' ],
             '*x-vcpu-dirty-limit-period': { 'type': 'uint64',
@@ -1459,8 +1526,8 @@
 #
 # Cancel the current executing migration process.
 #
-# .. note:: This command succeeds even if there is no migration process
-#    running.
+# .. note:: This command succeeds even if there is no migration
+#    process running.
 #
 # Since: 0.14
 #
@@ -1553,11 +1620,12 @@
 # The migration channel-type request options.
 #
 # @main: Main outbound migration channel.
+# @cpr: Checkpoint and restart state channel.
 #
 # Since: 8.1
 ##
 { 'enum': 'MigrationChannelType',
-  'data': [ 'main' ] }
+  'data': [ 'main', 'cpr' ] }
 
 ##
 # @MigrationChannel:
@@ -1604,7 +1672,7 @@
 #        should not be used.
 #
 #     4. The uri argument should have the Uniform Resource Identifier
-#        of default destination VM. This connection will be bound to
+#        of default destination VM.  This connection will be bound to
 #        default network.
 #
 #     5. For now, number of migration streams is restricted to one,
@@ -1650,7 +1718,6 @@
 #                                        "filename": "/tmp/migfile",
 #                                        "offset": "0x1000" } } ] } }
 #     <- { "return": {} }
-#
 ##
 { 'command': 'migrate',
   'data': {'*uri': 'str',
@@ -1671,7 +1738,8 @@
 #
 # @exit-on-error: Exit on incoming migration failure.  Default true.
 #     When set to false, the failure triggers a MIGRATION event, and
-#     error details could be retrieved with query-migrate.  (since 9.1)
+#     error details could be retrieved with query-migrate.
+#     (since 9.1)
 #
 # Since: 2.3
 #
@@ -1938,9 +2006,9 @@
 # @UNPLUG_PRIMARY:
 #
 # Emitted from source side of a migration when migration state is
-# WAIT_UNPLUG. Device was unplugged by guest operating system.  Device
-# resources in QEMU are kept on standby to be able to re-plug it in
-# case of migration failure.
+# WAIT_UNPLUG.  Device was unplugged by guest operating system.
+# Device resources in QEMU are kept on standby to be able to re-plug
+# it in case of migration failure.
 #
 # @device-id: QEMU device id of the unplugged device
 #
@@ -2084,16 +2152,16 @@
 #    This mode tracks page modification per each vCPU separately.  It
 #    requires that KVM accelerator property "dirty-ring-size" is set.
 #
-# @calc-time: time period for which dirty page rate is calculated.
-#     By default it is specified in seconds, but the unit can be set
+# @calc-time: time period for which dirty page rate is calculated.  By
+#     default it is specified in seconds, but the unit can be set
 #     explicitly with @calc-time-unit.  Note that larger @calc-time
 #     values will typically result in smaller dirty page rates because
-#     page dirtying is a one-time event.  Once some page is counted
-#     as dirty during @calc-time period, further writes to this page
-#     will not increase dirty page rate anymore.
+#     page dirtying is a one-time event.  Once some page is counted as
+#     dirty during @calc-time period, further writes to this page will
+#     not increase dirty page rate anymore.
 #
-# @calc-time-unit: time unit in which @calc-time is specified.
-#     By default it is seconds.  (Since 8.2)
+# @calc-time-unit: time unit in which @calc-time is specified.  By
+#     default it is seconds.  (Since 8.2)
 #
 # @sample-pages: number of sampled pages per each GiB of guest memory.
 #     Default value is 512.  For 4KiB guest pages this corresponds to
@@ -2259,12 +2327,17 @@
 #
 # Returns information of migration threads
 #
+# Features:
+#
+# @deprecated: This command is deprecated with no replacement yet.
+#
 # Returns: @MigrationThreadInfo
 #
 # Since: 7.2
 ##
 { 'command': 'query-migrationthreads',
-  'returns': ['MigrationThreadInfo'] }
+  'returns': ['MigrationThreadInfo'],
+  'features': ['deprecated'] }
 
 ##
 # @snapshot-save:

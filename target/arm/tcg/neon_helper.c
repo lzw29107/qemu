@@ -130,13 +130,24 @@ void HELPER(name)(void *vd, void *vn, void *vm, uint32_t desc) \
 }
 
 #define NEON_GVEC_VOP2_ENV(name, vtype) \
-void HELPER(name)(void *vd, void *vn, void *vm, void *venv, uint32_t desc) \
+void HELPER(name)(void *vd, void *vn, void *vm, CPUARMState *env, uint32_t desc) \
 {                                                               \
     intptr_t i, opr_sz = simd_oprsz(desc);                      \
     vtype *d = vd, *n = vn, *m = vm;                            \
-    CPUARMState *env = venv;                                    \
     for (i = 0; i < opr_sz / sizeof(vtype); i++) {              \
         NEON_FN(d[i], n[i], m[i]);                              \
+    }                                                           \
+    clear_tail(d, opr_sz, simd_maxsz(desc));                    \
+}
+
+#define NEON_GVEC_VOP2i_ENV(name, vtype) \
+void HELPER(name)(void *vd, void *vn, CPUARMState *env, uint32_t desc) \
+{                                                               \
+    intptr_t i, opr_sz = simd_oprsz(desc);                      \
+    int imm = simd_data(desc);                                  \
+    vtype *d = vd, *n = vn;                                     \
+    for (i = 0; i < opr_sz / sizeof(vtype); i++) {              \
+        NEON_FN(d[i], n[i], imm);                               \
     }                                                           \
     clear_tail(d, opr_sz, simd_maxsz(desc));                    \
 }
@@ -271,22 +282,26 @@ uint64_t HELPER(neon_rshl_u64)(uint64_t val, uint64_t shift)
     (dest = do_uqrshl_bhs(src1, (int8_t)src2, 8, false, env->vfp.qc))
 NEON_VOP_ENV(qshl_u8, neon_u8, 4)
 NEON_GVEC_VOP2_ENV(neon_uqshl_b, uint8_t)
+NEON_GVEC_VOP2i_ENV(neon_uqshli_b, uint8_t)
 #undef NEON_FN
 
 #define NEON_FN(dest, src1, src2) \
     (dest = do_uqrshl_bhs(src1, (int8_t)src2, 16, false, env->vfp.qc))
 NEON_VOP_ENV(qshl_u16, neon_u16, 2)
 NEON_GVEC_VOP2_ENV(neon_uqshl_h, uint16_t)
+NEON_GVEC_VOP2i_ENV(neon_uqshli_h, uint16_t)
 #undef NEON_FN
 
 #define NEON_FN(dest, src1, src2) \
     (dest = do_uqrshl_bhs(src1, (int8_t)src2, 32, false, env->vfp.qc))
 NEON_GVEC_VOP2_ENV(neon_uqshl_s, uint32_t)
+NEON_GVEC_VOP2i_ENV(neon_uqshli_s, uint32_t)
 #undef NEON_FN
 
 #define NEON_FN(dest, src1, src2) \
     (dest = do_uqrshl_d(src1, (int8_t)src2, false, env->vfp.qc))
 NEON_GVEC_VOP2_ENV(neon_uqshl_d, uint64_t)
+NEON_GVEC_VOP2i_ENV(neon_uqshli_d, uint64_t)
 #undef NEON_FN
 
 uint32_t HELPER(neon_qshl_u32)(CPUARMState *env, uint32_t val, uint32_t shift)
@@ -303,22 +318,26 @@ uint64_t HELPER(neon_qshl_u64)(CPUARMState *env, uint64_t val, uint64_t shift)
     (dest = do_sqrshl_bhs(src1, (int8_t)src2, 8, false, env->vfp.qc))
 NEON_VOP_ENV(qshl_s8, neon_s8, 4)
 NEON_GVEC_VOP2_ENV(neon_sqshl_b, int8_t)
+NEON_GVEC_VOP2i_ENV(neon_sqshli_b, int8_t)
 #undef NEON_FN
 
 #define NEON_FN(dest, src1, src2) \
     (dest = do_sqrshl_bhs(src1, (int8_t)src2, 16, false, env->vfp.qc))
 NEON_VOP_ENV(qshl_s16, neon_s16, 2)
 NEON_GVEC_VOP2_ENV(neon_sqshl_h, int16_t)
+NEON_GVEC_VOP2i_ENV(neon_sqshli_h, int16_t)
 #undef NEON_FN
 
 #define NEON_FN(dest, src1, src2) \
     (dest = do_sqrshl_bhs(src1, (int8_t)src2, 32, false, env->vfp.qc))
 NEON_GVEC_VOP2_ENV(neon_sqshl_s, int32_t)
+NEON_GVEC_VOP2i_ENV(neon_sqshli_s, int32_t)
 #undef NEON_FN
 
 #define NEON_FN(dest, src1, src2) \
     (dest = do_sqrshl_d(src1, (int8_t)src2, false, env->vfp.qc))
 NEON_GVEC_VOP2_ENV(neon_sqshl_d, int64_t)
+NEON_GVEC_VOP2i_ENV(neon_sqshli_d, int64_t)
 #undef NEON_FN
 
 uint32_t HELPER(neon_qshl_s32)(CPUARMState *env, uint32_t val, uint32_t shift)
@@ -334,11 +353,13 @@ uint64_t HELPER(neon_qshl_s64)(CPUARMState *env, uint64_t val, uint64_t shift)
 #define NEON_FN(dest, src1, src2) \
     (dest = do_suqrshl_bhs(src1, (int8_t)src2, 8, false, env->vfp.qc))
 NEON_VOP_ENV(qshlu_s8, neon_s8, 4)
+NEON_GVEC_VOP2i_ENV(neon_sqshlui_b, int8_t)
 #undef NEON_FN
 
 #define NEON_FN(dest, src1, src2) \
     (dest = do_suqrshl_bhs(src1, (int8_t)src2, 16, false, env->vfp.qc))
 NEON_VOP_ENV(qshlu_s16, neon_s16, 2)
+NEON_GVEC_VOP2i_ENV(neon_sqshlui_h, int16_t)
 #undef NEON_FN
 
 uint32_t HELPER(neon_qshlu_s32)(CPUARMState *env, uint32_t val, uint32_t shift)
@@ -350,6 +371,16 @@ uint64_t HELPER(neon_qshlu_s64)(CPUARMState *env, uint64_t val, uint64_t shift)
 {
     return do_suqrshl_d(val, (int8_t)shift, false, env->vfp.qc);
 }
+
+#define NEON_FN(dest, src1, src2) \
+    (dest = do_suqrshl_bhs(src1, (int8_t)src2, 32, false, env->vfp.qc))
+NEON_GVEC_VOP2i_ENV(neon_sqshlui_s, int32_t)
+#undef NEON_FN
+
+#define NEON_FN(dest, src1, src2) \
+    (dest = do_suqrshl_d(src1, (int8_t)src2, false, env->vfp.qc))
+NEON_GVEC_VOP2i_ENV(neon_sqshlui_d, int64_t)
+#undef NEON_FN
 
 #define NEON_FN(dest, src1, src2) \
     (dest = do_uqrshl_bhs(src1, (int8_t)src2, 8, true, env->vfp.qc))
@@ -492,27 +523,6 @@ uint32_t HELPER(neon_cls_s32)(uint32_t x)
     return count - 1;
 }
 
-/* Bit count.  */
-uint32_t HELPER(neon_cnt_u8)(uint32_t x)
-{
-    x = (x & 0x55555555) + ((x >>  1) & 0x55555555);
-    x = (x & 0x33333333) + ((x >>  2) & 0x33333333);
-    x = (x & 0x0f0f0f0f) + ((x >>  4) & 0x0f0f0f0f);
-    return x;
-}
-
-/* Reverse bits in each 8 bit word */
-uint32_t HELPER(neon_rbit_u8)(uint32_t x)
-{
-    x =  ((x & 0xf0f0f0f0) >> 4)
-       | ((x & 0x0f0f0f0f) << 4);
-    x =  ((x & 0x88888888) >> 3)
-       | ((x & 0x44444444) >> 1)
-       | ((x & 0x22222222) << 1)
-       | ((x & 0x11111111) << 3);
-    return x;
-}
-
 #define NEON_QDMULH16(dest, src1, src2, round) do { \
     uint32_t tmp = (int32_t)(int16_t) src1 * (int16_t) src2; \
     if ((tmp ^ (tmp << 1)) & SIGNBIT) { \
@@ -565,13 +575,15 @@ NEON_VOP_ENV(qrdmulh_s32, neon_s32, 1)
 #undef NEON_FN
 #undef NEON_QDMULH32
 
-uint32_t HELPER(neon_narrow_u8)(uint64_t x)
+/* Only the low 32-bits of output are significant. */
+uint64_t HELPER(neon_narrow_u8)(uint64_t x)
 {
     return (x & 0xffu) | ((x >> 8) & 0xff00u) | ((x >> 16) & 0xff0000u)
            | ((x >> 24) & 0xff000000u);
 }
 
-uint32_t HELPER(neon_narrow_u16)(uint64_t x)
+/* Only the low 32-bits of output are significant. */
+uint64_t HELPER(neon_narrow_u16)(uint64_t x)
 {
     return (x & 0xffffu) | ((x >> 16) & 0xffff0000u);
 }
@@ -602,7 +614,8 @@ uint32_t HELPER(neon_narrow_round_high_u16)(uint64_t x)
     return ((x >> 16) & 0xffff) | ((x >> 32) & 0xffff0000);
 }
 
-uint32_t HELPER(neon_unarrow_sat8)(CPUARMState *env, uint64_t x)
+/* Only the low 32-bits of output are significant. */
+uint64_t HELPER(neon_unarrow_sat8)(CPUARMState *env, uint64_t x)
 {
     uint16_t s;
     uint8_t d;
@@ -629,7 +642,8 @@ uint32_t HELPER(neon_unarrow_sat8)(CPUARMState *env, uint64_t x)
     return res;
 }
 
-uint32_t HELPER(neon_narrow_sat_u8)(CPUARMState *env, uint64_t x)
+/* Only the low 32-bits of output are significant. */
+uint64_t HELPER(neon_narrow_sat_u8)(CPUARMState *env, uint64_t x)
 {
     uint16_t s;
     uint8_t d;
@@ -652,7 +666,8 @@ uint32_t HELPER(neon_narrow_sat_u8)(CPUARMState *env, uint64_t x)
     return res;
 }
 
-uint32_t HELPER(neon_narrow_sat_s8)(CPUARMState *env, uint64_t x)
+/* Only the low 32-bits of output are significant. */
+uint64_t HELPER(neon_narrow_sat_s8)(CPUARMState *env, uint64_t x)
 {
     int16_t s;
     uint8_t d;
@@ -675,7 +690,8 @@ uint32_t HELPER(neon_narrow_sat_s8)(CPUARMState *env, uint64_t x)
     return res;
 }
 
-uint32_t HELPER(neon_unarrow_sat16)(CPUARMState *env, uint64_t x)
+/* Only the low 32-bits of output are significant. */
+uint64_t HELPER(neon_unarrow_sat16)(CPUARMState *env, uint64_t x)
 {
     uint32_t high;
     uint32_t low;
@@ -695,10 +711,11 @@ uint32_t HELPER(neon_unarrow_sat16)(CPUARMState *env, uint64_t x)
         high = 0xffff;
         SET_QC();
     }
-    return low | (high << 16);
+    return deposit32(low, 16, 16, high);
 }
 
-uint32_t HELPER(neon_narrow_sat_u16)(CPUARMState *env, uint64_t x)
+/* Only the low 32-bits of output are significant. */
+uint64_t HELPER(neon_narrow_sat_u16)(CPUARMState *env, uint64_t x)
 {
     uint32_t high;
     uint32_t low;
@@ -712,10 +729,11 @@ uint32_t HELPER(neon_narrow_sat_u16)(CPUARMState *env, uint64_t x)
         high = 0xffff;
         SET_QC();
     }
-    return low | (high << 16);
+    return deposit32(low, 16, 16, high);
 }
 
-uint32_t HELPER(neon_narrow_sat_s16)(CPUARMState *env, uint64_t x)
+/* Only the low 32-bits of output are significant. */
+uint64_t HELPER(neon_narrow_sat_s16)(CPUARMState *env, uint64_t x)
 {
     int32_t low;
     int32_t high;
@@ -729,10 +747,11 @@ uint32_t HELPER(neon_narrow_sat_s16)(CPUARMState *env, uint64_t x)
         high = (high >> 31) ^ 0x7fff;
         SET_QC();
     }
-    return (uint16_t)low | (high << 16);
+    return deposit32(low, 16, 16, high);
 }
 
-uint32_t HELPER(neon_unarrow_sat32)(CPUARMState *env, uint64_t x)
+/* Only the low 32-bits of output are significant. */
+uint64_t HELPER(neon_unarrow_sat32)(CPUARMState *env, uint64_t x)
 {
     if (x & 0x8000000000000000ull) {
         SET_QC();
@@ -745,7 +764,8 @@ uint32_t HELPER(neon_unarrow_sat32)(CPUARMState *env, uint64_t x)
     return x;
 }
 
-uint32_t HELPER(neon_narrow_sat_u32)(CPUARMState *env, uint64_t x)
+/* Only the low 32-bits of output are significant. */
+uint64_t HELPER(neon_narrow_sat_u32)(CPUARMState *env, uint64_t x)
 {
     if (x > 0xffffffffu) {
         SET_QC();
@@ -754,13 +774,14 @@ uint32_t HELPER(neon_narrow_sat_u32)(CPUARMState *env, uint64_t x)
     return x;
 }
 
-uint32_t HELPER(neon_narrow_sat_s32)(CPUARMState *env, uint64_t x)
+/* Only the low 32-bits of output are significant. */
+uint64_t HELPER(neon_narrow_sat_s32)(CPUARMState *env, uint64_t x)
 {
     if ((int64_t)x != (int32_t)x) {
         SET_QC();
-        return ((int64_t)x >> 63) ^ 0x7fffffff;
+        return (uint32_t)((int64_t)x >> 63) ^ 0x7fffffff;
     }
-    return x;
+    return (uint32_t)x;
 }
 
 uint64_t HELPER(neon_widen_u8)(uint32_t x)
@@ -803,62 +824,47 @@ uint64_t HELPER(neon_widen_s16)(uint32_t x)
     return ((uint32_t)(int16_t)x) | (high << 32);
 }
 
-uint64_t HELPER(neon_addl_u16)(uint64_t a, uint64_t b)
+/* Pairwise long add: add pairs of adjacent elements into
+ * double-width elements in the result (eg _s8 is an 8x8->16 op)
+ */
+uint64_t HELPER(neon_addlp_s8)(uint64_t a)
 {
-    uint64_t mask;
-    mask = (a ^ b) & 0x8000800080008000ull;
-    a &= ~0x8000800080008000ull;
-    b &= ~0x8000800080008000ull;
-    return (a + b) ^ mask;
+    uint64_t nsignmask = 0x0080008000800080ULL;
+    uint64_t wsignmask = 0x8000800080008000ULL;
+    uint64_t elementmask = 0x00ff00ff00ff00ffULL;
+    uint64_t tmp1, tmp2;
+    uint64_t res, signres;
+
+    /* Extract odd elements, sign extend each to a 16 bit field */
+    tmp1 = a & elementmask;
+    tmp1 ^= nsignmask;
+    tmp1 |= wsignmask;
+    tmp1 = (tmp1 - nsignmask) ^ wsignmask;
+    /* Ditto for the even elements */
+    tmp2 = (a >> 8) & elementmask;
+    tmp2 ^= nsignmask;
+    tmp2 |= wsignmask;
+    tmp2 = (tmp2 - nsignmask) ^ wsignmask;
+
+    /* calculate the result by summing bits 0..14, 16..22, etc,
+     * and then adjusting the sign bits 15, 23, etc manually.
+     * This ensures the addition can't overflow the 16 bit field.
+     */
+    signres = (tmp1 ^ tmp2) & wsignmask;
+    res = (tmp1 & ~wsignmask) + (tmp2 & ~wsignmask);
+    res ^= signres;
+
+    return res;
 }
 
-uint64_t HELPER(neon_addl_u32)(uint64_t a, uint64_t b)
+uint64_t HELPER(neon_addlp_s16)(uint64_t a)
 {
-    uint64_t mask;
-    mask = (a ^ b) & 0x8000000080000000ull;
-    a &= ~0x8000000080000000ull;
-    b &= ~0x8000000080000000ull;
-    return (a + b) ^ mask;
-}
+    int32_t reslo, reshi;
 
-uint64_t HELPER(neon_paddl_u16)(uint64_t a, uint64_t b)
-{
-    uint64_t tmp;
-    uint64_t tmp2;
+    reslo = (int32_t)(int16_t)a + (int32_t)(int16_t)(a >> 16);
+    reshi = (int32_t)(int16_t)(a >> 32) + (int32_t)(int16_t)(a >> 48);
 
-    tmp = a & 0x0000ffff0000ffffull;
-    tmp += (a >> 16) & 0x0000ffff0000ffffull;
-    tmp2 = b & 0xffff0000ffff0000ull;
-    tmp2 += (b << 16) & 0xffff0000ffff0000ull;
-    return    ( tmp         & 0xffff)
-            | ((tmp  >> 16) & 0xffff0000ull)
-            | ((tmp2 << 16) & 0xffff00000000ull)
-            | ( tmp2        & 0xffff000000000000ull);
-}
-
-uint64_t HELPER(neon_paddl_u32)(uint64_t a, uint64_t b)
-{
-    uint32_t low = a + (a >> 32);
-    uint32_t high = b + (b >> 32);
-    return low + ((uint64_t)high << 32);
-}
-
-uint64_t HELPER(neon_subl_u16)(uint64_t a, uint64_t b)
-{
-    uint64_t mask;
-    mask = (a ^ ~b) & 0x8000800080008000ull;
-    a |= 0x8000800080008000ull;
-    b &= ~0x8000800080008000ull;
-    return (a - b) ^ mask;
-}
-
-uint64_t HELPER(neon_subl_u32)(uint64_t a, uint64_t b)
-{
-    uint64_t mask;
-    mask = (a ^ ~b) & 0x8000000080000000ull;
-    a |= 0x8000000080000000ull;
-    b &= ~0x8000000080000000ull;
-    return (a - b) ^ mask;
+    return (uint32_t)reslo | (((uint64_t)reshi) << 32);
 }
 
 uint64_t HELPER(neon_addl_saturate_s32)(CPUARMState *env, uint64_t a, uint64_t b)
@@ -1172,51 +1178,44 @@ uint64_t HELPER(neon_qneg_s64)(CPUARMState *env, uint64_t x)
  * Note that EQ doesn't signal InvalidOp for QNaNs but GE and GT do.
  * Softfloat routines return 0/1, which we convert to the 0/-1 Neon requires.
  */
-uint32_t HELPER(neon_ceq_f32)(uint32_t a, uint32_t b, void *fpstp)
+uint32_t HELPER(neon_ceq_f32)(uint32_t a, uint32_t b, float_status *fpst)
 {
-    float_status *fpst = fpstp;
     return -float32_eq_quiet(make_float32(a), make_float32(b), fpst);
 }
 
-uint32_t HELPER(neon_cge_f32)(uint32_t a, uint32_t b, void *fpstp)
+uint32_t HELPER(neon_cge_f32)(uint32_t a, uint32_t b, float_status *fpst)
 {
-    float_status *fpst = fpstp;
     return -float32_le(make_float32(b), make_float32(a), fpst);
 }
 
-uint32_t HELPER(neon_cgt_f32)(uint32_t a, uint32_t b, void *fpstp)
+uint32_t HELPER(neon_cgt_f32)(uint32_t a, uint32_t b, float_status *fpst)
 {
-    float_status *fpst = fpstp;
     return -float32_lt(make_float32(b), make_float32(a), fpst);
 }
 
-uint32_t HELPER(neon_acge_f32)(uint32_t a, uint32_t b, void *fpstp)
+uint32_t HELPER(neon_acge_f32)(uint32_t a, uint32_t b, float_status *fpst)
 {
-    float_status *fpst = fpstp;
     float32 f0 = float32_abs(make_float32(a));
     float32 f1 = float32_abs(make_float32(b));
     return -float32_le(f1, f0, fpst);
 }
 
-uint32_t HELPER(neon_acgt_f32)(uint32_t a, uint32_t b, void *fpstp)
+uint32_t HELPER(neon_acgt_f32)(uint32_t a, uint32_t b, float_status *fpst)
 {
-    float_status *fpst = fpstp;
     float32 f0 = float32_abs(make_float32(a));
     float32 f1 = float32_abs(make_float32(b));
     return -float32_lt(f1, f0, fpst);
 }
 
-uint64_t HELPER(neon_acge_f64)(uint64_t a, uint64_t b, void *fpstp)
+uint64_t HELPER(neon_acge_f64)(uint64_t a, uint64_t b, float_status *fpst)
 {
-    float_status *fpst = fpstp;
     float64 f0 = float64_abs(make_float64(a));
     float64 f1 = float64_abs(make_float64(b));
     return -float64_le(f1, f0, fpst);
 }
 
-uint64_t HELPER(neon_acgt_f64)(uint64_t a, uint64_t b, void *fpstp)
+uint64_t HELPER(neon_acgt_f64)(uint64_t a, uint64_t b, float_status *fpst)
 {
-    float_status *fpst = fpstp;
     float64 f0 = float64_abs(make_float64(a));
     float64 f1 = float64_abs(make_float64(b));
     return -float64_lt(f1, f0, fpst);

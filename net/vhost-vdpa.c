@@ -88,6 +88,7 @@ const int vdpa_feature_bits[] = {
     VIRTIO_NET_F_MQ,
     VIRTIO_NET_F_MRG_RXBUF,
     VIRTIO_NET_F_MTU,
+    VIRTIO_NET_F_RSC_EXT,
     VIRTIO_NET_F_RSS,
     VIRTIO_NET_F_STATUS,
     VIRTIO_RING_F_EVENT_IDX,
@@ -374,8 +375,7 @@ static int vhost_vdpa_net_data_start(NetClientState *nc)
 
     assert(nc->info->type == NET_CLIENT_DRIVER_VHOST_VDPA);
 
-    if (s->always_svq ||
-        migration_is_setup_or_active()) {
+    if (s->always_svq || migration_is_running()) {
         v->shadow_vqs_enabled = true;
     } else {
         v->shadow_vqs_enabled = false;

@@ -21,8 +21,8 @@
 #include "qemu/error-report.h"
 #include "qapi/qapi-commands-misc-target.h"
 #include "exec/address-spaces.h"
-#include "sysemu/hw_accel.h"
-#include "sysemu/reset.h"
+#include "system/hw_accel.h"
+#include "system/reset.h"
 #include <sys/ioctl.h>
 #include "hw/acpi/aml-build.h"
 
@@ -264,6 +264,14 @@ void hmp_info_sgx(Monitor *mon, const QDict *qdict)
     }
     monitor_printf(mon, "total size=%" PRIu64 "\n",
                    size);
+}
+
+bool check_sgx_support(void)
+{
+    if (!object_dynamic_cast(qdev_get_machine(), TYPE_PC_MACHINE)) {
+        return false;
+    }
+    return true;
 }
 
 bool sgx_epc_get_section(int section_nr, uint64_t *addr, uint64_t *size)

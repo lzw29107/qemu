@@ -24,8 +24,8 @@
 #include "qemu/help-texts.h"
 #include "qapi/error.h"
 #include "qemu/cutils.h"
-#include "sysemu/block-backend.h"
-#include "sysemu/runstate.h" /* for qemu_system_killed() prototype */
+#include "system/block-backend.h"
+#include "system/runstate.h" /* for qemu_system_killed() prototype */
 #include "block/block_int.h"
 #include "block/nbd.h"
 #include "qemu/main-loop.h"
@@ -390,7 +390,9 @@ static void nbd_accept(QIONetListener *listener, QIOChannelSocket *cioc,
 
     nb_fds++;
     nbd_update_server_watch();
-    nbd_client_new(cioc, tlscreds, tlsauthz, nbd_client_closed);
+    /* TODO - expose handshake timeout as command line option */
+    nbd_client_new(cioc, NBD_DEFAULT_HANDSHAKE_MAX_SECS,
+                   tlscreds, tlsauthz, nbd_client_closed, NULL);
 }
 
 static void nbd_update_server_watch(void)
@@ -588,7 +590,8 @@ int main(int argc, char **argv)
     pthread_t client_thread;
     const char *fmt = NULL;
     Error *local_err = NULL;
-    BlockdevDetectZeroesOptions detect_zeroes = BLOCKDEV_DETECT_ZEROES_OPTIONS_OFF;
+    BlockdevDetectZeroesOptions detect_zeroes =
+        BLOCKDEV_DETECT_ZEROES_OPTIONS_OFF;
     QDict *options = NULL;
     const char *export_name = NULL; /* defaults to "" later for server mode */
     const char *export_description = NULL;

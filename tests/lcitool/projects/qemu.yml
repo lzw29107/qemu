@@ -3,6 +3,7 @@ packages:
  - alsa
  - bash
  - bc
+ - bindgen
  - bison
  - brlapi
  - bzip2
@@ -32,6 +33,7 @@ packages:
  - glusterfs
  - gnutls
  - gtk3
+ - gtk-vnc
  - hostname
  - json-c
  - libaio
@@ -41,6 +43,7 @@ packages:
  - libc-static
  - libcacard
  - libcap-ng
+ - libcbor
  - libcurl
  - libdrm
  - libepoxy
@@ -100,6 +103,7 @@ packages:
  - python3-tomli
  - python3-venv
  - rpm2cpio
+ - rust
  - sdl2
  - sdl2-image
  - sed

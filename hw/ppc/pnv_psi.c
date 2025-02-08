@@ -23,7 +23,7 @@
 #include "target/ppc/cpu.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
-#include "sysemu/reset.h"
+#include "system/reset.h"
 #include "qapi/error.h"
 
 
@@ -552,10 +552,9 @@ static int pnv_psi_dt_xscom(PnvXScomInterface *dev, void *fdt, int xscom_offset)
     return 0;
 }
 
-static Property pnv_psi_properties[] = {
+static const Property pnv_psi_properties[] = {
     DEFINE_PROP_UINT64("bar", PnvPsi, bar, 0),
     DEFINE_PROP_UINT64("fsp-bar", PnvPsi, fsp_bar, 0),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void pnv_psi_power8_class_init(ObjectClass *klass, void *data)
@@ -897,7 +896,7 @@ static void pnv_psi_power9_class_init(ObjectClass *klass, void *data)
 
     dc->desc    = "PowerNV PSI Controller POWER9";
     dc->realize = pnv_psi_power9_realize;
-    dc->reset   = pnv_psi_power9_reset;
+    device_class_set_legacy_reset(dc, pnv_psi_power9_reset);
 
     ppc->xscom_pcba = PNV9_XSCOM_PSIHB_BASE;
     ppc->xscom_size = PNV9_XSCOM_PSIHB_SIZE;
@@ -949,7 +948,7 @@ static void pnv_psi_class_init(ObjectClass *klass, void *data)
 
     dc->desc = "PowerNV PSI Controller";
     device_class_set_props(dc, pnv_psi_properties);
-    dc->reset = pnv_psi_reset;
+    device_class_set_legacy_reset(dc, pnv_psi_reset);
     dc->user_creatable = false;
 }
 

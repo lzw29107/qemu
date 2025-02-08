@@ -390,7 +390,7 @@ vhost_user_gpu_chr_read(void *opaque)
     }
 
     msg->request = request;
-    msg->flags = size;
+    msg->flags = flags;
     msg->size = size;
 
     if (request == VHOST_USER_GPU_CURSOR_UPDATE ||
@@ -631,6 +631,14 @@ vhost_user_gpu_device_realize(DeviceState *qdev, Error **errp)
         error_report("EDID requested but the backend doesn't support it.");
         g->parent_obj.conf.flags &= ~(1 << VIRTIO_GPU_FLAG_EDID_ENABLED);
     }
+    if (virtio_has_feature(g->vhost->dev.features,
+        VIRTIO_GPU_F_RESOURCE_UUID)) {
+        g->parent_obj.conf.flags |= 1 << VIRTIO_GPU_FLAG_RESOURCE_UUID_ENABLED;
+    }
+    if (virtio_has_feature(g->vhost->dev.features,
+        VIRTIO_GPU_F_RESOURCE_UUID)) {
+        g->parent_obj.conf.flags |= 1 << VIRTIO_GPU_FLAG_RESOURCE_UUID_ENABLED;
+    }
 
     if (!virtio_gpu_base_device_realize(qdev, NULL, NULL, errp)) {
         return;
@@ -642,12 +650,11 @@ vhost_user_gpu_device_realize(DeviceState *qdev, Error **errp)
 static struct vhost_dev *vhost_user_gpu_get_vhost(VirtIODevice *vdev)
 {
     VhostUserGPU *g = VHOST_USER_GPU(vdev);
-    return &g->vhost->dev;
+    return g->vhost ? &g->vhost->dev : NULL;
 }
 
-static Property vhost_user_gpu_properties[] = {
+static const Property vhost_user_gpu_properties[] = {
     VIRTIO_GPU_BASE_PROPERTIES(VhostUserGPU, parent_obj.conf),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void
