@@ -110,7 +110,7 @@ jobs:
       env:
         mode_flags: ${{ matrix.mode == 'dynamic' && env.dynamic_flags || env.static_flags }}
         extra_cflags: ${{ (matrix.mode == 'static' || startsWith(matrix.sys, 'clang')) && format('--extra-cflags="{0} {1}"', matrix.mode == 'static' && env.static_extra_cflags || '', startsWith(matrix.sys, 'clang') && env.clang_extra_cflags || '') || '' }}
-        arch_flags: ${{ (matrix.cross && matrix.cross_arch == 'aarch64') && env.clang_cross_flags || '--enable-avx2' }}
+        arch_flags: ${{ (matrix.cross && matrix.cross_arch == 'aarch64') && env.clang_cross_flags || '' }}
       run: |
           if [ ${{ matrix.cross && matrix.cross_arch == 'aarch64' }} == true ];
           then
@@ -209,7 +209,7 @@ jobs:
 
     - name: '🚧 Build QEMU Linux (arm & aarch64) (Ubuntu ${{ matrix.system }} ${{ matrix.arch }})'
       env:
-        build_flags: ${{ matrix.arch == 'x64' && '--enable-avx2' || '--enable-kvm --cross-prefix=aarch64-linux-gnu-' }}
+        build_flags: ${{ matrix.arch == 'arm64' && '--enable-kvm --cross-prefix=aarch64-linux-gnu-' || '' }}
       run: |
           ./configure --disable-docs --enable-gtk --enable-sdl --target-list=arm-softmmu,aarch64-softmmu --prefix='${{ github.workspace }}/artifacts' ${{ env.build_flags }}
           make -j16
