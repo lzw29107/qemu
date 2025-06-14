@@ -8,7 +8,7 @@
  */
 
 #include "qemu/osdep.h"
-#include "sysemu/blockdev.h"
+#include "system/blockdev.h"
 #include "hw/sysbus.h"
 #include "migration/vmstate.h"
 #include "hw/irq.h"
@@ -509,17 +509,17 @@ static void pl181_init(Object *obj)
     qbus_init(&s->sdbus, sizeof(s->sdbus), TYPE_PL181_BUS, dev, "sd-bus");
 }
 
-static void pl181_class_init(ObjectClass *klass, void *data)
+static void pl181_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *k = DEVICE_CLASS(klass);
 
     k->vmsd = &vmstate_pl181;
-    k->reset = pl181_reset;
+    device_class_set_legacy_reset(k, pl181_reset);
     /* Reason: output IRQs should be wired up */
     k->user_creatable = false;
 }
 
-static void pl181_bus_class_init(ObjectClass *klass, void *data)
+static void pl181_bus_class_init(ObjectClass *klass, const void *data)
 {
     SDBusClass *sbc = SD_BUS_CLASS(klass);
 

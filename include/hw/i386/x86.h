@@ -18,7 +18,7 @@
 #define HW_I386_X86_H
 
 #include "exec/hwaddr.h"
-#include "exec/memory.h"
+#include "system/memory.h"
 
 #include "hw/boards.h"
 #include "hw/i386/topology.h"
@@ -27,13 +27,8 @@
 #include "qom/object.h"
 
 struct X86MachineClass {
-    /*< private >*/
     MachineClass parent;
 
-    /*< public >*/
-
-    /* TSC rate migration: */
-    bool save_tsc_khz;
     /* use DMA capable linuxboot option rom */
     bool fwcfg_dma_enabled;
     /* CPU and apic information: */

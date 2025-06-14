@@ -18,22 +18,8 @@
  * member in your target-specific DisasContext.
  */
 
-#include "qemu/bswap.h"
+#include "exec/memop.h"
 #include "exec/vaddr.h"
-
-/**
- * gen_intermediate_code
- * @cpu: cpu context
- * @tb: translation block
- * @max_insns: max number of instructions to translate
- * @pc: guest virtual program counter address
- * @host_pc: host physical program counter address
- *
- * This function must be provided by the target, which should create
- * the target-specific DisasContext, and then invoke translator_loop.
- */
-void gen_intermediate_code(CPUState *cpu, TranslationBlock *tb, int *max_insns,
-                           vaddr pc, void *host_pc);
 
 /**
  * DisasJumpType:
@@ -71,7 +57,6 @@ typedef enum DisasJumpType {
  * @is_jmp: What instruction to disassemble next.
  * @num_insns: Number of translated instructions (including current).
  * @max_insns: Maximum number of instructions to be translated in this TB.
- * @singlestep_enabled: "Hardware" single stepping enabled.
  * @plugin_enabled: TCG plugin enabled in this TB.
  * @fake_insn: True if translator_fake_ldb used.
  * @insn_start: The last op emitted by the insn_start hook,
@@ -86,9 +71,9 @@ struct DisasContextBase {
     DisasJumpType is_jmp;
     int num_insns;
     int max_insns;
-    bool singlestep_enabled;
     bool plugin_enabled;
     bool fake_insn;
+    uint8_t code_mmuidx;
     struct TCGOp *insn_start;
     void *host_addr[2];
 
@@ -196,42 +181,53 @@ bool translator_io_start(DisasContextBase *db);
  */
 
 uint8_t translator_ldub(CPUArchState *env, DisasContextBase *db, vaddr pc);
-uint16_t translator_lduw(CPUArchState *env, DisasContextBase *db, vaddr pc);
-uint32_t translator_ldl(CPUArchState *env, DisasContextBase *db, vaddr pc);
-uint64_t translator_ldq(CPUArchState *env, DisasContextBase *db, vaddr pc);
+uint16_t translator_lduw_end(CPUArchState *env, DisasContextBase *db,
+                             vaddr pc, MemOp endian);
+uint32_t translator_ldl_end(CPUArchState *env, DisasContextBase *db,
+                            vaddr pc, MemOp endian);
+uint64_t translator_ldq_end(CPUArchState *env, DisasContextBase *db,
+                            vaddr pc, MemOp endian);
+
+#ifdef COMPILING_PER_TARGET
+static inline uint16_t
+translator_lduw(CPUArchState *env, DisasContextBase *db, vaddr pc)
+{
+    return translator_lduw_end(env, db, pc, MO_TE);
+}
+
+static inline uint32_t
+translator_ldl(CPUArchState *env, DisasContextBase *db, vaddr pc)
+{
+    return translator_ldl_end(env, db, pc, MO_TE);
+}
+
+static inline uint64_t
+translator_ldq(CPUArchState *env, DisasContextBase *db, vaddr pc)
+{
+    return translator_ldq_end(env, db, pc, MO_TE);
+}
 
 static inline uint16_t
 translator_lduw_swap(CPUArchState *env, DisasContextBase *db,
                      vaddr pc, bool do_swap)
 {
-    uint16_t ret = translator_lduw(env, db, pc);
-    if (do_swap) {
-        ret = bswap16(ret);
-    }
-    return ret;
+    return translator_lduw_end(env, db, pc, MO_TE ^ (do_swap * MO_BSWAP));
 }
 
 static inline uint32_t
 translator_ldl_swap(CPUArchState *env, DisasContextBase *db,
                     vaddr pc, bool do_swap)
 {
-    uint32_t ret = translator_ldl(env, db, pc);
-    if (do_swap) {
-        ret = bswap32(ret);
-    }
-    return ret;
+    return translator_ldl_end(env, db, pc, MO_TE ^ (do_swap * MO_BSWAP));
 }
 
 static inline uint64_t
 translator_ldq_swap(CPUArchState *env, DisasContextBase *db,
                     vaddr pc, bool do_swap)
 {
-    uint64_t ret = translator_ldq(env, db, pc);
-    if (do_swap) {
-        ret = bswap64(ret);
-    }
-    return ret;
+    return translator_ldq_end(env, db, pc, MO_TE ^ (do_swap * MO_BSWAP));
 }
+#endif /* COMPILING_PER_TARGET */
 
 /**
  * translator_fake_ld - fake instruction load
@@ -269,16 +265,15 @@ bool translator_st(const DisasContextBase *db, void *dest,
  */
 size_t translator_st_len(const DisasContextBase *db);
 
-#ifdef COMPILING_PER_TARGET
-/*
- * Return whether addr is on the same page as where disassembly started.
+/**
+ * translator_is_same_page
+ * @db: disassembly context
+ * @addr: virtual address within TB
+ *
+ * Return whether @addr is on the same page as where disassembly started.
  * Translators can use this to enforce the rule that only single-insn
  * translation blocks are allowed to cross page boundaries.
  */
-static inline bool is_same_page(const DisasContextBase *db, vaddr addr)
-{
-    return ((addr ^ db->pc_first) & TARGET_PAGE_MASK) == 0;
-}
-#endif
+bool translator_is_same_page(const DisasContextBase *db, vaddr addr);
 
 #endif /* EXEC__TRANSLATOR_H */

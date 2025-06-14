@@ -21,7 +21,11 @@
 #include "trace.h"
 #include "exec/log.h"
 #include "exec/page-protection.h"
+#include "exec/mmap-lock.h"
+#include "exec/tb-flush.h"
+#include "exec/translation-block.h"
 #include "qemu.h"
+#include "user/page-protection.h"
 #include "user-internals.h"
 #include "user-mmap.h"
 #include "target_mman.h"
@@ -284,6 +288,40 @@ static int do_munmap(void *addr, size_t len)
 }
 
 /*
+ * Perform a pread on behalf of target_mmap.  We can reach EOF, we can be
+ * interrupted by signals, and in general there's no good error return path.
+ * If @zero, zero the rest of the block at EOF.
+ * Return true on success.
+ */
+static bool mmap_pread(int fd, void *p, size_t len, off_t offset, bool zero)
+{
+    while (1) {
+        ssize_t r = pread(fd, p, len, offset);
+
+        if (likely(r == len)) {
+            /* Complete */
+            return true;
+        }
+        if (r == 0) {
+            /* EOF */
+            if (zero) {
+                memset(p, 0, len);
+            }
+            return true;
+        }
+        if (r > 0) {
+            /* Short read */
+            p += r;
+            len -= r;
+            offset += r;
+        } else if (errno != EINTR) {
+            /* Error */
+            return false;
+        }
+    }
+}
+
+/*
  * Map an incomplete host page.
  *
  * Here be dragons.  This case will not work if there is an existing
@@ -357,10 +395,9 @@ static bool mmap_frag(abi_ulong real_start, abi_ulong start, abi_ulong last,
     /* Read or zero the new guest pages. */
     if (flags & MAP_ANONYMOUS) {
         memset(g2h_untagged(start), 0, last - start + 1);
-    } else {
-        if (pread(fd, g2h_untagged(start), last - start + 1, offset) == -1) {
-            return false;
-        }
+    } else if (!mmap_pread(fd, g2h_untagged(start), last - start + 1,
+                           offset, true)) {
+        return false;
     }
 
     /* Put final protection */
@@ -560,8 +597,12 @@ static abi_long mmap_h_eq_g(abi_ulong start, abi_ulong len,
                             int host_prot, int flags, int page_flags,
                             int fd, off_t offset)
 {
-    void *p, *want_p = g2h_untagged(start);
+    void *p, *want_p = NULL;
     abi_ulong last;
+
+    if (start || (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE))) {
+        want_p = g2h_untagged(start);
+    }
 
     p = mmap(want_p, len, host_prot, flags, fd, offset);
     if (p == MAP_FAILED) {
@@ -604,16 +645,20 @@ static abi_long mmap_h_eq_g(abi_ulong start, abi_ulong len,
  *
  * However, this case is rather common with executable images,
  * so the workaround is important for even trivial tests, whereas
- * the mmap of of a file being extended is less common.
+ * the mmap of a file being extended is less common.
  */
 static abi_long mmap_h_lt_g(abi_ulong start, abi_ulong len, int host_prot,
                             int mmap_flags, int page_flags, int fd,
                             off_t offset, int host_page_size)
 {
-    void *p, *want_p = g2h_untagged(start);
+    void *p, *want_p = NULL;
     off_t fileend_adj = 0;
     int flags = mmap_flags;
     abi_ulong last, pass_last;
+
+    if (start || (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE))) {
+        want_p = g2h_untagged(start);
+    }
 
     if (!(flags & MAP_ANONYMOUS)) {
         struct stat sb;
@@ -740,11 +785,15 @@ static abi_long mmap_h_gt_g(abi_ulong start, abi_ulong len,
                             int flags, int page_flags, int fd,
                             off_t offset, int host_page_size)
 {
-    void *p, *want_p = g2h_untagged(start);
+    void *p, *want_p = NULL;
     off_t host_offset = offset & -host_page_size;
     abi_ulong last, real_start, real_last;
     bool misaligned_offset = false;
     size_t host_len;
+
+    if (start || (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE))) {
+        want_p = g2h_untagged(start);
+    }
 
     if (!(flags & (MAP_FIXED | MAP_FIXED_NOREPLACE))) {
         /*
@@ -841,8 +890,7 @@ static abi_long mmap_h_gt_g(abi_ulong start, abi_ulong len,
     }
 
     if (misaligned_offset) {
-        /* TODO: The read could be short. */
-        if (pread(fd, p, host_len, offset + real_start - start) != host_len) {
+        if (!mmap_pread(fd, p, host_len, offset + real_start - start, false)) {
             do_munmap(p, host_len);
             return -1;
         }

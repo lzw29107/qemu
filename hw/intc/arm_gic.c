@@ -27,8 +27,8 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "trace.h"
-#include "sysemu/kvm.h"
-#include "sysemu/qtest.h"
+#include "system/kvm.h"
+#include "system/qtest.h"
 
 /* #define DEBUG_GIC */
 
@@ -1263,9 +1263,14 @@ static void gic_dist_writeb(void *opaque, hwaddr offset,
                     trace_gic_enable_irq(irq + i);
                 }
                 GIC_DIST_SET_ENABLED(irq + i, cm);
-                /* If a raised level triggered IRQ enabled then mark
-                   is as pending.  */
-                if (GIC_DIST_TEST_LEVEL(irq + i, mask)
+                /*
+                 * If a raised level triggered IRQ enabled then mark
+                 * it as pending on 11MPCore. For other GIC revisions we
+                 * handle the "level triggered and line asserted" check
+                 * at the other end in gic_test_pending().
+                 */
+                if (s->revision == REV_11MPCORE
+                        && GIC_DIST_TEST_LEVEL(irq + i, mask)
                         && !GIC_DIST_TEST_EDGE_TRIGGER(irq + i)) {
                     DPRINTF("Set %d pending mask %x\n", irq + i, mask);
                     GIC_DIST_SET_PENDING(irq + i, mask);
@@ -2157,7 +2162,7 @@ static void arm_gic_realize(DeviceState *dev, Error **errp)
 
 }
 
-static void arm_gic_class_init(ObjectClass *klass, void *data)
+static void arm_gic_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     ARMGICClass *agc = ARM_GIC_CLASS(klass);

@@ -22,8 +22,9 @@
 #include "cpu.h"
 #include "target/arm/cpregs.h"
 #include "target/arm/cpu-features.h"
-#include "sysemu/tcg.h"
-#include "sysemu/qtest.h"
+#include "target/arm/internals.h"
+#include "system/tcg.h"
+#include "system/qtest.h"
 
 /*
  * Special case return value from hppvi_index(); must be larger than
@@ -583,7 +584,6 @@ static void icv_ap_write(CPUARMState *env, const ARMCPRegInfo *ri,
     }
 
     gicv3_cpuif_virt_irq_fiq_update(cs);
-    return;
 }
 
 static uint64_t icv_bpr_read(CPUARMState *env, const ARMCPRegInfo *ri)
@@ -781,7 +781,7 @@ static void icv_activate_irq(GICv3CPUState *cs, int idx, int grp)
     if (nmi) {
         cs->ich_apr[grp][regno] |= ICV_AP1R_EL1_NMI;
     } else {
-        cs->ich_apr[grp][regno] |= (1 << regbit);
+        cs->ich_apr[grp][regno] |= (1U << regbit);
     }
 }
 
@@ -793,7 +793,7 @@ static void icv_activate_vlpi(GICv3CPUState *cs)
     int regno = aprbit / 32;
     int regbit = aprbit % 32;
 
-    cs->ich_apr[cs->hppvlpi.grp][regno] |= (1 << regbit);
+    cs->ich_apr[cs->hppvlpi.grp][regno] |= (1U << regbit);
     gicv3_redist_vlpi_pending(cs, cs->hppvlpi.irq, 0);
 }
 
@@ -1170,7 +1170,7 @@ static void icc_activate_irq(GICv3CPUState *cs, int irq)
     if (nmi) {
         cs->icc_apr[cs->hppi.grp][regno] |= ICC_AP1R_EL1_NMI;
     } else {
-        cs->icc_apr[cs->hppi.grp][regno] |= (1 << regbit);
+        cs->icc_apr[cs->hppi.grp][regno] |= (1U << regbit);
     }
 
     if (irq < GIC_INTERNAL) {
@@ -2291,7 +2291,7 @@ static CPAccessResult gicv3_irqfiq_access(CPUARMState *env,
             r = CP_ACCESS_TRAP_EL3;
             break;
         case 3:
-            if (!is_a64(env) && !arm_is_el3_or_mon(env)) {
+            if (!arm_is_el3_or_mon(env)) {
                 r = CP_ACCESS_TRAP_EL3;
             }
             break;
@@ -2300,9 +2300,6 @@ static CPAccessResult gicv3_irqfiq_access(CPUARMState *env,
         }
     }
 
-    if (r == CP_ACCESS_TRAP_EL3 && !arm_el_is_aa64(env, 3)) {
-        r = CP_ACCESS_TRAP;
-    }
     return r;
 }
 
@@ -2356,7 +2353,7 @@ static CPAccessResult gicv3_fiq_access(CPUARMState *env,
             r = CP_ACCESS_TRAP_EL3;
             break;
         case 3:
-            if (!is_a64(env) && !arm_is_el3_or_mon(env)) {
+            if (!arm_is_el3_or_mon(env)) {
                 r = CP_ACCESS_TRAP_EL3;
             }
             break;
@@ -2365,9 +2362,6 @@ static CPAccessResult gicv3_fiq_access(CPUARMState *env,
         }
     }
 
-    if (r == CP_ACCESS_TRAP_EL3 && !arm_el_is_aa64(env, 3)) {
-        r = CP_ACCESS_TRAP;
-    }
     return r;
 }
 
@@ -2395,7 +2389,7 @@ static CPAccessResult gicv3_irq_access(CPUARMState *env,
             r = CP_ACCESS_TRAP_EL3;
             break;
         case 3:
-            if (!is_a64(env) && !arm_is_el3_or_mon(env)) {
+            if (!arm_is_el3_or_mon(env)) {
                 r = CP_ACCESS_TRAP_EL3;
             }
             break;
@@ -2404,9 +2398,6 @@ static CPAccessResult gicv3_irq_access(CPUARMState *env,
         }
     }
 
-    if (r == CP_ACCESS_TRAP_EL3 && !arm_el_is_aa64(env, 3)) {
-        r = CP_ACCESS_TRAP;
-    }
     return r;
 }
 

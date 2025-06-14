@@ -241,12 +241,9 @@ int uleb128_decode_small(const uint8_t *in, uint32_t *n);
 int qemu_pstrcmp0(const char **str1, const char **str2);
 
 /* Find program directory, and save it for later usage with
- * qemu_get_exec_dir().
+ * get_relocated_path().
  * Try OS specific API first, if not working, parse from argv0. */
 void qemu_init_exec_dir(const char *argv0);
-
-/* Get the saved exec dir.  */
-const char *qemu_get_exec_dir(void);
 
 /**
  * get_relocated_path:
@@ -304,5 +301,20 @@ GString *qemu_hexdump_line(GString *str, const void *buf, size_t len,
 
 void qemu_hexdump(FILE *fp, const char *prefix,
                   const void *bufptr, size_t size);
+
+/**
+ * qemu_hexdump_to_buffer:
+ * @buffer: output string buffer
+ * @buffer_size: amount of available space in buffer. Must be at least
+ *               data_size*2+1.
+ * @data: input bytes
+ * @data_size: number of bytes in data
+ *
+ * Converts the @data_size bytes in @data into hex digit pairs, writing them to
+ * @buffer. Finally, a nul terminating character is written; @buffer therefore
+ * needs space for (data_size*2+1) chars.
+ */
+void qemu_hexdump_to_buffer(char *restrict buffer, size_t buffer_size,
+                            const uint8_t *restrict data, size_t data_size);
 
 #endif

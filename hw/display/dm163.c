@@ -271,7 +271,7 @@ static uint32_t *update_display_of_row(DM163State *s, uint32_t *dest,
                                        unsigned row)
 {
     for (unsigned _ = 0; _ < LED_SQUARE_SIZE; _++) {
-        for (int x = 0; x < RGB_MATRIX_NUM_COLS * LED_SQUARE_SIZE; x++) {
+        for (int x = RGB_MATRIX_NUM_COLS * LED_SQUARE_SIZE - 1; x >= 0; x--) {
             /* UI layer guarantees that there's 32 bits per pixel (Mar 2024) */
             *dest++ = s->buffer[s->buffer_idx_of_row[row]][x / LED_SQUARE_SIZE];
         }
@@ -325,12 +325,12 @@ static void dm163_realize(DeviceState *dev, Error **errp)
                         RGB_MATRIX_NUM_ROWS * LED_SQUARE_SIZE);
 }
 
-static void dm163_class_init(ObjectClass *klass, void *data)
+static void dm163_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     ResettableClass *rc = RESETTABLE_CLASS(klass);
 
-    dc->desc = "DM163";
+    dc->desc = "DM163 8x3-channel constant current LED driver";
     dc->vmsd = &vmstate_dm163;
     dc->realize = dm163_realize;
     rc->phases.hold = dm163_reset_hold;

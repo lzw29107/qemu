@@ -15,7 +15,6 @@
 #include "hw/pci/pcie.h"
 #include "hw/pci/pci_bus.h"
 #include "hw/qdev-properties.h"
-#include "qemu/error-report.h"
 #include "qemu/range.h"
 #include "qapi/error.h"
 #include "trace.h"
@@ -33,12 +32,6 @@ static void unparent_vfs(PCIDevice *dev, uint16_t total_vfs)
     dev->exp.sriov_pf.vf = NULL;
 }
 
-static void clear_ctrl_vfe(PCIDevice *dev)
-{
-    uint8_t *ctrl = dev->config + dev->exp.sriov_cap + PCI_SRIOV_CTRL;
-    pci_set_word(ctrl, pci_get_word(ctrl) & ~PCI_SRIOV_CTRL_VFE);
-}
-
 static void register_vfs(PCIDevice *dev)
 {
     uint16_t num_vfs;
@@ -47,28 +40,28 @@ static void register_vfs(PCIDevice *dev)
 
     assert(sriov_cap > 0);
     num_vfs = pci_get_word(dev->config + sriov_cap + PCI_SRIOV_NUM_VF);
-    if (num_vfs > pci_get_word(dev->config + sriov_cap + PCI_SRIOV_TOTAL_VF)) {
-        clear_ctrl_vfe(dev);
-        return;
-    }
 
     trace_sriov_register_vfs(dev->name, PCI_SLOT(dev->devfn),
                              PCI_FUNC(dev->devfn), num_vfs);
     for (i = 0; i < num_vfs; i++) {
         pci_set_enabled(dev->exp.sriov_pf.vf[i], true);
     }
+
+    pci_set_word(dev->wmask + sriov_cap + PCI_SRIOV_NUM_VF, 0);
 }
 
 static void unregister_vfs(PCIDevice *dev)
 {
-    uint16_t i;
     uint8_t *cfg = dev->config + dev->exp.sriov_cap;
+    uint16_t i;
 
     trace_sriov_unregister_vfs(dev->name, PCI_SLOT(dev->devfn),
                                PCI_FUNC(dev->devfn));
     for (i = 0; i < pci_get_word(cfg + PCI_SRIOV_TOTAL_VF); i++) {
         pci_set_enabled(dev->exp.sriov_pf.vf[i], false);
     }
+
+    pci_set_word(dev->wmask + dev->exp.sriov_cap + PCI_SRIOV_NUM_VF, 0xffff);
 }
 
 static bool pcie_sriov_pf_init_common(PCIDevice *dev, uint16_t offset,
@@ -76,6 +69,7 @@ static bool pcie_sriov_pf_init_common(PCIDevice *dev, uint16_t offset,
                                       uint16_t total_vfs, uint16_t vf_offset,
                                       uint16_t vf_stride, Error **errp)
 {
+    int32_t devfn = dev->devfn + vf_offset;
     uint8_t *cfg = dev->config + offset;
     uint8_t *wmask;
 
@@ -85,20 +79,14 @@ static bool pcie_sriov_pf_init_common(PCIDevice *dev, uint16_t offset,
     }
 
     if (pci_is_vf(dev)) {
-        error_setg(errp, "a device cannot be both an SR-IOV PF and a VF");
+        error_setg(errp, "a device cannot be a SR-IOV PF and a VF at the same time");
         return false;
     }
 
-    if (total_vfs) {
-        uint16_t ari_cap = pcie_find_capability(dev, PCI_EXT_CAP_ID_ARI);
-        uint16_t first_vf_devfn = dev->devfn + vf_offset;
-        uint16_t last_vf_devfn = first_vf_devfn + vf_stride * (total_vfs - 1);
-
-        if ((!ari_cap && PCI_SLOT(dev->devfn) != PCI_SLOT(last_vf_devfn)) ||
-            last_vf_devfn >= PCI_DEVFN_MAX) {
-            error_setg(errp, "VF function number overflows");
-            return false;
-        }
+    if (total_vfs &&
+        (uint32_t)devfn + (uint32_t)(total_vfs - 1) * vf_stride >= PCI_DEVFN_MAX) {
+        error_setg(errp, "VF addr overflows");
+        return false;
     }
 
     pcie_add_capability(dev, PCI_EXT_CAP_ID_SRIOV, 1,
@@ -196,12 +184,10 @@ void pcie_sriov_pf_exit(PCIDevice *dev)
         unregister_vfs(dev);
 
         for (uint16_t i = 0; i < total_vfs; i++) {
-            PCIDevice *vf = dev->exp.sriov_pf.vf[i];
+            dev->exp.sriov_pf.vf[i]->exp.sriov_vf.pf = NULL;
 
-            vf->exp.sriov_vf.pf = NULL;
-
-            pci_config_set_vendor_id(vf->config, ven_id);
-            pci_config_set_device_id(vf->config, vf_dev_id);
+            pci_config_set_vendor_id(dev->exp.sriov_pf.vf[i]->config, ven_id);
+            pci_config_set_device_id(dev->exp.sriov_pf.vf[i]->config, vf_dev_id);
         }
     } else {
         unparent_vfs(dev, pci_get_word(cfg + PCI_SRIOV_TOTAL_VF));
@@ -259,6 +245,7 @@ int16_t pcie_sriov_pf_init_from_user_created_vfs(PCIDevice *dev,
     PCIDevice **vfs;
     BusState *bus = qdev_get_parent_bus(DEVICE(dev));
     uint16_t ven_id = pci_get_word(dev->config + PCI_VENDOR_ID);
+    uint16_t size = PCI_EXT_CAP_SRIOV_SIZEOF;
     uint16_t vf_dev_id;
     uint16_t vf_offset;
     uint16_t vf_stride;
@@ -325,6 +312,11 @@ int16_t pcie_sriov_pf_init_from_user_created_vfs(PCIDevice *dev,
         return -1;
     }
 
+    if (!pcie_find_capability(dev, PCI_EXT_CAP_ID_ARI)) {
+        pcie_ari_init(dev, offset + size);
+        size += PCI_ARI_SIZEOF;
+    }
+
     for (i = 0; i < pf->len; i++) {
         vfs[i]->exp.sriov_vf.pf = dev;
         vfs[i]->exp.sriov_vf.vf_number = i;
@@ -345,7 +337,7 @@ int16_t pcie_sriov_pf_init_from_user_created_vfs(PCIDevice *dev,
         }
     }
 
-    return PCI_EXT_CAP_SRIOV_SIZEOF;
+    return size;
 }
 
 bool pcie_sriov_register_device(PCIDevice *dev, Error **errp)
@@ -431,8 +423,16 @@ void pcie_sriov_config_write(PCIDevice *dev, uint32_t address,
             unregister_vfs(dev);
         }
     } else if (range_covers_byte(off, len, PCI_SRIOV_NUM_VF)) {
-        clear_ctrl_vfe(dev);
-        unregister_vfs(dev);
+        uint8_t *cfg = dev->config + sriov_cap;
+        uint8_t *wmask = dev->wmask + sriov_cap;
+        uint16_t num_vfs = pci_get_word(cfg + PCI_SRIOV_NUM_VF);
+        uint16_t wmask_val = PCI_SRIOV_CTRL_MSE | PCI_SRIOV_CTRL_ARI;
+
+        if (num_vfs <= pci_get_word(cfg + PCI_SRIOV_TOTAL_VF)) {
+            wmask_val |= PCI_SRIOV_CTRL_VFE;
+        }
+
+        pci_set_word(wmask + PCI_SRIOV_CTRL, wmask_val);
     }
 }
 
@@ -456,6 +456,8 @@ void pcie_sriov_pf_reset(PCIDevice *dev)
     unregister_vfs(dev);
 
     pci_set_word(dev->config + sriov_cap + PCI_SRIOV_NUM_VF, 0);
+    pci_set_word(dev->wmask + sriov_cap + PCI_SRIOV_CTRL,
+                 PCI_SRIOV_CTRL_VFE | PCI_SRIOV_CTRL_MSE | PCI_SRIOV_CTRL_ARI);
 
     /*
      * Default is to use 4K pages, software can modify it

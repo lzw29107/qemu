@@ -25,13 +25,13 @@
 
 #include "qemu/osdep.h"
 #include "qemu/lockable.h"
-#include "sysemu/tcg.h"
-#include "sysemu/replay.h"
-#include "sysemu/cpu-timers.h"
+#include "system/tcg.h"
+#include "system/replay.h"
+#include "exec/icount.h"
 #include "qemu/main-loop.h"
 #include "qemu/notify.h"
 #include "qemu/guest-random.h"
-#include "exec/exec-all.h"
+#include "exec/cpu-common.h"
 #include "tcg/startup.h"
 #include "tcg-accel-ops.h"
 #include "tcg-accel-ops-rr.h"
@@ -109,7 +109,7 @@ static void rr_wait_io_event(void)
 {
     CPUState *cpu;
 
-    while (all_cpu_threads_idle() && replay_can_wait()) {
+    while (all_cpu_threads_idle()) {
         rr_stop_kick_timer();
         qemu_cond_wait_bql(first_cpu->halt_cond);
     }
@@ -302,9 +302,7 @@ static void *rr_cpu_thread_fn(void *arg)
         rr_deal_with_unplugged_cpus();
     }
 
-    rcu_remove_force_rcu_notifier(&force_rcu);
-    rcu_unregister_thread();
-    return NULL;
+    g_assert_not_reached();
 }
 
 void rr_start_vcpu_thread(CPUState *cpu)

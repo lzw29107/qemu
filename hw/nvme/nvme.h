@@ -220,6 +220,11 @@ typedef struct NvmeNamespaceParams {
     } fdp;
 } NvmeNamespaceParams;
 
+typedef struct NvmeAtomic {
+    uint32_t    atomic_max_write_size;
+    bool        atomic_writes;
+} NvmeAtomic;
+
 typedef struct NvmeNamespace {
     DeviceState  parent_obj;
     BlockConf    blkconf;
@@ -228,10 +233,10 @@ typedef struct NvmeNamespace {
     int64_t      moff;
     NvmeIdNs     id_ns;
     NvmeIdNsNvm  id_ns_nvm;
+    NvmeIdNsInd  id_ns_ind;
     NvmeLBAF     lbaf;
     unsigned int nlbaf;
     size_t       lbasz;
-    const uint32_t *iocs;
     uint8_t      csi;
     uint16_t     status;
     int          attached;
@@ -262,6 +267,9 @@ typedef struct NvmeNamespace {
     NvmeNamespaceParams params;
     NvmeSubsystem *subsys;
     NvmeEnduranceGroup *endgrp;
+
+    /* NULL for shared namespaces; set to specific controller if private */
+    NvmeCtrl *ctrl;
 
     struct {
         uint32_t err_rec;
@@ -421,6 +429,7 @@ typedef struct NvmeRequest {
     NvmeCmd                 cmd;
     BlockAcctCookie         acct;
     NvmeSg                  sg;
+    bool                    atomic_write;
     QTAILQ_ENTRY(NvmeRequest)entry;
 } NvmeRequest;
 
@@ -532,12 +541,22 @@ typedef struct NvmeParams {
     bool     auto_transition_zones;
     bool     legacy_cmb;
     bool     ioeventfd;
+    bool     dbcs;
     uint16_t  sriov_max_vfs;
     uint16_t sriov_vq_flexible;
     uint16_t sriov_vi_flexible;
     uint32_t  sriov_max_vq_per_vf;
     uint32_t  sriov_max_vi_per_vf;
     bool     msix_exclusive_bar;
+    bool     ocp;
+
+    struct {
+        bool mem;
+    } ctratt;
+
+    uint16_t atomic_awun;
+    uint16_t atomic_awupf;
+    bool     atomic_dn;
 } NvmeParams;
 
 typedef struct NvmeCtrl {
@@ -567,6 +586,14 @@ typedef struct NvmeCtrl {
     uint64_t    dbbuf_dbs;
     uint64_t    dbbuf_eis;
     bool        dbbuf_enabled;
+
+    struct {
+        uint32_t acs[256];
+        struct {
+            uint32_t nvm[256];
+            uint32_t zoned[256];
+        } iocs;
+    } cse;
 
     struct {
         MemoryRegion mem;
@@ -619,6 +646,8 @@ typedef struct NvmeCtrl {
         uint16_t    vqrfap;
         uint16_t    virfap;
     } next_pri_ctrl_cap;    /* These override pri_ctrl_cap after reset */
+    uint32_t    dn; /* Disable Normal */
+    NvmeAtomic  atomic;
 } NvmeCtrl;
 
 typedef enum NvmeResetType {

@@ -74,7 +74,7 @@ static void qemu_chr_socket_restart_timer(Chardev *chr)
     assert(!s->reconnect_timer);
     name = g_strdup_printf("chardev-socket-reconnect-%s", chr->label);
     s->reconnect_timer = qemu_chr_timeout_add_ms(chr,
-                                                 s->reconnect_time * 1000,
+                                                 s->reconnect_time_ms,
                                                  socket_reconnect_timeout,
                                                  chr);
     g_source_set_name(s->reconnect_timer, name);
@@ -481,7 +481,7 @@ static void tcp_chr_disconnect_locked(Chardev *chr)
     if (emit_close) {
         qemu_chr_be_event(chr, CHR_EVENT_CLOSED);
     }
-    if (s->reconnect_time && !s->reconnect_timer) {
+    if (s->reconnect_time_ms && !s->reconnect_timer) {
         qemu_chr_socket_restart_timer(chr);
     }
 }
@@ -571,9 +571,13 @@ static char *qemu_chr_compute_filename(SocketChardev *s)
 
     switch (ss->ss_family) {
     case AF_UNIX:
-        return g_strdup_printf("unix:%s%s",
-                               ((struct sockaddr_un *)(ss))->sun_path,
-                               s->is_listen ? ",server=on" : "");
+        if (s->is_listen) {
+            return g_strdup_printf("unix:%s,server=on",
+                                   ((struct sockaddr_un *)(ss))->sun_path);
+        } else {
+            return g_strdup_printf("unix:%s",
+                                   ((struct sockaddr_un *)(ps))->sun_path);
+        }
     case AF_INET6:
         left  = "[";
         right = "]";
@@ -1080,9 +1084,9 @@ static int tcp_chr_wait_connected(Chardev *chr, Error **errp)
         } else {
             Error *err = NULL;
             if (tcp_chr_connect_client_sync(chr, &err) < 0) {
-                if (s->reconnect_time) {
+                if (s->reconnect_time_ms) {
                     error_free(err);
-                    g_usleep(s->reconnect_time * 1000ULL * 1000ULL);
+                    g_usleep(s->reconnect_time_ms * 1000ULL);
                 } else {
                     error_propagate(errp, err);
                     return -1;
@@ -1267,13 +1271,13 @@ skip_listen:
 
 
 static int qmp_chardev_open_socket_client(Chardev *chr,
-                                          int64_t reconnect,
+                                          int64_t reconnect_ms,
                                           Error **errp)
 {
     SocketChardev *s = SOCKET_CHARDEV(chr);
 
-    if (reconnect > 0) {
-        s->reconnect_time = reconnect;
+    if (reconnect_ms > 0) {
+        s->reconnect_time_ms = reconnect_ms;
         tcp_chr_connect_client_async(chr);
         return 0;
     } else {
@@ -1354,6 +1358,12 @@ static bool qmp_chardev_validate_socket(ChardevSocket *sock,
         }
     }
 
+    if (sock->has_reconnect_ms && sock->has_reconnect) {
+        error_setg(errp,
+            "'reconnect' and 'reconnect-ms' are mutually exclusive");
+        return false;
+    }
+
     return true;
 }
 
@@ -1371,7 +1381,7 @@ static void qmp_chardev_open_socket(Chardev *chr,
     bool is_tn3270      = sock->has_tn3270  ? sock->tn3270  : false;
     bool is_waitconnect = sock->has_wait    ? sock->wait    : false;
     bool is_websock     = sock->has_websocket ? sock->websocket : false;
-    int64_t reconnect   = sock->has_reconnect ? sock->reconnect : 0;
+    int64_t reconnect_ms = 0;
     SocketAddress *addr;
 
     s->is_listen = is_listen;
@@ -1443,7 +1453,13 @@ static void qmp_chardev_open_socket(Chardev *chr,
             return;
         }
     } else {
-        if (qmp_chardev_open_socket_client(chr, reconnect, errp) < 0) {
+        if (sock->has_reconnect) {
+            reconnect_ms = sock->reconnect * 1000ULL;
+        } else if (sock->has_reconnect_ms) {
+            reconnect_ms = sock->reconnect_ms;
+        }
+
+        if (qmp_chardev_open_socket_client(chr, reconnect_ms, errp) < 0) {
             return;
         }
     }
@@ -1509,6 +1525,9 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
     sock->wait = qemu_opt_get_bool(opts, "wait", true);
     sock->has_reconnect = qemu_opt_find(opts, "reconnect");
     sock->reconnect = qemu_opt_get_number(opts, "reconnect", 0);
+    sock->has_reconnect_ms = qemu_opt_find(opts, "reconnect-ms");
+    sock->reconnect_ms = qemu_opt_get_number(opts, "reconnect-ms", 0);
+
     sock->tls_creds = g_strdup(qemu_opt_get(opts, "tls-creds"));
     sock->tls_authz = g_strdup(qemu_opt_get(opts, "tls-authz"));
 
@@ -1562,7 +1581,7 @@ char_socket_get_connected(Object *obj, Error **errp)
     return s->state == TCP_CHARDEV_STATE_CONNECTED;
 }
 
-static void char_socket_class_init(ObjectClass *oc, void *data)
+static void char_socket_class_init(ObjectClass *oc, const void *data)
 {
     ChardevClass *cc = CHARDEV_CLASS(oc);
 

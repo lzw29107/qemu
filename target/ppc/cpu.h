@@ -22,7 +22,9 @@
 
 #include "qemu/int128.h"
 #include "qemu/cpu-float.h"
+#include "exec/cpu-common.h"
 #include "exec/cpu-defs.h"
+#include "exec/cpu-interrupt.h"
 #include "cpu-qom.h"
 #include "qom/object.h"
 #include "hw/registerfields.h"
@@ -40,6 +42,7 @@
 
 #define PPC_BIT_NR(bit)         (63 - (bit))
 #define PPC_BIT(bit)            (0x8000000000000000ULL >> (bit))
+#define PPC_BIT32_NR(bit)       (31 - (bit))
 #define PPC_BIT32(bit)          (0x80000000 >> (bit))
 #define PPC_BIT8(bit)           (0x80 >> (bit))
 #define PPC_BITMASK(bs, be)     ((PPC_BIT(bs) - PPC_BIT(be)) | PPC_BIT(bs))
@@ -215,6 +218,8 @@ typedef enum powerpc_excp_t {
     POWERPC_EXCP_POWER9,
     /* POWER10 exception model           */
     POWERPC_EXCP_POWER10,
+    /* POWER11 exception model           */
+    POWERPC_EXCP_POWER11,
 } powerpc_excp_t;
 
 /*****************************************************************************/
@@ -634,8 +639,8 @@ FIELD(MSR, LE, MSR_LE, 1)
 #define PSSCR_EC          PPC_BIT(43) /* Exit Criterion */
 
 /* HFSCR bits */
-#define HFSCR_MSGP     PPC_BIT(53) /* Privileged Message Send Facilities */
-#define HFSCR_BHRB     PPC_BIT(59) /* BHRB Instructions */
+#define HFSCR_MSGP     PPC_BIT_NR(53) /* Privileged Message Send Facilities */
+#define HFSCR_BHRB     PPC_BIT_NR(59) /* BHRB Instructions */
 #define HFSCR_IC_MSGP  0xA
 
 #define DBCR0_ICMP (1 << 27)
@@ -1197,21 +1202,6 @@ DEXCR_ASPECT(NPHIE, 5)
 DEXCR_ASPECT(PHIE, 6)
 
 /*****************************************************************************/
-/* PowerNV ChipTOD and TimeBase State Machine */
-struct pnv_tod_tbst {
-    int tb_ready_for_tod; /* core TB ready to receive TOD from chiptod */
-    int tod_sent_to_tb;   /* chiptod sent TOD to the core TB */
-
-    /*
-     * "Timers" for async TBST events are simulated by mfTFAC because TFAC
-     * is polled for such events. These are just used to ensure firmware
-     * performs the polling at least a few times.
-     */
-    int tb_state_timer;
-    int tb_sync_pulse_timer;
-};
-
-/*****************************************************************************/
 /* The whole PowerPC CPU context */
 
 /*
@@ -1262,15 +1252,17 @@ struct CPUArchState {
     /* when a memory exception occurs, the access type is stored here */
     int access_type;
 
+    /* For SMT processors */
+    bool has_smt_siblings;
+    int core_index;
+    int chip_index;
+
 #if !defined(CONFIG_USER_ONLY)
     /* MMU context, only relevant for full system emulation */
 #if defined(TARGET_PPC64)
     ppc_slb_t slb[MAX_SLB_ENTRIES]; /* PowerPC 64 SLB area */
     struct CPUBreakpoint *ciabr_breakpoint;
-    struct CPUWatchpoint *dawr0_watchpoint;
-
-    /* POWER CPU regs/state */
-    target_ulong scratch[8]; /* SCRATCH registers (shared across core) */
+    struct CPUWatchpoint *dawr_watchpoint[2];
 #endif
     target_ulong sr[32];   /* segment registers */
     uint32_t nb_BATs;      /* number of BATs */
@@ -1291,12 +1283,6 @@ struct CPUArchState {
     uint32_t tlb_need_flush; /* Delayed flush needed */
 #define TLB_NEED_LOCAL_FLUSH   0x1
 #define TLB_NEED_GLOBAL_FLUSH  0x2
-
-#if defined(TARGET_PPC64)
-    /* PowerNV chiptod / timebase facility state. */
-    /* Would be nice to put these into PnvCore */
-    struct pnv_tod_tbst pnv_tod_tbst;
-#endif
 #endif
 
     /* Other registers */
@@ -1372,6 +1358,18 @@ struct CPUArchState {
      * special way (such as routing some resume causes to 0x100, i.e. sreset).
      */
     bool resume_as_sreset;
+
+    /*
+     * On powernv, quiesced means the CPU has been stopped using PC direct
+     * control xscom registers.
+     *
+     * On spapr, quiesced means it is in the "RTAS stopped" state.
+     *
+     * The core halted/stopped variables aren't sufficient for this, because
+     * they can be changed with various side-band operations like qmp cont,
+     * powersave interrupts, etc.
+     */
+    bool quiesced;
 #endif
 
     /* These resources are used only in TCG */
@@ -1426,12 +1424,12 @@ struct CPUArchState {
     uint64_t pmu_base_time;
 };
 
-#define _CORE_ID(cs)                                            \
-    (POWERPC_CPU(cs)->env.spr_cb[SPR_PIR].default_value & ~(cs->nr_threads - 1))
-
 #define THREAD_SIBLING_FOREACH(cs, cs_sibling)                  \
     CPU_FOREACH(cs_sibling)                                     \
-        if (_CORE_ID(cs) == _CORE_ID(cs_sibling))
+        if ((POWERPC_CPU(cs)->env.chip_index ==                 \
+             POWERPC_CPU(cs_sibling)->env.chip_index) &&        \
+            (POWERPC_CPU(cs)->env.core_index ==                 \
+             POWERPC_CPU(cs_sibling)->env.core_index))
 
 #define SET_FIT_PERIOD(a_, b_, c_, d_)          \
 do {                                            \
@@ -1476,16 +1474,6 @@ struct ArchCPU {
     /* Those resources are used only during code translation */
     /* opcode handlers */
     opc_handler_t *opcodes[PPC_CPU_OPCODES_LEN];
-
-    /* Fields related to migration compatibility hacks */
-    bool pre_2_8_migration;
-    target_ulong mig_msr_mask;
-    uint64_t mig_insns_flags;
-    uint64_t mig_insns_flags2;
-    uint32_t mig_nb_BATs;
-    bool pre_2_10_migration;
-    bool pre_3_0_migration;
-    int32_t mig_slb_nr;
 };
 
 /**
@@ -1504,6 +1492,7 @@ struct PowerPCCPUClass {
     void (*parent_parse_features)(const char *type, char *str, Error **errp);
 
     uint32_t pvr;
+    uint32_t spapr_logical_pvr;
     /*
      * If @best is false, match if pcc is in the family of pvr
      * Else match only if pcc is the best match for pvr in this family.
@@ -1534,6 +1523,17 @@ struct PowerPCCPUClass {
     int  (*check_pow)(CPUPPCState *env);
     int  (*check_attn)(CPUPPCState *env);
 };
+
+static inline bool ppc_cpu_core_single_threaded(CPUState *cs)
+{
+    return !POWERPC_CPU(cs)->env.has_smt_siblings;
+}
+
+static inline bool ppc_cpu_lpar_single_threaded(CPUState *cs)
+{
+    return !(POWERPC_CPU(cs)->env.flags & POWERPC_FLAG_SMT_1LPAR) ||
+           ppc_cpu_core_single_threaded(cs);
+}
 
 ObjectClass *ppc_cpu_class_by_name(const char *name);
 PowerPCCPUClass *ppc_cpu_class_by_pvr(uint32_t pvr);
@@ -1594,19 +1594,21 @@ extern const VMStateDescription vmstate_ppc_cpu;
 
 /*****************************************************************************/
 void ppc_translate_init(void);
+void ppc_translate_code(CPUState *cs, TranslationBlock *tb,
+                        int *max_insns, vaddr pc, void *host_pc);
 
 #if !defined(CONFIG_USER_ONLY)
 void ppc_store_sdr1(CPUPPCState *env, target_ulong value);
 void ppc_store_lpcr(PowerPCCPU *cpu, target_ulong val);
 void ppc_update_ciabr(CPUPPCState *env);
 void ppc_store_ciabr(CPUPPCState *env, target_ulong value);
-void ppc_update_daw0(CPUPPCState *env);
+void ppc_update_daw(CPUPPCState *env, int rid);
 void ppc_store_dawr0(CPUPPCState *env, target_ulong value);
 void ppc_store_dawrx0(CPUPPCState *env, uint32_t value);
+void ppc_store_dawr1(CPUPPCState *env, target_ulong value);
+void ppc_store_dawrx1(CPUPPCState *env, uint32_t value);
 #endif /* !defined(CONFIG_USER_ONLY) */
 void ppc_store_msr(CPUPPCState *env, target_ulong value);
-
-void ppc_cpu_list(void);
 
 /* Time-base and decrementer management */
 uint64_t cpu_ppc_load_tbl(CPUPPCState *env);
@@ -1669,8 +1671,6 @@ static inline uint64_t ppc_dump_gpr(CPUPPCState *env, int gprn)
 int ppc_dcr_read(ppc_dcr_t *dcr_env, int dcrn, uint32_t *valp);
 int ppc_dcr_write(ppc_dcr_t *dcr_env, int dcrn, uint32_t val);
 
-#define cpu_list ppc_cpu_list
-
 /* MMU modes definitions */
 #define MMU_USER_IDX 0
 static inline int ppc_env_mmu_index(CPUPPCState *env, bool ifetch)
@@ -1699,8 +1699,6 @@ int ppc_compat_max_vthreads(PowerPCCPU *cpu);
 void ppc_compat_add_property(Object *obj, const char *name,
                              uint32_t *compat_pvr, const char *basedesc);
 #endif /* defined(TARGET_PPC64) */
-
-#include "exec/cpu-all.h"
 
 /*****************************************************************************/
 /* CRF definitions */
@@ -2102,6 +2100,7 @@ void ppc_compat_add_property(Object *obj, const char *name,
 #define SPR_VTB               (0x351)
 #define SPR_LDBAR             (0x352)
 #define SPR_MMCRC             (0x353)
+#define SPR_PMSR              (0x355)
 #define SPR_PSSCR             (0x357)
 #define SPR_440_INV0          (0x370)
 #define SPR_440_INV1          (0x371)
@@ -2109,8 +2108,10 @@ void ppc_compat_add_property(Object *obj, const char *name,
 #define SPR_440_INV2          (0x372)
 #define SPR_TRIG2             (0x372)
 #define SPR_440_INV3          (0x373)
+#define SPR_PMCR              (0x374)
 #define SPR_440_ITV0          (0x374)
 #define SPR_440_ITV1          (0x375)
+#define SPR_RWMR              (0x375)
 #define SPR_440_ITV2          (0x376)
 #define SPR_440_ITV3          (0x377)
 #define SPR_440_CCR1          (0x378)
@@ -2750,24 +2751,6 @@ void cpu_write_xer(CPUPPCState *env, target_ulong xer);
  */
 #define is_book3s_arch2x(ctx) (!!((ctx)->insns_flags & PPC_SEGMENT_64B))
 
-#ifdef CONFIG_DEBUG_TCG
-void cpu_get_tb_cpu_state(CPUPPCState *env, vaddr *pc,
-                          uint64_t *cs_base, uint32_t *flags);
-#else
-static inline void cpu_get_tb_cpu_state(CPUPPCState *env, vaddr *pc,
-                                        uint64_t *cs_base, uint32_t *flags)
-{
-    *pc = env->nip;
-    *cs_base = 0;
-    *flags = env->hflags;
-}
-#endif
-
-G_NORETURN void raise_exception(CPUPPCState *env, uint32_t exception);
-G_NORETURN void raise_exception_ra(CPUPPCState *env, uint32_t exception,
-                                   uintptr_t raddr);
-G_NORETURN void raise_exception_err(CPUPPCState *env, uint32_t exception,
-                                    uint32_t error_code);
 G_NORETURN void raise_exception_err_ra(CPUPPCState *env, uint32_t exception,
                                        uint32_t error_code, uintptr_t raddr);
 
@@ -3051,7 +3034,8 @@ static inline int check_attn_none(CPUPPCState *env)
 
 #define POWERPC_FAMILY(_name)                                               \
     static void                                                             \
-    glue(glue(ppc_, _name), _cpu_family_class_init)(ObjectClass *, void *); \
+    glue(glue(ppc_, _name), _cpu_family_class_init)(ObjectClass *,          \
+                                                    const void *);          \
                                                                             \
     static const TypeInfo                                                   \
     glue(glue(ppc_, _name), _cpu_family_type_info) = {                      \

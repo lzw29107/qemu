@@ -22,8 +22,8 @@
 #include "qemu/timer.h"
 #include "cpu.h"
 #include "pmu.h"
-#include "sysemu/cpu-timers.h"
-#include "sysemu/device_tree.h"
+#include "exec/icount.h"
+#include "system/device_tree.h"
 
 #define RISCV_TIMEBASE_FREQ 1000000000 /* 1Ghz */
 
@@ -204,6 +204,7 @@ static void riscv_pmu_icount_update_priv(CPURISCVState *env,
     }
 
     if (env->virt_enabled) {
+        g_assert(env->priv <= PRV_S);
         counter_arr = env->pmu_fixed_ctrs[1].counter_virt;
         snapshot_prev = env->pmu_fixed_ctrs[1].counter_virt_prev;
     } else {
@@ -212,6 +213,7 @@ static void riscv_pmu_icount_update_priv(CPURISCVState *env,
     }
 
     if (new_virt) {
+        g_assert(newpriv <= PRV_S);
         snapshot_new = env->pmu_fixed_ctrs[1].counter_virt_prev;
     } else {
         snapshot_new = env->pmu_fixed_ctrs[1].counter_prev;
@@ -242,6 +244,7 @@ static void riscv_pmu_cycle_update_priv(CPURISCVState *env,
     }
 
     if (env->virt_enabled) {
+        g_assert(env->priv <= PRV_S);
         counter_arr = env->pmu_fixed_ctrs[0].counter_virt;
         snapshot_prev = env->pmu_fixed_ctrs[0].counter_virt_prev;
     } else {
@@ -250,6 +253,7 @@ static void riscv_pmu_cycle_update_priv(CPURISCVState *env,
     }
 
     if (new_virt) {
+        g_assert(newpriv <= PRV_S);
         snapshot_new = env->pmu_fixed_ctrs[0].counter_virt_prev;
     } else {
         snapshot_new = env->pmu_fixed_ctrs[0].counter_prev;
@@ -386,7 +390,7 @@ int riscv_pmu_update_event_map(CPURISCVState *env, uint64_t value,
      * Expected mhpmevent value is zero for reset case. Remove the current
      * mapping.
      */
-    if (!value) {
+    if (!(value & MHPMEVENT_IDX_MASK)) {
         g_hash_table_foreach_remove(cpu->pmu_event_ctr_map,
                                     pmu_remove_event_map,
                                     GUINT_TO_POINTER(ctr_idx));

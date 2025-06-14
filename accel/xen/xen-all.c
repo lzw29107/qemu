@@ -18,9 +18,10 @@
 #include "hw/xen/xen_igd.h"
 #include "chardev/char.h"
 #include "qemu/accel.h"
-#include "sysemu/cpus.h"
-#include "sysemu/xen.h"
-#include "sysemu/runstate.h"
+#include "system/accel-ops.h"
+#include "system/cpus.h"
+#include "system/xen.h"
+#include "system/runstate.h"
 #include "migration/misc.h"
 #include "migration/global_state.h"
 #include "hw/boards.h"
@@ -115,7 +116,7 @@ static int xen_init(MachineState *ms)
     return 0;
 }
 
-static void xen_accel_class_init(ObjectClass *oc, void *data)
+static void xen_accel_class_init(ObjectClass *oc, const void *data)
 {
     AccelClass *ac = ACCEL_CLASS(oc);
     static GlobalProperty compat[] = {
@@ -146,7 +147,7 @@ static const TypeInfo xen_accel_type = {
     .class_init = xen_accel_class_init,
 };
 
-static void xen_accel_ops_class_init(ObjectClass *oc, void *data)
+static void xen_accel_ops_class_init(ObjectClass *oc, const void *data)
 {
     AccelOpsClass *ops = ACCEL_OPS_CLASS(oc);
 

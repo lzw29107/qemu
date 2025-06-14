@@ -187,7 +187,7 @@
         AMDVI_CAPAB_FLAG_HTTUNNEL |  AMDVI_CAPAB_EFR_SUP)
 
 /* AMDVI default address */
-#define AMDVI_BASE_ADDR 0xfed80000
+#define AMDVI_BASE_ADDR 0xfed80000ULL
 
 /* page management constants */
 #define AMDVI_PAGE_SHIFT 12
@@ -315,7 +315,8 @@ struct AMDVIPCIState {
 
 struct AMDVIState {
     X86IOMMUState iommu;        /* IOMMU bus device             */
-    AMDVIPCIState pci;          /* IOMMU PCI device             */
+    AMDVIPCIState *pci;         /* IOMMU PCI device             */
+    char *pci_id;               /* ID of AMDVI-PCI device, if user created */
 
     uint32_t version;
 
@@ -328,7 +329,7 @@ struct AMDVIState {
     bool excl_enabled;
 
     hwaddr devtab;               /* base address device table    */
-    size_t devtab_len;           /* device table length          */
+    uint64_t devtab_len;         /* device table length          */
 
     hwaddr cmdbuf;               /* command buffer base address  */
     uint64_t cmdbuf_len;         /* command buffer length        */
@@ -353,7 +354,10 @@ struct AMDVIState {
     uint32_t pprlog_head;        /* ppr log head */
     uint32_t pprlog_tail;        /* ppr log tail */
 
-    MemoryRegion mmio;                 /* MMIO region                  */
+    MemoryRegion mr_mmio;              /* MMIO region                  */
+    MemoryRegion mr_sys;
+    MemoryRegion mr_nodma;
+    MemoryRegion mr_ir;
     uint8_t mmior[AMDVI_MMIO_SIZE];    /* read/write MMIO              */
     uint8_t w1cmask[AMDVI_MMIO_SIZE];  /* read/write 1 clear mask      */
     uint8_t romask[AMDVI_MMIO_SIZE];   /* MMIO read/only mask          */

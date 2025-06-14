@@ -23,7 +23,10 @@
 #include "qapi/error.h"
 #include "qemu/qemu-print.h"
 #include "cpu.h"
-#include "exec/exec-all.h"
+#include "exec/translation-block.h"
+#include "exec/target_page.h"
+#include "accel/tcg/cpu-ops.h"
+#include "fpu/softfloat.h"
 
 
 static void alpha_cpu_set_pc(CPUState *cs, vaddr value)
@@ -36,6 +39,18 @@ static vaddr alpha_cpu_get_pc(CPUState *cs)
 {
     CPUAlphaState *env = cpu_env(cs);
     return env->pc;
+}
+
+static TCGTBCPUState alpha_get_tb_cpu_state(CPUState *cs)
+{
+    CPUAlphaState *env = cpu_env(cs);
+    uint32_t flags = env->flags & ENV_FLAG_TB_MASK;
+
+#ifdef CONFIG_USER_ONLY
+    flags |= TB_FLAG_UNALIGN * !cs->prctl_unalign_sigbus;
+#endif
+
+    return (TCGTBCPUState){ .pc = env->pc, .flags = flags };
 }
 
 static void alpha_cpu_synchronize_from_tb(CPUState *cs,
@@ -61,6 +76,7 @@ static void alpha_restore_state_to_opc(CPUState *cs,
     }
 }
 
+#ifndef CONFIG_USER_ONLY
 static bool alpha_cpu_has_work(CPUState *cs)
 {
     /* Here we are checking to see if the CPU should wake up from HALT.
@@ -75,6 +91,7 @@ static bool alpha_cpu_has_work(CPUState *cs)
                                     | CPU_INTERRUPT_SMP
                                     | CPU_INTERRUPT_MCHK);
 }
+#endif /* !CONFIG_USER_ONLY */
 
 static int alpha_cpu_mmu_index(CPUState *cs, bool ifetch)
 {
@@ -83,6 +100,7 @@ static int alpha_cpu_mmu_index(CPUState *cs, bool ifetch)
 
 static void alpha_cpu_disas_set_info(CPUState *cpu, disassemble_info *info)
 {
+    info->endian = BFD_ENDIAN_LITTLE;
     info->mach = bfd_mach_alpha_ev6;
     info->print_insn = print_insn_alpha;
 }
@@ -187,7 +205,26 @@ static void alpha_cpu_initfn(Object *obj)
 {
     CPUAlphaState *env = cpu_env(CPU(obj));
 
+    /* TODO all this should be done in reset, not init */
+
     env->lock_addr = -1;
+
+    /*
+     * TODO: this is incorrect. The Alpha Architecture Handbook version 4
+     * describes NaN propagation in section 4.7.10.4. We should prefer
+     * the operand in Fb (whether it is a QNaN or an SNaN), then the
+     * operand in Fa. That is float_2nan_prop_ba.
+     */
+    set_float_2nan_prop_rule(float_2nan_prop_x87, &env->fp_status);
+    /* Default NaN: sign bit clear, msb frac bit set */
+    set_float_default_nan_pattern(0b01000000, &env->fp_status);
+    /*
+     * TODO: this is incorrect. The Alpha Architecture Handbook version 4
+     * section 4.7.7.11 says that we flush to zero for underflow cases, so
+     * this should be float_ftz_after_rounding to match the
+     * tininess_after_rounding (which is specified in section 4.7.5).
+     */
+    set_float_ftz_detection(float_ftz_before_rounding, &env->fp_status);
 #if defined(CONFIG_USER_ONLY)
     env->flags = ENV_FLAG_PS_USER | ENV_FLAG_FEN;
     cpu_alpha_store_fpcr(env, (uint64_t)(FPCR_INVD | FPCR_DZED | FPCR_OVFD
@@ -202,31 +239,39 @@ static void alpha_cpu_initfn(Object *obj)
 #include "hw/core/sysemu-cpu-ops.h"
 
 static const struct SysemuCPUOps alpha_sysemu_ops = {
+    .has_work = alpha_cpu_has_work,
     .get_phys_page_debug = alpha_cpu_get_phys_page_debug,
 };
 #endif
 
-#include "hw/core/tcg-cpu-ops.h"
-
 static const TCGCPUOps alpha_tcg_ops = {
+    /* Alpha processors have a weak memory model */
+    .guest_default_memory_order = 0,
+    .mttcg_supported = true,
+
     .initialize = alpha_translate_init,
+    .translate_code = alpha_translate_code,
+    .get_tb_cpu_state = alpha_get_tb_cpu_state,
     .synchronize_from_tb = alpha_cpu_synchronize_from_tb,
     .restore_state_to_opc = alpha_restore_state_to_opc,
+    .mmu_index = alpha_cpu_mmu_index,
 
 #ifdef CONFIG_USER_ONLY
     .record_sigsegv = alpha_cpu_record_sigsegv,
     .record_sigbus = alpha_cpu_record_sigbus,
 #else
     .tlb_fill = alpha_cpu_tlb_fill,
+    .pointer_wrap = cpu_pointer_wrap_notreached,
     .cpu_exec_interrupt = alpha_cpu_exec_interrupt,
     .cpu_exec_halt = alpha_cpu_has_work,
+    .cpu_exec_reset = cpu_reset,
     .do_interrupt = alpha_cpu_do_interrupt,
     .do_transaction_failed = alpha_cpu_do_transaction_failed,
     .do_unaligned_access = alpha_cpu_do_unaligned_access,
 #endif /* !CONFIG_USER_ONLY */
 };
 
-static void alpha_cpu_class_init(ObjectClass *oc, void *data)
+static void alpha_cpu_class_init(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     CPUClass *cc = CPU_CLASS(oc);
@@ -236,8 +281,6 @@ static void alpha_cpu_class_init(ObjectClass *oc, void *data)
                                     &acc->parent_realize);
 
     cc->class_by_name = alpha_cpu_class_by_name;
-    cc->has_work = alpha_cpu_has_work;
-    cc->mmu_index = alpha_cpu_mmu_index;
     cc->dump_state = alpha_cpu_dump_state;
     cc->set_pc = alpha_cpu_set_pc;
     cc->get_pc = alpha_cpu_get_pc;

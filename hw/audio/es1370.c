@@ -32,7 +32,7 @@
 #include "migration/vmstate.h"
 #include "qemu/cutils.h"
 #include "qemu/module.h"
-#include "sysemu/dma.h"
+#include "system/dma.h"
 #include "qom/object.h"
 #include "trace.h"
 
@@ -868,12 +868,11 @@ static void es1370_exit(PCIDevice *dev)
     AUD_remove_card(&s->card);
 }
 
-static Property es1370_properties[] = {
+static const Property es1370_properties[] = {
     DEFINE_AUDIO_PROPERTIES(ES1370State, card),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
-static void es1370_class_init (ObjectClass *klass, void *data)
+static void es1370_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS (klass);
     PCIDeviceClass *k = PCI_DEVICE_CLASS (klass);
@@ -888,7 +887,7 @@ static void es1370_class_init (ObjectClass *klass, void *data)
     set_bit(DEVICE_CATEGORY_SOUND, dc->categories);
     dc->desc = "ENSONIQ AudioPCI ES1370";
     dc->vmsd = &vmstate_es1370;
-    dc->reset = es1370_on_reset;
+    device_class_set_legacy_reset(dc, es1370_on_reset);
     device_class_set_props(dc, es1370_properties);
 }
 
@@ -897,7 +896,7 @@ static const TypeInfo es1370_info = {
     .parent        = TYPE_PCI_DEVICE,
     .instance_size = sizeof (ES1370State),
     .class_init    = es1370_class_init,
-    .interfaces = (InterfaceInfo[]) {
+    .interfaces = (const InterfaceInfo[]) {
         { INTERFACE_CONVENTIONAL_PCI_DEVICE },
         { },
     },

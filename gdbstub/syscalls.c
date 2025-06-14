@@ -7,13 +7,13 @@
  * Copyright (c) 2003-2005 Fabrice Bellard
  * Copyright (c) 2023 Linaro Ltd
  *
- * SPDX-License-Identifier: LGPL-2.0+
+ * SPDX-License-Identifier: LGPL-2.0-or-later
  */
 
 #include "qemu/osdep.h"
 #include "qemu/error-report.h"
 #include "semihosting/semihost.h"
-#include "sysemu/runstate.h"
+#include "system/runstate.h"
 #include "gdbstub/user.h"
 #include "gdbstub/syscalls.h"
 #include "gdbstub/commands.h"

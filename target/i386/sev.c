@@ -26,20 +26,21 @@
 #include "qemu/uuid.h"
 #include "qemu/error-report.h"
 #include "crypto/hash.h"
-#include "sysemu/kvm.h"
+#include "exec/target_page.h"
+#include "system/kvm.h"
 #include "kvm/kvm_i386.h"
 #include "sev.h"
-#include "sysemu/sysemu.h"
-#include "sysemu/runstate.h"
+#include "system/system.h"
+#include "system/runstate.h"
 #include "trace.h"
 #include "migration/blocker.h"
 #include "qom/object.h"
 #include "monitor/monitor.h"
 #include "monitor/hmp-target.h"
-#include "qapi/qapi-commands-misc-target.h"
+#include "qapi/qapi-commands-misc-i386.h"
 #include "confidential-guest.h"
 #include "hw/i386/pc.h"
-#include "exec/address-spaces.h"
+#include "system/address-spaces.h"
 #include "qemu/queue.h"
 
 OBJECT_DECLARE_TYPE(SevCommonState, SevCommonStateClass, SEV_COMMON)
@@ -210,14 +211,6 @@ static const char *const sev_fw_errlist[] = {
 };
 
 #define SEV_FW_MAX_ERROR      ARRAY_SIZE(sev_fw_errlist)
-
-/* <linux/kvm.h> doesn't expose this, so re-use the max from kvm.c */
-#define KVM_MAX_CPUID_ENTRIES 100
-
-typedef struct KvmCpuidInfo {
-    struct kvm_cpuid2 cpuid;
-    struct kvm_cpuid_entry2 entries[KVM_MAX_CPUID_ENTRIES];
-} KvmCpuidInfo;
 
 #define SNP_CPUID_FUNCTION_MAXCOUNT 64
 #define SNP_CPUID_FUNCTION_UNKNOWN 0xFFFFFFFF
@@ -946,7 +939,7 @@ out:
 }
 
 static uint32_t
-sev_snp_mask_cpuid_features(X86ConfidentialGuest *cg, uint32_t feature, uint32_t index,
+sev_snp_adjust_cpuid_features(X86ConfidentialGuest *cg, uint32_t feature, uint32_t index,
                             int reg, uint32_t value)
 {
     switch (feature) {
@@ -1883,7 +1876,7 @@ static bool build_kernel_loader_hashes(PaddedSevHashTable *padded_ht,
      * be used.
      */
     hashp = cmdline_hash;
-    if (qcrypto_hash_bytes(QCRYPTO_HASH_ALG_SHA256, ctx->cmdline_data,
+    if (qcrypto_hash_bytes(QCRYPTO_HASH_ALGO_SHA256, ctx->cmdline_data,
                            ctx->cmdline_size, &hashp, &hash_len, errp) < 0) {
         return false;
     }
@@ -1894,7 +1887,7 @@ static bool build_kernel_loader_hashes(PaddedSevHashTable *padded_ht,
      * -initrd, an empty buffer will be used (ctx->initrd_size == 0).
      */
     hashp = initrd_hash;
-    if (qcrypto_hash_bytes(QCRYPTO_HASH_ALG_SHA256, ctx->initrd_data,
+    if (qcrypto_hash_bytes(QCRYPTO_HASH_ALGO_SHA256, ctx->initrd_data,
                            ctx->initrd_size, &hashp, &hash_len, errp) < 0) {
         return false;
     }
@@ -1906,7 +1899,7 @@ static bool build_kernel_loader_hashes(PaddedSevHashTable *padded_ht,
         { .iov_base = ctx->setup_data, .iov_len = ctx->setup_size },
         { .iov_base = ctx->kernel_data, .iov_len = ctx->kernel_size }
     };
-    if (qcrypto_hash_bytesv(QCRYPTO_HASH_ALG_SHA256, iov, ARRAY_SIZE(iov),
+    if (qcrypto_hash_bytesv(QCRYPTO_HASH_ALGO_SHA256, iov, ARRAY_SIZE(iov),
                             &hashp, &hash_len, errp) < 0) {
         return false;
     }
@@ -2045,7 +2038,7 @@ static void sev_common_set_kernel_hashes(Object *obj, bool value, Error **errp)
 }
 
 static void
-sev_common_class_init(ObjectClass *oc, void *data)
+sev_common_class_init(ObjectClass *oc, const void *data)
 {
     ConfidentialGuestSupportClass *klass = CONFIDENTIAL_GUEST_SUPPORT_CLASS(oc);
 
@@ -2088,7 +2081,7 @@ static const TypeInfo sev_common_info = {
     .class_size = sizeof(SevCommonStateClass),
     .class_init = sev_common_class_init,
     .abstract = true,
-    .interfaces = (InterfaceInfo[]) {
+    .interfaces = (const InterfaceInfo[]) {
         { TYPE_USER_CREATABLE },
         { }
     }
@@ -2140,7 +2133,7 @@ static void sev_guest_set_legacy_vm_type(Object *obj, Visitor *v,
 }
 
 static void
-sev_guest_class_init(ObjectClass *oc, void *data)
+sev_guest_class_init(ObjectClass *oc, const void *data)
 {
     SevCommonStateClass *klass = SEV_COMMON_CLASS(oc);
     X86ConfidentialGuestClass *x86_klass = X86_CONFIDENTIAL_GUEST_CLASS(oc);
@@ -2394,7 +2387,7 @@ sev_snp_guest_set_host_data(Object *obj, const char *value, Error **errp)
 }
 
 static void
-sev_snp_guest_class_init(ObjectClass *oc, void *data)
+sev_snp_guest_class_init(ObjectClass *oc, const void *data)
 {
     SevCommonStateClass *klass = SEV_COMMON_CLASS(oc);
     X86ConfidentialGuestClass *x86_klass = X86_CONFIDENTIAL_GUEST_CLASS(oc);
@@ -2404,7 +2397,7 @@ sev_snp_guest_class_init(ObjectClass *oc, void *data)
     klass->launch_finish = sev_snp_launch_finish;
     klass->launch_update_data = sev_snp_launch_update_data;
     klass->kvm_init = sev_snp_kvm_init;
-    x86_klass->mask_cpuid_features = sev_snp_mask_cpuid_features;
+    x86_klass->adjust_cpuid_features = sev_snp_adjust_cpuid_features;
     x86_klass->kvm_type = sev_snp_kvm_type;
 
     object_class_property_add(oc, "policy", "uint64",
@@ -2422,7 +2415,7 @@ sev_snp_guest_class_init(ObjectClass *oc, void *data)
     object_class_property_add_bool(oc, "author-key-enabled",
                                    sev_snp_guest_get_author_key_enabled,
                                    sev_snp_guest_set_author_key_enabled);
-    object_class_property_add_bool(oc, "vcek-required",
+    object_class_property_add_bool(oc, "vcek-disabled",
                                    sev_snp_guest_get_vcek_disabled,
                                    sev_snp_guest_set_vcek_disabled);
     object_class_property_add_str(oc, "host-data",

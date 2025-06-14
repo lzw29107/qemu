@@ -8,12 +8,13 @@
  */
 
 #include "qemu/osdep.h"
-#include "sysemu/kvm_int.h"
+#include "system/kvm_int.h"
 #include "qemu/main-loop.h"
-#include "sysemu/cpus.h"
+#include "system/accel-ops.h"
+#include "system/cpus.h"
 #include "qemu/guest-random.h"
 
-#include "sysemu/nvmm.h"
+#include "system/nvmm.h"
 #include "nvmm-accel-ops.h"
 
 static void *qemu_nvmm_cpu_thread_fn(void *arg)
@@ -80,7 +81,7 @@ static void nvmm_kick_vcpu_thread(CPUState *cpu)
     cpus_kick_thread(cpu);
 }
 
-static void nvmm_accel_ops_class_init(ObjectClass *oc, void *data)
+static void nvmm_accel_ops_class_init(ObjectClass *oc, const void *data)
 {
     AccelOpsClass *ops = ACCEL_OPS_CLASS(oc);
 

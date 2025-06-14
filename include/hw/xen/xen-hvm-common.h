@@ -1,18 +1,10 @@
 #ifndef HW_XEN_HVM_COMMON_H
 #define HW_XEN_HVM_COMMON_H
 
-#include "qemu/units.h"
-
-#include "cpu.h"
-#include "hw/pci/pci.h"
-#include "hw/hw.h"
+#include "qemu/queue.h"
+#include "exec/hwaddr.h"
 #include "hw/xen/xen_native.h"
-#include "hw/xen/xen-legacy-backend.h"
-#include "sysemu/runstate.h"
-#include "sysemu/sysemu.h"
-#include "sysemu/xen.h"
-#include "sysemu/xen-mapcache.h"
-#include "qemu/error-report.h"
+#include "hw/xen/xen_backend_ops.h"
 #include <xen/hvm/ioreq.h>
 
 extern MemoryRegion xen_memory;
@@ -81,6 +73,8 @@ typedef struct XenIOState {
     QLIST_HEAD(, XenPciDevice) dev_list;
     DeviceListener device_listener;
 
+    bool has_bufioreq;
+
     Notifier exit;
 } XenIOState;
 
@@ -95,6 +89,7 @@ void xen_device_unrealize(DeviceListener *listener, DeviceState *dev);
 
 void xen_hvm_change_state_handler(void *opaque, bool running, RunState rstate);
 void xen_register_ioreq(XenIOState *state, unsigned int max_cpus,
+                        uint8_t handle_bufioreq,
                         const MemoryListener *xen_memory_listener);
 
 void cpu_ioreq_pio(ioreq_t *req);

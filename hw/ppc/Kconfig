@@ -39,15 +39,10 @@ config POWERNV
     select PCI_POWERNV
     select PCA9552
     select PCA9554
-
-config PPC405
-    bool
-    default y
-    depends on PPC
-    select M48T59
-    select PFLASH_CFI02
-    select PPC4XX
-    select SERIAL
+    select SERIAL_ISA
+    select SSI
+    select SSI_M25P80
+    select PNV_SPI
 
 config PPC440
     bool
@@ -59,7 +54,7 @@ config PPC440
     select PCI_EXPRESS
     select PPC440_PCIX
     select PPC4XX
-    select SERIAL
+    select SERIAL_MM
     select FDT_PPC
 
 config PPC4XX
@@ -76,7 +71,7 @@ config SAM460EX
     select IDE_SII3112
     select M41T80
     select PPC440
-    select SERIAL
+    select SERIAL_MM
     select SM501
     select SMBUS_EEPROM
     select USB_EHCI_SYSBUS
@@ -159,7 +154,7 @@ config E500
     select PLATFORM_BUS
     select PPCE500_PCI
     select SDHCI
-    select SERIAL
+    select SERIAL_MM
     select MPC_I2C
     select FDT_PPC
     select DS1338
@@ -183,7 +178,7 @@ config VIRTEX
     depends on PPC && FDT
     select PPC4XX
     select PFLASH_CFI01
-    select SERIAL
+    select SERIAL_MM
     select XILINX
     select XILINX_ETHLITE
     select FDT_PPC

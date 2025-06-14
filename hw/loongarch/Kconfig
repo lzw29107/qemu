@@ -5,19 +5,19 @@ config LOONGARCH_VIRT
     select DEVICE_TREE
     select PCI
     select PCI_EXPRESS_GENERIC_BRIDGE
-    imply VIRTIO_VGA
     imply PCI_DEVICES
     imply NVDIMM
     imply TPM_TIS_SYSBUS
-    select SERIAL
+    select SERIAL_MM
     select VIRTIO_PCI
     select PLATFORM_BUS
-    select LOONGSON_IPI
+    select LOONGARCH_IPI
     select LOONGARCH_PCH_PIC
     select LOONGARCH_PCH_MSI
     select LOONGARCH_EXTIOI
     select LS7A_RTC
     select SMBIOS
+    select ACPI_CPU_HOTPLUG
     select ACPI_PCI
     select ACPI_HW_REDUCED
     select FW_CFG_DMA

@@ -904,12 +904,12 @@ static void imx6ul_ccm_init(Object *obj)
     sysbus_init_mmio(sd, &s->container);
 }
 
-static void imx6ul_ccm_class_init(ObjectClass *klass, void *data)
+static void imx6ul_ccm_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     IMXCCMClass *ccm = IMX_CCM_CLASS(klass);
 
-    dc->reset = imx6ul_ccm_reset;
+    device_class_set_legacy_reset(dc, imx6ul_ccm_reset);
     dc->vmsd = &vmstate_imx6ul_ccm;
     dc->desc = "i.MX6UL Clock Control Module";
 

@@ -22,14 +22,16 @@
 
 #include "cpu.h"
 #include "exec/helper-proto.h"
-#include "exec/exec-all.h"
+#include "exec/target_page.h"
 #include "tcg/tcg-op.h"
 #include "tcg/tcg-op-gvec.h"
 #include "exec/helper-gen.h"
 #include "exec/translator.h"
+#include "exec/translation-block.h"
 #include "exec/log.h"
 #include "fpu/softfloat.h"
 #include "asi.h"
+#include "target/sparc/translate.h"
 
 #define HELPER_H "helper.h"
 #include "exec/helper-info.c.inc"
@@ -100,13 +102,6 @@
 # define gen_helper_xmulxhi              ({ qemu_build_not_reached(); NULL; })
 # define MAXTL_MASK                             0
 #endif
-
-/* Dynamic PC, must exit to main loop. */
-#define DYNAMIC_PC         1
-/* Dynamic PC, one of two values according to jump_pc[T2]. */
-#define JUMP_PC            2
-/* Dynamic PC, may lookup next TB. */
-#define DYNAMIC_PC_LOOKUP  3
 
 #define DISAS_EXIT  DISAS_TARGET_0
 
@@ -185,6 +180,8 @@ typedef struct DisasContext {
     bool supervisor;
 #ifdef TARGET_SPARC64
     bool hypervisor;
+#else
+    bool fsr_qne;
 #endif
 #endif
 
@@ -398,8 +395,7 @@ static void gen_op_addcc_int(TCGv dst, TCGv src1, TCGv src2, TCGv cin)
     TCGv z = tcg_constant_tl(0);
 
     if (cin) {
-        tcg_gen_add2_tl(cpu_cc_N, cpu_cc_C, src1, z, cin, z);
-        tcg_gen_add2_tl(cpu_cc_N, cpu_cc_C, cpu_cc_N, cpu_cc_C, src2, z);
+        tcg_gen_addcio_tl(cpu_cc_N, cpu_cc_C, src1, src2, cin);
     } else {
         tcg_gen_add2_tl(cpu_cc_N, cpu_cc_C, src1, z, src2, z);
     }
@@ -1362,93 +1358,109 @@ static void gen_op_fabsq(TCGv_i128 dst, TCGv_i128 src)
 
 static void gen_op_fmadds(TCGv_i32 d, TCGv_i32 s1, TCGv_i32 s2, TCGv_i32 s3)
 {
-    gen_helper_fmadds(d, tcg_env, s1, s2, s3, tcg_constant_i32(0));
+    TCGv_i32 z = tcg_constant_i32(0);
+    gen_helper_fmadds(d, tcg_env, s1, s2, s3, z, z);
 }
 
 static void gen_op_fmaddd(TCGv_i64 d, TCGv_i64 s1, TCGv_i64 s2, TCGv_i64 s3)
 {
-    gen_helper_fmaddd(d, tcg_env, s1, s2, s3, tcg_constant_i32(0));
+    TCGv_i32 z = tcg_constant_i32(0);
+    gen_helper_fmaddd(d, tcg_env, s1, s2, s3, z, z);
 }
 
 static void gen_op_fmsubs(TCGv_i32 d, TCGv_i32 s1, TCGv_i32 s2, TCGv_i32 s3)
 {
-    int op = float_muladd_negate_c;
-    gen_helper_fmadds(d, tcg_env, s1, s2, s3, tcg_constant_i32(op));
+    TCGv_i32 z = tcg_constant_i32(0);
+    TCGv_i32 op = tcg_constant_i32(float_muladd_negate_c);
+    gen_helper_fmadds(d, tcg_env, s1, s2, s3, z, op);
 }
 
 static void gen_op_fmsubd(TCGv_i64 d, TCGv_i64 s1, TCGv_i64 s2, TCGv_i64 s3)
 {
-    int op = float_muladd_negate_c;
-    gen_helper_fmaddd(d, tcg_env, s1, s2, s3, tcg_constant_i32(op));
+    TCGv_i32 z = tcg_constant_i32(0);
+    TCGv_i32 op = tcg_constant_i32(float_muladd_negate_c);
+    gen_helper_fmaddd(d, tcg_env, s1, s2, s3, z, op);
 }
 
 static void gen_op_fnmsubs(TCGv_i32 d, TCGv_i32 s1, TCGv_i32 s2, TCGv_i32 s3)
 {
-    int op = float_muladd_negate_c | float_muladd_negate_result;
-    gen_helper_fmadds(d, tcg_env, s1, s2, s3, tcg_constant_i32(op));
+    TCGv_i32 z = tcg_constant_i32(0);
+    TCGv_i32 op = tcg_constant_i32(float_muladd_negate_c |
+                                   float_muladd_negate_result);
+    gen_helper_fmadds(d, tcg_env, s1, s2, s3, z, op);
 }
 
 static void gen_op_fnmsubd(TCGv_i64 d, TCGv_i64 s1, TCGv_i64 s2, TCGv_i64 s3)
 {
-    int op = float_muladd_negate_c | float_muladd_negate_result;
-    gen_helper_fmaddd(d, tcg_env, s1, s2, s3, tcg_constant_i32(op));
+    TCGv_i32 z = tcg_constant_i32(0);
+    TCGv_i32 op = tcg_constant_i32(float_muladd_negate_c |
+                                   float_muladd_negate_result);
+    gen_helper_fmaddd(d, tcg_env, s1, s2, s3, z, op);
 }
 
 static void gen_op_fnmadds(TCGv_i32 d, TCGv_i32 s1, TCGv_i32 s2, TCGv_i32 s3)
 {
-    int op = float_muladd_negate_result;
-    gen_helper_fmadds(d, tcg_env, s1, s2, s3, tcg_constant_i32(op));
+    TCGv_i32 z = tcg_constant_i32(0);
+    TCGv_i32 op = tcg_constant_i32(float_muladd_negate_result);
+    gen_helper_fmadds(d, tcg_env, s1, s2, s3, z, op);
 }
 
 static void gen_op_fnmaddd(TCGv_i64 d, TCGv_i64 s1, TCGv_i64 s2, TCGv_i64 s3)
 {
-    int op = float_muladd_negate_result;
-    gen_helper_fmaddd(d, tcg_env, s1, s2, s3, tcg_constant_i32(op));
+    TCGv_i32 z = tcg_constant_i32(0);
+    TCGv_i32 op = tcg_constant_i32(float_muladd_negate_result);
+    gen_helper_fmaddd(d, tcg_env, s1, s2, s3, z, op);
 }
 
 /* Use muladd to compute (1 * src1) + src2 / 2 with one rounding. */
 static void gen_op_fhadds(TCGv_i32 d, TCGv_i32 s1, TCGv_i32 s2)
 {
-    TCGv_i32 one = tcg_constant_i32(float32_one);
-    int op = float_muladd_halve_result;
-    gen_helper_fmadds(d, tcg_env, one, s1, s2, tcg_constant_i32(op));
+    TCGv_i32 fone = tcg_constant_i32(float32_one);
+    TCGv_i32 mone = tcg_constant_i32(-1);
+    TCGv_i32 op = tcg_constant_i32(0);
+    gen_helper_fmadds(d, tcg_env, fone, s1, s2, mone, op);
 }
 
 static void gen_op_fhaddd(TCGv_i64 d, TCGv_i64 s1, TCGv_i64 s2)
 {
-    TCGv_i64 one = tcg_constant_i64(float64_one);
-    int op = float_muladd_halve_result;
-    gen_helper_fmaddd(d, tcg_env, one, s1, s2, tcg_constant_i32(op));
+    TCGv_i64 fone = tcg_constant_i64(float64_one);
+    TCGv_i32 mone = tcg_constant_i32(-1);
+    TCGv_i32 op = tcg_constant_i32(0);
+    gen_helper_fmaddd(d, tcg_env, fone, s1, s2, mone, op);
 }
 
 /* Use muladd to compute (1 * src1) - src2 / 2 with one rounding. */
 static void gen_op_fhsubs(TCGv_i32 d, TCGv_i32 s1, TCGv_i32 s2)
 {
-    TCGv_i32 one = tcg_constant_i32(float32_one);
-    int op = float_muladd_negate_c | float_muladd_halve_result;
-    gen_helper_fmadds(d, tcg_env, one, s1, s2, tcg_constant_i32(op));
+    TCGv_i32 fone = tcg_constant_i32(float32_one);
+    TCGv_i32 mone = tcg_constant_i32(-1);
+    TCGv_i32 op = tcg_constant_i32(float_muladd_negate_c);
+    gen_helper_fmadds(d, tcg_env, fone, s1, s2, mone, op);
 }
 
 static void gen_op_fhsubd(TCGv_i64 d, TCGv_i64 s1, TCGv_i64 s2)
 {
-    TCGv_i64 one = tcg_constant_i64(float64_one);
-    int op = float_muladd_negate_c | float_muladd_halve_result;
-    gen_helper_fmaddd(d, tcg_env, one, s1, s2, tcg_constant_i32(op));
+    TCGv_i64 fone = tcg_constant_i64(float64_one);
+    TCGv_i32 mone = tcg_constant_i32(-1);
+    TCGv_i32 op = tcg_constant_i32(float_muladd_negate_c);
+    gen_helper_fmaddd(d, tcg_env, fone, s1, s2, mone, op);
 }
 
 /* Use muladd to compute -((1 * src1) + src2 / 2) with one rounding. */
 static void gen_op_fnhadds(TCGv_i32 d, TCGv_i32 s1, TCGv_i32 s2)
 {
-    TCGv_i32 one = tcg_constant_i32(float32_one);
-    int op = float_muladd_negate_result | float_muladd_halve_result;
-    gen_helper_fmadds(d, tcg_env, one, s1, s2, tcg_constant_i32(op));
+    TCGv_i32 fone = tcg_constant_i32(float32_one);
+    TCGv_i32 mone = tcg_constant_i32(-1);
+    TCGv_i32 op = tcg_constant_i32(float_muladd_negate_result);
+    gen_helper_fmadds(d, tcg_env, fone, s1, s2, mone, op);
 }
 
 static void gen_op_fnhaddd(TCGv_i64 d, TCGv_i64 s1, TCGv_i64 s2)
 {
-    TCGv_i64 one = tcg_constant_i64(float64_one);
-    int op = float_muladd_negate_result | float_muladd_halve_result;
-    gen_helper_fmaddd(d, tcg_env, one, s1, s2, tcg_constant_i32(op));
+    TCGv_i64 fone = tcg_constant_i64(float64_one);
+    TCGv_i32 mone = tcg_constant_i32(-1);
+    TCGv_i32 op = tcg_constant_i32(float_muladd_negate_result);
+    gen_helper_fmaddd(d, tcg_env, fone, s1, s2, mone, op);
 }
 
 static void gen_op_fpexception_im(DisasContext *dc, int ftt)
@@ -1463,15 +1475,48 @@ static void gen_op_fpexception_im(DisasContext *dc, int ftt)
     gen_exception(dc, TT_FP_EXCP);
 }
 
-static int gen_trap_ifnofpu(DisasContext *dc)
+static bool gen_trap_ifnofpu(DisasContext *dc)
 {
 #if !defined(CONFIG_USER_ONLY)
     if (!dc->fpu_enabled) {
         gen_exception(dc, TT_NFPU_INSN);
-        return 1;
+        return true;
     }
 #endif
-    return 0;
+    return false;
+}
+
+static bool gen_trap_iffpexception(DisasContext *dc)
+{
+#if !defined(TARGET_SPARC64) && !defined(CONFIG_USER_ONLY)
+    /*
+     * There are 3 states for the sparc32 fpu:
+     * Normally the fpu is in fp_execute, and all insns are allowed.
+     * When an exception is signaled, it moves to fp_exception_pending state.
+     * Upon seeing the next FPop, the fpu moves to fp_exception state,
+     * populates the FQ, and generates an fp_exception trap.
+     * The fpu remains in fp_exception state until FQ becomes empty
+     * after execution of a STDFQ instruction.  While the fpu is in
+     * fp_exception state, and FPop, fp load or fp branch insn will
+     * return to fp_exception_pending state, set FSR.FTT to sequence_error,
+     * and the insn will not be entered into the FQ.
+     *
+     * In QEMU, we do not model the fp_exception_pending state and
+     * instead populate FQ and raise the exception immediately.
+     * But we can still honor fp_exception state by noticing when
+     * the FQ is not empty.
+     */
+    if (dc->fsr_qne) {
+        gen_op_fpexception_im(dc, FSR_FTT_SEQ_ERROR);
+        return true;
+    }
+#endif
+    return false;
+}
+
+static bool gen_trap_if_nofpu_fpexception(DisasContext *dc)
+{
+    return gen_trap_ifnofpu(dc) || gen_trap_iffpexception(dc);
 }
 
 /* asi moves */
@@ -2641,7 +2686,7 @@ static bool do_fbpfcc(DisasContext *dc, arg_bcc *a)
 {
     DisasCompare cmp;
 
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
     gen_fcompare(&cmp, a->cc, a->cond);
@@ -2835,6 +2880,14 @@ static TCGv do_rd_leon3_config(DisasContext *dc, TCGv dst)
 }
 
 TRANS(RDASR17, ASR17, do_rd_special, true, a->rd, do_rd_leon3_config)
+
+static TCGv do_rdpic(DisasContext *dc, TCGv dst)
+{
+    return tcg_constant_tl(0);
+}
+
+TRANS(RDPIC, HYPV, do_rd_special, supervisor(dc), a->rd, do_rdpic)
+
 
 static TCGv do_rdccr(DisasContext *dc, TCGv dst)
 {
@@ -3268,6 +3321,17 @@ static void do_wrfprs(DisasContext *dc, TCGv src)
 }
 
 TRANS(WRFPRS, 64, do_wr_special, a, true, do_wrfprs)
+
+static bool do_priv_nop(DisasContext *dc, bool priv)
+{
+    if (!priv) {
+        return raise_priv(dc);
+    }
+    return advance_pc(dc);
+}
+
+TRANS(WRPCR, HYPV, do_priv_nop, supervisor(dc))
+TRANS(WRPIC, HYPV, do_priv_nop, supervisor(dc))
 
 static void do_wrgsr(DisasContext *dc, TCGv src)
 {
@@ -4480,7 +4544,7 @@ static bool do_ld_fpr(DisasContext *dc, arg_r_r_ri_asi *a, MemOp sz)
     if (addr == NULL) {
         return false;
     }
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
     if (sz == MO_128 && gen_trap_float128(dc)) {
@@ -4508,6 +4572,7 @@ static bool do_st_fpr(DisasContext *dc, arg_r_r_ri_asi *a, MemOp sz)
     if (addr == NULL) {
         return false;
     }
+    /* Store insns are ok in fp_exception_pending state. */
     if (gen_trap_ifnofpu(dc)) {
         return true;
     }
@@ -4521,7 +4586,7 @@ static bool do_st_fpr(DisasContext *dc, arg_r_r_ri_asi *a, MemOp sz)
 
 TRANS(STF, ALL, do_st_fpr, a, MO_32)
 TRANS(STDF, ALL, do_st_fpr, a, MO_64)
-TRANS(STQF, ALL, do_st_fpr, a, MO_128)
+TRANS(STQF, 64, do_st_fpr, a, MO_128)
 
 TRANS(STFA, 64, do_st_fpr, a, MO_32)
 TRANS(STDFA, 64, do_st_fpr, a, MO_64)
@@ -4529,17 +4594,41 @@ TRANS(STQFA, 64, do_st_fpr, a, MO_128)
 
 static bool trans_STDFQ(DisasContext *dc, arg_STDFQ *a)
 {
+    TCGv addr;
+
     if (!avail_32(dc)) {
+        return false;
+    }
+    addr = gen_ldst_addr(dc, a->rs1, a->imm, a->rs2_or_imm);
+    if (addr == NULL) {
         return false;
     }
     if (!supervisor(dc)) {
         return raise_priv(dc);
     }
+#if !defined(TARGET_SPARC64) && !defined(CONFIG_USER_ONLY)
     if (gen_trap_ifnofpu(dc)) {
         return true;
     }
-    gen_op_fpexception_im(dc, FSR_FTT_SEQ_ERROR);
-    return true;
+    if (!dc->fsr_qne) {
+        gen_op_fpexception_im(dc, FSR_FTT_SEQ_ERROR);
+        return true;
+    }
+
+    /* Store the single element from the queue. */
+    TCGv_i64 fq = tcg_temp_new_i64();
+    tcg_gen_ld_i64(fq, tcg_env, offsetof(CPUSPARCState, fq.d));
+    tcg_gen_qemu_st_i64(fq, addr, dc->mem_idx, MO_TEUQ | MO_ALIGN_4);
+
+    /* Mark the queue empty, transitioning to fp_execute state. */
+    tcg_gen_st_i32(tcg_constant_i32(0), tcg_env,
+                   offsetof(CPUSPARCState, fsr_qne));
+    dc->fsr_qne = 0;
+
+    return advance_pc(dc);
+#else
+    qemu_build_not_reached();
+#endif
 }
 
 static bool trans_LDFSR(DisasContext *dc, arg_r_r_ri *a)
@@ -4550,7 +4639,7 @@ static bool trans_LDFSR(DisasContext *dc, arg_r_r_ri *a)
     if (addr == NULL) {
         return false;
     }
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
 
@@ -4574,7 +4663,7 @@ static bool do_ldxfsr(DisasContext *dc, arg_r_r_ri *a, bool entire)
     if (addr == NULL) {
         return false;
     }
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
 
@@ -4611,6 +4700,7 @@ static bool do_stfsr(DisasContext *dc, arg_r_r_ri *a, MemOp mop)
     if (addr == NULL) {
         return false;
     }
+    /* Store insns are ok in fp_exception_pending state. */
     if (gen_trap_ifnofpu(dc)) {
         return true;
     }
@@ -4653,7 +4743,7 @@ static bool do_ff(DisasContext *dc, arg_r_r *a,
 {
     TCGv_i32 tmp;
 
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
 
@@ -4694,7 +4784,7 @@ static bool do_env_ff(DisasContext *dc, arg_r_r *a,
 {
     TCGv_i32 tmp;
 
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
 
@@ -4714,7 +4804,7 @@ static bool do_env_fd(DisasContext *dc, arg_r_r *a,
     TCGv_i32 dst;
     TCGv_i64 src;
 
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
 
@@ -4734,7 +4824,7 @@ static bool do_dd(DisasContext *dc, arg_r_r *a,
 {
     TCGv_i64 dst, src;
 
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
 
@@ -4756,7 +4846,7 @@ static bool do_env_dd(DisasContext *dc, arg_r_r *a,
 {
     TCGv_i64 dst, src;
 
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
 
@@ -4796,7 +4886,7 @@ static bool do_env_df(DisasContext *dc, arg_r_r *a,
     TCGv_i64 dst;
     TCGv_i32 src;
 
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
 
@@ -4839,7 +4929,7 @@ static bool do_env_qq(DisasContext *dc, arg_r_r *a,
 {
     TCGv_i128 t;
 
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
     if (gen_trap_float128(dc)) {
@@ -4860,7 +4950,7 @@ static bool do_env_fq(DisasContext *dc, arg_r_r *a,
     TCGv_i128 src;
     TCGv_i32 dst;
 
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
     if (gen_trap_float128(dc)) {
@@ -4883,7 +4973,7 @@ static bool do_env_dq(DisasContext *dc, arg_r_r *a,
     TCGv_i128 src;
     TCGv_i64 dst;
 
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
     if (gen_trap_float128(dc)) {
@@ -4906,7 +4996,7 @@ static bool do_env_qf(DisasContext *dc, arg_r_r *a,
     TCGv_i32 src;
     TCGv_i128 dst;
 
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
     if (gen_trap_float128(dc)) {
@@ -4929,10 +5019,7 @@ static bool do_env_qd(DisasContext *dc, arg_r_r *a,
     TCGv_i64 src;
     TCGv_i128 dst;
 
-    if (gen_trap_ifnofpu(dc)) {
-        return true;
-    }
-    if (gen_trap_float128(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
 
@@ -4989,7 +5076,7 @@ static bool do_env_fff(DisasContext *dc, arg_r_r_r *a,
 {
     TCGv_i32 src1, src2;
 
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
 
@@ -5198,7 +5285,7 @@ static bool do_env_ddd(DisasContext *dc, arg_r_r_r *a,
 {
     TCGv_i64 dst, src1, src2;
 
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
 
@@ -5222,7 +5309,7 @@ static bool trans_FsMULd(DisasContext *dc, arg_r_r_r *a)
     TCGv_i64 dst;
     TCGv_i32 src1, src2;
 
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
     if (!(dc->def->features & CPU_FEATURE_FSMULD)) {
@@ -5331,7 +5418,7 @@ static bool do_env_qqq(DisasContext *dc, arg_r_r_r *a,
 {
     TCGv_i128 src1, src2;
 
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
     if (gen_trap_float128(dc)) {
@@ -5355,7 +5442,7 @@ static bool trans_FdMULq(DisasContext *dc, arg_r_r_r *a)
     TCGv_i64 src1, src2;
     TCGv_i128 dst;
 
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
     if (gen_trap_float128(dc)) {
@@ -5445,7 +5532,7 @@ static bool do_fcmps(DisasContext *dc, arg_FCMPs *a, bool e)
     if (avail_32(dc) && a->cc != 0) {
         return false;
     }
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
 
@@ -5469,7 +5556,7 @@ static bool do_fcmpd(DisasContext *dc, arg_FCMPd *a, bool e)
     if (avail_32(dc) && a->cc != 0) {
         return false;
     }
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
 
@@ -5493,7 +5580,7 @@ static bool do_fcmpq(DisasContext *dc, arg_FCMPq *a, bool e)
     if (avail_32(dc) && a->cc != 0) {
         return false;
     }
-    if (gen_trap_ifnofpu(dc)) {
+    if (gen_trap_if_nofpu_fpexception(dc)) {
         return true;
     }
     if (gen_trap_float128(dc)) {
@@ -5526,7 +5613,7 @@ static bool trans_FLCMPs(DisasContext *dc, arg_FLCMPs *a)
 
     src1 = gen_load_fpr_F(dc, a->rs1);
     src2 = gen_load_fpr_F(dc, a->rs2);
-    gen_helper_flcmps(cpu_fcc[a->cc], src1, src2);
+    gen_helper_flcmps(cpu_fcc[a->cc], tcg_env, src1, src2);
     return advance_pc(dc);
 }
 
@@ -5543,7 +5630,7 @@ static bool trans_FLCMPd(DisasContext *dc, arg_FLCMPd *a)
 
     src1 = gen_load_fpr_D(dc, a->rs1);
     src2 = gen_load_fpr_D(dc, a->rs2);
-    gen_helper_flcmpd(cpu_fcc[a->cc], src1, src2);
+    gen_helper_flcmpd(cpu_fcc[a->cc], tcg_env, src1, src2);
     return advance_pc(dc);
 }
 
@@ -5596,13 +5683,15 @@ static void sparc_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
     dc->address_mask_32bit = tb_am_enabled(dc->base.tb->flags);
 #ifndef CONFIG_USER_ONLY
     dc->supervisor = (dc->base.tb->flags & TB_FLAG_SUPER) != 0;
+# ifdef TARGET_SPARC64
+    dc->hypervisor = (dc->base.tb->flags & TB_FLAG_HYPER) != 0;
+# else
+    dc->fsr_qne = (dc->base.tb->flags & TB_FLAG_FSR_QNE) != 0;
+# endif
 #endif
 #ifdef TARGET_SPARC64
     dc->fprs_dirty = 0;
     dc->asi = (dc->base.tb->flags >> TB_FLAG_ASI_SHIFT) & 0xff;
-#ifndef CONFIG_USER_ONLY
-    dc->hypervisor = (dc->base.tb->flags & TB_FLAG_HYPER) != 0;
-#endif
 #endif
     /*
      * if we reach a page boundary, we stop generation so that the
@@ -5748,8 +5837,8 @@ static const TranslatorOps sparc_tr_ops = {
     .tb_stop            = sparc_tr_tb_stop,
 };
 
-void gen_intermediate_code(CPUState *cs, TranslationBlock *tb, int *max_insns,
-                           vaddr pc, void *host_pc)
+void sparc_translate_code(CPUState *cs, TranslationBlock *tb,
+                          int *max_insns, vaddr pc, void *host_pc)
 {
     DisasContext dc = {};
 
@@ -5819,28 +5908,5 @@ void sparc_tcg_init(void)
         cpu_regs[i] = tcg_global_mem_new(cpu_regwptr,
                                          (i - 8) * sizeof(target_ulong),
                                          gregnames[i]);
-    }
-}
-
-void sparc_restore_state_to_opc(CPUState *cs,
-                                const TranslationBlock *tb,
-                                const uint64_t *data)
-{
-    CPUSPARCState *env = cpu_env(cs);
-    target_ulong pc = data[0];
-    target_ulong npc = data[1];
-
-    env->pc = pc;
-    if (npc == DYNAMIC_PC) {
-        /* dynamic NPC: already stored */
-    } else if (npc & JUMP_PC) {
-        /* jump PC: use 'cond' and the jump targets of the translation */
-        if (env->cond) {
-            env->npc = npc & ~3;
-        } else {
-            env->npc = pc + 4;
-        }
-    } else {
-        env->npc = npc;
     }
 }

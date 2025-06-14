@@ -50,20 +50,17 @@
 #include "qemu/osdep.h"
 #include "qemu/error-report.h"
 #include "qemu/main-loop.h"
-#include "exec/address-spaces.h"
-#include "exec/exec-all.h"
+#include "system/address-spaces.h"
 #include "gdbstub/enums.h"
-#include "sysemu/cpus.h"
-#include "sysemu/hvf.h"
-#include "sysemu/hvf_int.h"
-#include "sysemu/runstate.h"
+#include "hw/boards.h"
+#include "system/accel-ops.h"
+#include "system/cpus.h"
+#include "system/hvf.h"
+#include "system/hvf_int.h"
+#include "system/runstate.h"
 #include "qemu/guest-random.h"
 
 HVFState *hvf_state;
-
-#ifdef __aarch64__
-#define HV_VM_DEFAULT NULL
-#endif
 
 /* Memory slots */
 
@@ -323,8 +320,17 @@ static int hvf_accel_init(MachineState *ms)
     int x;
     hv_return_t ret;
     HVFState *s;
+    int pa_range = 36;
+    MachineClass *mc = MACHINE_GET_CLASS(ms);
 
-    ret = hv_vm_create(HV_VM_DEFAULT);
+    if (mc->hvf_get_physical_address_range) {
+        pa_range = mc->hvf_get_physical_address_range(ms);
+        if (pa_range < 0) {
+            return -EINVAL;
+        }
+    }
+
+    ret = hvf_arch_vm_create(ms, (uint32_t)pa_range);
     assert_hvf_ok(ret);
 
     s = g_new0(HVFState, 1);
@@ -348,7 +354,7 @@ static inline int hvf_gdbstub_sstep_flags(void)
     return SSTEP_ENABLE | SSTEP_NOIRQ;
 }
 
-static void hvf_accel_class_init(ObjectClass *oc, void *data)
+static void hvf_accel_class_init(ObjectClass *oc, const void *data)
 {
     AccelClass *ac = ACCEL_CLASS(oc);
     ac->name = "HVF";
@@ -360,6 +366,7 @@ static void hvf_accel_class_init(ObjectClass *oc, void *data)
 static const TypeInfo hvf_accel_type = {
     .name = TYPE_HVF_ACCEL,
     .parent = TYPE_ACCEL,
+    .instance_size = sizeof(HVFState),
     .class_init = hvf_accel_class_init,
 };
 
@@ -571,7 +578,7 @@ static void hvf_remove_all_breakpoints(CPUState *cpu)
     }
 }
 
-static void hvf_accel_ops_class_init(ObjectClass *oc, void *data)
+static void hvf_accel_ops_class_init(ObjectClass *oc, const void *data)
 {
     AccelOpsClass *ops = ACCEL_OPS_CLASS(oc);
 

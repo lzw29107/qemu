@@ -54,6 +54,7 @@ static enum { RUNNING, TERMINATE, TERMINATING } state;
 static QIOChannelSocket *server_ioc;
 static int server_watch;
 static int num_active_sockets = 1;
+static bool verbose;
 
 #ifdef CONFIG_LIBCAP_NG
 static int uid = -1;
@@ -70,7 +71,6 @@ static void compute_default_paths(void)
 
 static int is_intel_processor(void)
 {
-    int result;
     int ebx, ecx, edx;
 
     /* Execute CPUID instruction with eax=0 (basic identification) */
@@ -86,9 +86,7 @@ static int is_intel_processor(void)
      *  0x49656e69 = "ineI"
      *  0x6c65746e = "ntel"
      */
-    result = (ebx == 0x756e6547) && (edx == 0x49656e69) && (ecx == 0x6c65746e);
-
-    return result;
+    return (ebx == 0x756e6547) && (edx == 0x49656e69) && (ecx == 0x6c65746e);
 }
 
 static int is_rapl_enabled(void)
@@ -227,19 +225,17 @@ static void coroutine_fn vh_co_entry(void *opaque)
                                 &peer_pid,
                                 &local_err);
     if (r < 0) {
-        error_report_err(local_err);
         goto out;
     }
 
-    while (r < 0) {
+    for (;;) {
         /*
          * Read the requested MSR
          * Only RAPL MSR in rapl-msr-index.h is allowed
          */
-        r = qio_channel_read_all(QIO_CHANNEL(client->ioc),
-                                (char *) &request, sizeof(request), &local_err);
-        if (r < 0) {
-            error_report_err(local_err);
+        r = qio_channel_read_all_eof(QIO_CHANNEL(client->ioc),
+                                     (char *) &request, sizeof(request), &local_err);
+        if (r <= 0) {
             break;
         }
 
@@ -261,11 +257,19 @@ static void coroutine_fn vh_co_entry(void *opaque)
                                   sizeof(vmsr),
                                   &local_err);
         if (r < 0) {
-            error_report_err(local_err);
             break;
         }
     }
+
 out:
+    if (local_err) {
+        if (!verbose) {
+            error_free(local_err);
+        } else {
+            error_report_err(local_err);
+        }
+    }
+
     object_unref(OBJECT(client->ioc));
     g_free(client);
 }
@@ -428,6 +432,9 @@ int main(int argc, char **argv)
 #endif
         case 'd':
             daemonize = true;
+            break;
+        case 'v':
+            verbose = true;
             break;
         case 'T':
             trace_opt_parse(optarg);

@@ -140,6 +140,8 @@ CPU_CONVERT(le, 16, uint16_t)
 CPU_CONVERT(le, 32, uint32_t)
 CPU_CONVERT(le, 64, uint64_t)
 
+#undef CPU_CONVERT
+
 /*
  * Same as cpu_to_le{16,32,64}, except that gcc will figure the result is
  * a compile-time constant if you pass in a constant.  So this can be
@@ -202,9 +204,6 @@ CPU_CONVERT(le, 64, uint64_t)
  *   le   : little endian
  *   te   : target endian
  * (except for byte accesses, which have no endian infix).
- *
- * The target endian accessors are obviously only available to source
- * files which are built per-target; they are defined in cpu-all.h.
  *
  * In all cases these functions take a host pointer.
  * For accessors that take a guest address rather than a

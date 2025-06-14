@@ -23,11 +23,11 @@
 #include "block/qdict.h"
 #include "crypto/secret.h"
 #include "qemu/cutils.h"
-#include "sysemu/replay.h"
-#include "qapi/qmp/qstring.h"
-#include "qapi/qmp/qdict.h"
-#include "qapi/qmp/qjson.h"
-#include "qapi/qmp/qlist.h"
+#include "system/replay.h"
+#include "qobject/qstring.h"
+#include "qobject/qdict.h"
+#include "qobject/qjson.h"
+#include "qobject/qlist.h"
 #include "qapi/qobject-input-visitor.h"
 #include "qapi/qapi-visit-block-core.h"
 
@@ -254,7 +254,6 @@ static void qemu_rbd_parse_filename(const char *filename, QDict *options,
 done:
     g_free(buf);
     qobject_unref(keypairs);
-    return;
 }
 
 static int qemu_rbd_set_auth(rados_t cluster, BlockdevOptionsRbd *opts,
@@ -367,11 +366,11 @@ static int qemu_rbd_convert_luks_create_options(
 
     if (luks_opts->has_cipher_alg) {
         switch (luks_opts->cipher_alg) {
-            case QCRYPTO_CIPHER_ALG_AES_128: {
+            case QCRYPTO_CIPHER_ALGO_AES_128: {
                 *alg = RBD_ENCRYPTION_ALGORITHM_AES128;
                 break;
             }
-            case QCRYPTO_CIPHER_ALG_AES_256: {
+            case QCRYPTO_CIPHER_ALGO_AES_256: {
                 *alg = RBD_ENCRYPTION_ALGORITHM_AES256;
                 break;
             }
@@ -1504,9 +1503,9 @@ static int qemu_rbd_diff_iterate_cb(uint64_t offs, size_t len,
 }
 
 static int coroutine_fn qemu_rbd_co_block_status(BlockDriverState *bs,
-                                                 bool want_zero, int64_t offset,
-                                                 int64_t bytes, int64_t *pnum,
-                                                 int64_t *map,
+                                                 unsigned int mode,
+                                                 int64_t offset, int64_t bytes,
+                                                 int64_t *pnum, int64_t *map,
                                                  BlockDriverState **file)
 {
     BDRVRBDState *s = bs->opaque;

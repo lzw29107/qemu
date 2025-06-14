@@ -30,8 +30,8 @@
 #include "migration/vmstate.h"
 #include "qemu/module.h"
 #include "hw/misc/macio/macio.h"
-#include "sysemu/block-backend.h"
-#include "sysemu/dma.h"
+#include "system/block-backend.h"
+#include "system/dma.h"
 
 #include "ide-internal.h"
 
@@ -119,9 +119,6 @@ static void pmac_ide_atapi_transfer_cb(void *opaque, int ret)
     return;
 
 done:
-    dma_memory_unmap(&address_space_memory, io->dma_mem, io->dma_len,
-                     io->dir, io->dma_len);
-
     if (ret < 0) {
         block_acct_failed(blk_get_stats(s->blk), &s->acct);
     } else {
@@ -190,8 +187,7 @@ static void pmac_ide_transfer_cb(void *opaque, int ret)
                                            pmac_ide_transfer_cb, io);
         break;
     case IDE_DMA_TRIM:
-        s->bus->dma->aiocb = dma_blk_io(blk_get_aio_context(s->blk), &s->sg,
-                                        offset, 0x1, ide_issue_trim, s,
+        s->bus->dma->aiocb = dma_blk_io(&s->sg, offset, 0x1, ide_issue_trim, s,
                                         pmac_ide_transfer_cb, io,
                                         DMA_DIRECTION_TO_DEVICE);
         break;
@@ -202,9 +198,6 @@ static void pmac_ide_transfer_cb(void *opaque, int ret)
     return;
 
 done:
-    dma_memory_unmap(&address_space_memory, io->dma_mem, io->dma_len,
-                     io->dir, io->dma_len);
-
     if (s->dma_cmd == IDE_DMA_READ || s->dma_cmd == IDE_DMA_WRITE) {
         if (ret < 0) {
             block_acct_failed(blk_get_stats(s->blk), &s->acct);
@@ -465,18 +458,17 @@ static void macio_ide_initfn(Object *obj)
                              qdev_prop_allow_set_link_before_realize, 0);
 }
 
-static Property macio_ide_properties[] = {
+static const Property macio_ide_properties[] = {
     DEFINE_PROP_UINT32("channel", MACIOIDEState, channel, 0),
     DEFINE_PROP_UINT32("addr", MACIOIDEState, addr, -1),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
-static void macio_ide_class_init(ObjectClass *oc, void *data)
+static void macio_ide_class_init(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
 
     dc->realize = macio_ide_realizefn;
-    dc->reset = macio_ide_reset;
+    device_class_set_legacy_reset(dc, macio_ide_reset);
     device_class_set_props(dc, macio_ide_properties);
     dc->vmsd = &vmstate_pmac;
     set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);

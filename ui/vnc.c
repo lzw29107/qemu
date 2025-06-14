@@ -29,8 +29,8 @@
 #include "vnc-jobs.h"
 #include "trace.h"
 #include "hw/qdev-core.h"
-#include "sysemu/sysemu.h"
-#include "sysemu/runstate.h"
+#include "system/system.h"
+#include "system/runstate.h"
 #include "qemu/error-report.h"
 #include "qemu/main-loop.h"
 #include "qemu/module.h"
@@ -146,8 +146,6 @@ static void vnc_init_basic_info(SocketAddress *addr,
     default:
         abort();
     }
-
-    return;
 }
 
 static void vnc_init_basic_info_from_server_addr(QIOChannelSocket *ioc,
@@ -893,7 +891,7 @@ void vnc_convert_pixel(VncState *vs, uint8_t *buf, uint32_t v)
         buf[0] = v;
         break;
     case 2:
-        if (vs->client_be) {
+        if (vs->client_endian == G_BIG_ENDIAN) {
             buf[0] = v >> 8;
             buf[1] = v;
         } else {
@@ -903,7 +901,7 @@ void vnc_convert_pixel(VncState *vs, uint8_t *buf, uint32_t v)
         break;
     default:
     case 4:
-        if (vs->client_be) {
+        if (vs->client_endian == G_BIG_ENDIAN) {
             buf[0] = v >> 24;
             buf[1] = v >> 16;
             buf[2] = v >> 8;
@@ -1935,7 +1933,7 @@ static void do_key_event(VncState *vs, int down, int keycode, int sym)
     }
 
     qkbd_state_key_event(vs->vd->kbd, qcode, down);
-    if (!qemu_console_is_graphic(vs->vd->dcl.con)) {
+    if (QEMU_IS_TEXT_CONSOLE(vs->vd->dcl.con)) {
         QemuTextConsole *con = QEMU_TEXT_CONSOLE(vs->vd->dcl.con);
         bool numlock = qkbd_state_modifier_get(vs->vd->kbd, QKBD_MOD_NUMLOCK);
         bool control = qkbd_state_modifier_get(vs->vd->kbd, QKBD_MOD_CTRL);
@@ -2242,7 +2240,8 @@ static void set_encodings(VncState *vs, int32_t *encodings, size_t n_encodings)
 
 static void set_pixel_conversion(VncState *vs)
 {
-    pixman_format_code_t fmt = qemu_pixman_get_format(&vs->client_pf);
+    pixman_format_code_t fmt = qemu_pixman_get_format(&vs->client_pf,
+                                                      vs->client_endian);
 
     if (fmt == VNC_SERVER_FB_FORMAT) {
         vs->write_pixels = vnc_write_pixels_copy;
@@ -2314,7 +2313,7 @@ static void set_pixel_format(VncState *vs, int bits_per_pixel,
     vs->client_pf.bits_per_pixel = bits_per_pixel;
     vs->client_pf.bytes_per_pixel = bits_per_pixel / 8;
     vs->client_pf.depth = bits_per_pixel == 32 ? 24 : bits_per_pixel;
-    vs->client_be = big_endian_flag;
+    vs->client_endian = big_endian_flag ? G_BIG_ENDIAN : G_LITTLE_ENDIAN;
 
     if (!true_color_flag) {
         send_color_map(vs);
@@ -2783,7 +2782,7 @@ static int protocol_client_auth_vnc(VncState *vs, uint8_t *data, size_t len)
     vnc_munge_des_rfb_key(key, sizeof(key));
 
     cipher = qcrypto_cipher_new(
-        QCRYPTO_CIPHER_ALG_DES,
+        QCRYPTO_CIPHER_ALGO_DES,
         QCRYPTO_CIPHER_MODE_ECB,
         key, G_N_ELEMENTS(key),
         &err);
@@ -3430,7 +3429,6 @@ static void vnc_display_close(VncDisplay *vd)
     if (!vd) {
         return;
     }
-    vd->is_unix = false;
 
     if (vd->listener) {
         qio_net_listener_disconnect(vd->listener);
@@ -3852,7 +3850,7 @@ static int vnc_display_get_addresses(QemuOpts *opts,
         return 0;
     }
     if (qemu_opt_get(opts, "websocket") &&
-        !qcrypto_hash_supports(QCRYPTO_HASH_ALG_SHA1)) {
+        !qcrypto_hash_supports(QCRYPTO_HASH_ALGO_SHA1)) {
         error_setg(errp,
                    "SHA1 hash support is required for websockets");
         return -1;
@@ -3932,8 +3930,6 @@ static int vnc_display_connect(VncDisplay *vd,
         error_setg(errp, "Expected a single address in reverse mode");
         return -1;
     }
-    /* TODO SOCKET_ADDRESS_TYPE_FD when fd has AF_UNIX */
-    vd->is_unix = saddr_list->value->type == SOCKET_ADDRESS_TYPE_UNIX;
     sioc = qio_channel_socket_new();
     qio_channel_set_name(QIO_CHANNEL(sioc), "vnc-reverse");
     if (qio_channel_socket_connect_sync(sioc, saddr_list->value, errp) < 0) {
@@ -4064,7 +4060,7 @@ void vnc_display_open(const char *id, Error **errp)
     }
     if (password) {
         if (!qcrypto_cipher_supports(
-                QCRYPTO_CIPHER_ALG_DES, QCRYPTO_CIPHER_MODE_ECB)) {
+                QCRYPTO_CIPHER_ALGO_DES, QCRYPTO_CIPHER_MODE_ECB)) {
             error_setg(errp,
                        "Cipher backend does not support DES algorithm");
             goto fail;

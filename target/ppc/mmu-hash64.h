@@ -1,6 +1,8 @@
 #ifndef MMU_HASH64_H
 #define MMU_HASH64_H
 
+#include "exec/tswap.h"
+
 #ifndef CONFIG_USER_ONLY
 
 #ifdef TARGET_PPC64
@@ -120,6 +122,7 @@ const ppc_hash_pte64_t *ppc_hash64_map_hptes(PowerPCCPU *cpu,
                                              hwaddr ptex, int n);
 void ppc_hash64_unmap_hptes(PowerPCCPU *cpu, const ppc_hash_pte64_t *hptes,
                             hwaddr ptex, int n);
+bool ppc_hash64_valid_ptex(PowerPCCPU *cpu, target_ulong ptex);
 
 static inline uint64_t ppc_hash64_hpte0(PowerPCCPU *cpu,
                                         const ppc_hash_pte64_t *hptes, int i)

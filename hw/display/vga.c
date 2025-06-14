@@ -24,7 +24,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/units.h"
-#include "sysemu/reset.h"
+#include "system/reset.h"
 #include "qapi/error.h"
 #include "exec/tswap.h"
 #include "hw/display/vga.h"
@@ -1873,7 +1873,6 @@ void vga_common_reset(VGACommonState *s)
     s->cursor_start = 0;
     s->cursor_end = 0;
     s->cursor_offset = 0;
-    s->big_endian_fb = s->default_endian_fb;
     memset(s->invalidated_y_table, '\0', sizeof(s->invalidated_y_table));
     memset(s->last_palette, '\0', sizeof(s->last_palette));
     memset(s->last_ch_attr, '\0', sizeof(s->last_ch_attr));
@@ -2265,7 +2264,8 @@ bool vga_common_init(VGACommonState *s, Object *obj, Error **errp)
      * into a device attribute set by the machine/platform to remove
      * all target endian dependencies from this file.
      */
-    s->default_endian_fb = target_words_bigendian();
+    s->default_endian_fb = target_big_endian();
+    s->big_endian_fb = s->default_endian_fb;
 
     vga_dirty_log_start(s);
 

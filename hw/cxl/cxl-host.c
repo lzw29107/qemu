@@ -10,7 +10,7 @@
 #include "qemu/bitmap.h"
 #include "qemu/error-report.h"
 #include "qapi/error.h"
-#include "sysemu/qtest.h"
+#include "system/qtest.h"
 #include "hw/boards.h"
 
 #include "qapi/qapi-visit-machine.h"
@@ -67,8 +67,6 @@ static void cxl_fixed_memory_window_config(CXLState *cxl_state,
 
     cxl_state->fixed_windows = g_list_append(cxl_state->fixed_windows,
                                              g_steal_pointer(&fw));
-
-    return;
 }
 
 void cxl_fmws_link_targets(CXLState *cxl_state, Error **errp)

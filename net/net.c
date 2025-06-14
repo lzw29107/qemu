@@ -36,7 +36,7 @@
 #include "qemu/help_option.h"
 #include "qapi/qapi-commands-net.h"
 #include "qapi/qapi-visit-net.h"
-#include "qapi/qmp/qdict.h"
+#include "qobject/qdict.h"
 #include "qapi/qmp/qerror.h"
 #include "qemu/error-report.h"
 #include "qemu/sockets.h"
@@ -51,7 +51,7 @@
 #include "qemu/keyval.h"
 #include "qapi/error.h"
 #include "qapi/opts-visitor.h"
-#include "sysemu/runstate.h"
+#include "system/runstate.h"
 #include "net/colo-compare.h"
 #include "net/filter.h"
 #include "qapi/string-output-visitor.h"
@@ -381,9 +381,12 @@ NetClientState *qemu_get_peer(NetClientState *nc, int queue_index)
     return ncs->peer;
 }
 
-static void qemu_cleanup_net_client(NetClientState *nc)
+static void qemu_cleanup_net_client(NetClientState *nc,
+                                    bool remove_from_net_clients)
 {
-    QTAILQ_REMOVE(&net_clients, nc, next);
+    if (remove_from_net_clients) {
+        QTAILQ_REMOVE(&net_clients, nc, next);
+    }
 
     if (nc->info->cleanup) {
         nc->info->cleanup(nc);
@@ -425,7 +428,13 @@ void qemu_del_net_client(NetClientState *nc)
         object_unparent(OBJECT(nf));
     }
 
-    /* If there is a peer NIC, delete and cleanup client, but do not free. */
+    /*
+     * If there is a peer NIC, transfer ownership to it.  Delete the client
+     * from net_client list but do not cleanup nor free.  This way NIC can
+     * still access to members of the backend.
+     *
+     * The cleanup and free will be done when the NIC is free.
+     */
     if (nc->peer && nc->peer->info->type == NET_CLIENT_DRIVER_NIC) {
         NICState *nic = qemu_get_nic(nc->peer);
         if (nic->peer_deleted) {
@@ -435,21 +444,18 @@ void qemu_del_net_client(NetClientState *nc)
 
         for (i = 0; i < queues; i++) {
             ncs[i]->peer->link_down = true;
+            QTAILQ_REMOVE(&net_clients, ncs[i], next);
         }
 
         if (nc->peer->info->link_status_changed) {
             nc->peer->info->link_status_changed(nc->peer);
         }
 
-        for (i = 0; i < queues; i++) {
-            qemu_cleanup_net_client(ncs[i]);
-        }
-
         return;
     }
 
     for (i = 0; i < queues; i++) {
-        qemu_cleanup_net_client(ncs[i]);
+        qemu_cleanup_net_client(ncs[i], true);
         qemu_free_net_client(ncs[i]);
     }
 }
@@ -462,8 +468,12 @@ void qemu_del_nic(NICState *nic)
 
     for (i = 0; i < queues; i++) {
         NetClientState *nc = qemu_get_subqueue(nic, i);
-        /* If this is a peer NIC and peer has already been deleted, free it now. */
+        /*
+         * If this is a peer NIC and peer has already been deleted, clean it up
+         * and free it now.
+         */
         if (nic->peer_deleted) {
+            qemu_cleanup_net_client(nc->peer, false);
             qemu_free_net_client(nc->peer);
         } else if (nc->peer) {
             /* if there are RX packets pending, complete them */
@@ -474,7 +484,7 @@ void qemu_del_nic(NICState *nic)
     for (i = queues - 1; i >= 0; i--) {
         NetClientState *nc = qemu_get_subqueue(nic, i);
 
-        qemu_cleanup_net_client(nc);
+        qemu_cleanup_net_client(nc, true);
         qemu_free_net_client(nc);
     }
 
@@ -542,6 +552,10 @@ void qemu_set_offload(NetClientState *nc, int csum, int tso4, int tso6,
 
 int qemu_get_vnet_hdr_len(NetClientState *nc)
 {
+    if (!nc) {
+        return 0;
+    }
+
     return nc->vnet_hdr_len;
 }
 
@@ -750,16 +764,6 @@ ssize_t qemu_receive_packet(NetClientState *nc, const uint8_t *buf, int size)
     return qemu_net_queue_receive(nc->incoming_queue, buf, size);
 }
 
-ssize_t qemu_receive_packet_iov(NetClientState *nc, const struct iovec *iov,
-                                int iovcnt)
-{
-    if (!qemu_can_receive_packet(nc)) {
-        return 0;
-    }
-
-    return qemu_net_queue_receive_iov(nc->incoming_queue, iov, iovcnt);
-}
-
 ssize_t qemu_send_packet_raw(NetClientState *nc, const uint8_t *buf, int size)
 {
     return qemu_send_packet_async_with_flags(nc, QEMU_NET_PACKET_FLAG_RAW,
@@ -828,6 +832,7 @@ static ssize_t qemu_deliver_packet_iov(NetClientState *sender,
         iov_copy[0].iov_len =  nc->vnet_hdr_len;
         memcpy(&iov_copy[1], iov, iovcnt * sizeof(*iov));
         iov = iov_copy;
+        iovcnt++;
     }
 
     if (nc->info->receive_iov) {
@@ -1139,6 +1144,21 @@ NICInfo *qemu_find_nic_info(const char *typename, bool match_default,
     return NULL;
 }
 
+static bool is_nic_model_help_option(const char *model)
+{
+    if (model && is_help_option(model)) {
+        /*
+         * Trigger the help output by instantiating the hash table which
+         * will gather tha available models as they get registered.
+         */
+        if (!nic_model_help) {
+            nic_model_help = g_hash_table_new_full(g_str_hash, g_str_equal,
+                                                   g_free, NULL);
+        }
+        return true;
+    }
+    return false;
+}
 
 /* "I have created a device. Please configure it if you can" */
 bool qemu_configure_nic_device(DeviceState *dev, bool match_default,
@@ -1668,6 +1688,9 @@ void net_cleanup(void)
      * of the latest NET_CLIENT_DRIVER_NIC, and operate on *p as we walk
      * the list.
      *
+     * However, the NIC may have peers that trust to be clean beyond this
+     * point.  For example, if they have been removed with device_del.
+     *
      * The 'nc' variable isn't part of the list traversal; it's purely
      * for convenience as too much '(*p)->' has a tendency to make the
      * readers' eyes bleed.
@@ -1675,6 +1698,17 @@ void net_cleanup(void)
     while (*p) {
         nc = *p;
         if (nc->info->type == NET_CLIENT_DRIVER_NIC) {
+            NICState *nic = qemu_get_nic(nc);
+
+            if (nic->peer_deleted) {
+                int queues = MAX(nic->conf->peers.queues, 1);
+
+                for (int i = 0; i < queues; i++) {
+                    nc = qemu_get_subqueue(nic, i);
+                    qemu_cleanup_net_client(nc->peer, false);
+                }
+            }
+
             /* Skip NET_CLIENT_DRIVER_NIC entries */
             p = &QTAILQ_NEXT(nc, next);
         } else {
@@ -1722,6 +1756,12 @@ void net_check_clients(void)
 
 static int net_init_client(void *dummy, QemuOpts *opts, Error **errp)
 {
+    const char *model = qemu_opt_get(opts, "model");
+
+    if (is_nic_model_help_option(model)) {
+        return 0;
+    }
+
     return net_client_init(opts, false, errp);
 }
 
@@ -1778,9 +1818,7 @@ static int net_param_nic(void *dummy, QemuOpts *opts, Error **errp)
     memset(ni, 0, sizeof(*ni));
     ni->model = qemu_opt_get_del(opts, "model");
 
-    if (!nic_model_help && !g_strcmp0(ni->model, "help")) {
-        nic_model_help = g_hash_table_new_full(g_str_hash, g_str_equal,
-                                               g_free, NULL);
+    if (is_nic_model_help_option(ni->model)) {
         return 0;
     }
 

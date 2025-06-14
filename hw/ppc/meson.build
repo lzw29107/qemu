@@ -42,6 +42,7 @@ endif
 ppc_ss.add(when: 'CONFIG_POWERNV', if_true: files(
   'pnv.c',
   'pnv_xscom.c',
+  'pnv_adu.c',
   'pnv_core.c',
   'pnv_i2c.c',
   'pnv_lpc.c',
@@ -56,9 +57,6 @@ ppc_ss.add(when: 'CONFIG_POWERNV', if_true: files(
   'pnv_n1_chiplet.c',
 ))
 # PowerPC 4xx boards
-ppc_ss.add(when: 'CONFIG_PPC405', if_true: files(
-  'ppc405_boards.c',
-  'ppc405_uc.c'))
 ppc_ss.add(when: 'CONFIG_PPC440', if_true: files(
   'ppc440_bamboo.c',
   'ppc440_uc.c'))

@@ -31,18 +31,19 @@
 #include "qapi/qapi-events-run-state.h"
 #include "qapi/qmp/qerror.h"
 #include "exec/gdbstub.h"
-#include "sysemu/hw_accel.h"
+#include "system/accel-ops.h"
+#include "system/hw_accel.h"
 #include "exec/cpu-common.h"
 #include "qemu/thread.h"
 #include "qemu/main-loop.h"
 #include "qemu/plugin.h"
-#include "sysemu/cpus.h"
+#include "system/cpus.h"
 #include "qemu/guest-random.h"
 #include "hw/nmi.h"
-#include "sysemu/replay.h"
-#include "sysemu/runstate.h"
-#include "sysemu/cpu-timers.h"
-#include "sysemu/whpx.h"
+#include "system/replay.h"
+#include "system/runstate.h"
+#include "system/cpu-timers.h"
+#include "system/whpx.h"
 #include "hw/boards.h"
 #include "hw/hw.h"
 #include "trace.h"
@@ -298,14 +299,18 @@ static int do_vm_stop(RunState state, bool send_stop)
         if (oldstate == RUN_STATE_RUNNING) {
             pause_all_vcpus();
         }
-        vm_state_notify(0, state);
+        ret = vm_state_notify(0, state);
         if (send_stop) {
             qapi_event_send_stop();
         }
     }
 
     bdrv_drain_all();
-    ret = bdrv_flush_all();
+    /*
+     * Even if vm_state_notify() return failure,
+     * it would be better to flush as before.
+     */
+    ret |= bdrv_flush_all();
     trace_vm_stop_flush_all(ret);
 
     return ret;
@@ -514,6 +519,20 @@ bool qemu_in_vcpu_thread(void)
 
 QEMU_DEFINE_STATIC_CO_TLS(bool, bql_locked)
 
+static uint32_t bql_unlock_blocked;
+
+void bql_block_unlock(bool increase)
+{
+    uint32_t new_value;
+
+    assert(bql_locked());
+
+    /* check for overflow! */
+    new_value = bql_unlock_blocked + increase - !increase;
+    assert((new_value > bql_unlock_blocked) == increase);
+    bql_unlock_blocked = new_value;
+}
+
 bool bql_locked(void)
 {
     return get_bql_locked();
@@ -522,6 +541,12 @@ bool bql_locked(void)
 bool qemu_in_main_thread(void)
 {
     return bql_locked();
+}
+
+void rust_bql_mock_lock(void)
+{
+    error_report("This function should be used only from tests");
+    abort();
 }
 
 /*
@@ -540,6 +565,7 @@ void bql_lock_impl(const char *file, int line)
 void bql_unlock(void)
 {
     g_assert(bql_locked());
+    g_assert(!bql_unlock_blocked);
     set_bql_locked(false);
     qemu_mutex_unlock(&bql);
 }
@@ -666,7 +692,6 @@ void qemu_init_vcpu(CPUState *cpu)
 {
     MachineState *ms = MACHINE(qdev_get_machine());
 
-    cpu->nr_cores = machine_topo_get_cores_per_socket(ms);
     cpu->nr_threads =  ms->smp.threads;
     cpu->stopped = true;
     cpu->random_seed = qemu_guest_random_seed_thread_part1();
@@ -792,14 +817,14 @@ int vm_stop_force_state(RunState state)
     }
 }
 
-void qmp_memsave(int64_t addr, int64_t size, const char *filename,
+void qmp_memsave(uint64_t addr, uint64_t size, const char *filename,
                  bool has_cpu, int64_t cpu_index, Error **errp)
 {
     FILE *f;
-    uint32_t l;
+    uint64_t l;
     CPUState *cpu;
     uint8_t buf[1024];
-    int64_t orig_addr = addr, orig_size = size;
+    uint64_t orig_addr = addr, orig_size = size;
 
     if (!has_cpu) {
         cpu_index = 0;
@@ -823,7 +848,7 @@ void qmp_memsave(int64_t addr, int64_t size, const char *filename,
         if (l > size)
             l = size;
         if (cpu_memory_rw_debug(cpu, addr, buf, l, 0) != 0) {
-            error_setg(errp, "Invalid addr 0x%016" PRIx64 "/size %" PRId64
+            error_setg(errp, "Invalid addr 0x%016" PRIx64 "/size %" PRIu64
                              " specified", orig_addr, orig_size);
             goto exit;
         }
@@ -840,11 +865,11 @@ exit:
     fclose(f);
 }
 
-void qmp_pmemsave(int64_t addr, int64_t size, const char *filename,
+void qmp_pmemsave(uint64_t addr, uint64_t size, const char *filename,
                   Error **errp)
 {
     FILE *f;
-    uint32_t l;
+    uint64_t l;
     uint8_t buf[1024];
 
     f = fopen(filename, "wb");

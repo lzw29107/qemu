@@ -110,7 +110,6 @@ static void virtio_gpu_ui_info(void *opaque, uint32_t idx, QemuUIInfo *info)
 
     /* send event to guest */
     virtio_gpu_notify_event(g, VIRTIO_GPU_EVENT_DISPLAY);
-    return;
 }
 
 static void
@@ -235,6 +234,9 @@ virtio_gpu_base_get_features(VirtIODevice *vdev, uint64_t features,
     if (virtio_gpu_context_init_enabled(g->conf)) {
         features |= (1 << VIRTIO_GPU_F_CONTEXT_INIT);
     }
+    if (virtio_gpu_resource_uuid_enabled(g->conf)) {
+        features |= (1 << VIRTIO_GPU_F_RESOURCE_UUID);
+    }
 
     return features;
 }
@@ -260,7 +262,7 @@ virtio_gpu_base_device_unrealize(DeviceState *qdev)
 }
 
 static void
-virtio_gpu_base_class_init(ObjectClass *klass, void *data)
+virtio_gpu_base_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     VirtioDeviceClass *vdc = VIRTIO_DEVICE_CLASS(klass);

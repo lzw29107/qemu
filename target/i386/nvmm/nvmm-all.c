@@ -9,12 +9,12 @@
 
 #include "qemu/osdep.h"
 #include "cpu.h"
-#include "exec/address-spaces.h"
-#include "exec/ioport.h"
+#include "system/address-spaces.h"
+#include "system/ioport.h"
 #include "qemu/accel.h"
-#include "sysemu/nvmm.h"
-#include "sysemu/cpus.h"
-#include "sysemu/runstate.h"
+#include "system/nvmm.h"
+#include "system/cpus.h"
+#include "system/runstate.h"
 #include "qemu/main-loop.h"
 #include "qemu/error-report.h"
 #include "qapi/error.h"
@@ -1200,7 +1200,7 @@ nvmm_enabled(void)
 }
 
 static void
-nvmm_accel_class_init(ObjectClass *oc, void *data)
+nvmm_accel_class_init(ObjectClass *oc, const void *data)
 {
     AccelClass *ac = ACCEL_CLASS(oc);
     ac->name = "NVMM";

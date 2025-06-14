@@ -9,9 +9,7 @@
 #define CPU_COMMON_H
 
 #include "exec/vaddr.h"
-#ifndef CONFIG_USER_ONLY
 #include "exec/hwaddr.h"
-#endif
 #include "hw/core/cpu.h"
 #include "tcg/debug-assert.h"
 #include "exec/page-protection.h"
@@ -35,22 +33,16 @@ void cpu_list_lock(void);
 void cpu_list_unlock(void);
 unsigned int cpu_list_generation_id_get(void);
 
+int cpu_get_free_index(void);
+
 void tcg_iommu_init_notifier_list(CPUState *cpu);
 void tcg_iommu_free_notifier_list(CPUState *cpu);
-
-#if !defined(CONFIG_USER_ONLY)
 
 enum device_endian {
     DEVICE_NATIVE_ENDIAN,
     DEVICE_BIG_ENDIAN,
     DEVICE_LITTLE_ENDIAN,
 };
-
-#if HOST_BIG_ENDIAN
-#define DEVICE_HOST_ENDIAN DEVICE_BIG_ENDIAN
-#else
-#define DEVICE_HOST_ENDIAN DEVICE_LITTLE_ENDIAN
-#endif
 
 /* address in the RAM (different from a physical address) */
 #if defined(CONFIG_XEN_BACKEND)
@@ -65,7 +57,7 @@ typedef uintptr_t ram_addr_t;
 
 /* memory API */
 
-void qemu_ram_remap(ram_addr_t addr, ram_addr_t length);
+void qemu_ram_remap(ram_addr_t addr);
 /* This should not be used by devices.  */
 ram_addr_t qemu_ram_addr_from_host(void *ptr);
 ram_addr_t qemu_ram_addr_from_host_nofail(void *ptr);
@@ -174,8 +166,6 @@ int ram_block_discard_range(RAMBlock *rb, uint64_t start, size_t length);
 int ram_block_discard_guest_memfd_range(RAMBlock *rb, uint64_t start,
                                         size_t length);
 
-#endif
-
 /* Returns: 0 on success, -1 on error */
 int cpu_memory_rw_debug(CPUState *cpu, vaddr addr,
                         void *ptr, size_t len, bool is_write);
@@ -184,12 +174,7 @@ int cpu_memory_rw_debug(CPUState *cpu, vaddr addr,
 void list_cpus(void);
 
 #ifdef CONFIG_TCG
-
-bool tcg_cflags_has(CPUState *cpu, uint32_t flags);
-void tcg_cflags_set(CPUState *cpu, uint32_t flags);
-
-/* current cflags for hashing/comparison */
-uint32_t curr_cflags(CPUState *cpu);
+#include "qemu/atomic.h"
 
 /**
  * cpu_unwind_state_data:
@@ -197,7 +182,7 @@ uint32_t curr_cflags(CPUState *cpu);
  * @host_pc: the host pc within the translation
  * @data: output data
  *
- * Attempt to load the the unwind state for a host pc occurring in
+ * Attempt to load the unwind state for a host pc occurring in
  * translated code.  If @host_pc is not in translated code, the
  * function returns false; otherwise @data is loaded.
  * This is the same unwind info as given to restore_state_to_opc.
@@ -215,6 +200,23 @@ bool cpu_unwind_state_data(CPUState *cpu, uintptr_t host_pc, uint64_t *data);
  * restored and the function returns false.
  */
 bool cpu_restore_state(CPUState *cpu, uintptr_t host_pc);
+
+/**
+ * cpu_loop_exit_requested:
+ * @cpu: The CPU state to be tested
+ *
+ * Indicate if somebody asked for a return of the CPU to the main loop
+ * (e.g., via cpu_exit() or cpu_interrupt()).
+ *
+ * This is helpful for architectures that support interruptible
+ * instructions. After writing back all state to registers/memory, this
+ * call can be used to check if it makes sense to return to the main loop
+ * or to continue executing the interruptible instruction.
+ */
+static inline bool cpu_loop_exit_requested(CPUState *cpu)
+{
+    return (int32_t)qatomic_read(&cpu->neg.icount_decr.u32) < 0;
+}
 
 G_NORETURN void cpu_loop_exit_noexc(CPUState *cpu);
 G_NORETURN void cpu_loop_exit_atomic(CPUState *cpu, uintptr_t pc);
@@ -237,6 +239,17 @@ static inline ArchCPU *env_archcpu(CPUArchState *env)
 }
 
 /**
+ * env_cpu_const(env)
+ * @env: The architecture environment
+ *
+ * Return the CPUState associated with the environment.
+ */
+static inline const CPUState *env_cpu_const(const CPUArchState *env)
+{
+    return (void *)env - sizeof(CPUState);
+}
+
+/**
  * env_cpu(env)
  * @env: The architecture environment
  *
@@ -244,27 +257,7 @@ static inline ArchCPU *env_archcpu(CPUArchState *env)
  */
 static inline CPUState *env_cpu(CPUArchState *env)
 {
-    return (void *)env - sizeof(CPUState);
+    return (CPUState *)env_cpu_const(env);
 }
-
-#ifndef CONFIG_USER_ONLY
-/**
- * cpu_mmu_index:
- * @env: The cpu environment
- * @ifetch: True for code access, false for data access.
- *
- * Return the core mmu index for the current translation regime.
- * This function is used by generic TCG code paths.
- *
- * The user-only version of this function is inline in cpu-all.h,
- * where it always returns MMU_USER_IDX.
- */
-static inline int cpu_mmu_index(CPUState *cs, bool ifetch)
-{
-    int ret = cs->cc->mmu_index(cs, ifetch);
-    tcg_debug_assert(ret >= 0 && ret < NB_MMU_MODES);
-    return ret;
-}
-#endif /* !CONFIG_USER_ONLY */
 
 #endif /* CPU_COMMON_H */

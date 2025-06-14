@@ -9,9 +9,6 @@ arm
 avr
   ~ .*/qemu((/include)?/hw/avr/.*|/target/avr/.*)
 
-cris
-  ~ .*/qemu((/include)?/hw/cris/.*|/target/cris/.*)
-
 hexagon-gen (component should be ignored in analysis)
   ~ .*/qemu(/target/hexagon/.*generated.*)
 
@@ -79,7 +76,7 @@ chardev
   ~ .*/qemu((/include)?/chardev/.*)
 
 crypto
-  ~ .*/qemu((/include)?/crypto/.*|/hw/.*/.*crypto.*|(/include/sysemu|/backends)/cryptodev.*|/host/include/.*/host/crypto/.*)
+  ~ .*/qemu((/include)?/crypto/.*|/hw/.*/.*crypto.*|(/include/system|/backends)/cryptodev.*|/host/include/.*/host/crypto/.*)
 
 disas
   ~ .*/qemu((/include)?/disas.*)
@@ -147,7 +144,7 @@ kvm
 tcg
   ~ .*/qemu(/accel/tcg|/replay|/tcg)/.*
 
-sysemu
+system
   ~ .*/qemu(/system/.*|/accel/.*)
 
 (headers)

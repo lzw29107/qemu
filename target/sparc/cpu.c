@@ -22,10 +22,13 @@
 #include "cpu.h"
 #include "qemu/module.h"
 #include "qemu/qemu-print.h"
-#include "exec/exec-all.h"
+#include "accel/tcg/cpu-mmu-index.h"
+#include "exec/translation-block.h"
 #include "hw/qdev-properties.h"
 #include "qapi/visitor.h"
 #include "tcg/tcg.h"
+#include "fpu/softfloat.h"
+#include "target/sparc/translate.h"
 
 //#define DEBUG_FEATURES
 
@@ -76,6 +79,7 @@ static void sparc_cpu_reset_hold(Object *obj, ResetType type)
     env->npc = env->pc + 4;
 #endif
     env->cache_control = 0;
+    cpu_put_fsr(env, 0);
 }
 
 #ifndef CONFIG_USER_ONLY
@@ -102,6 +106,7 @@ static bool sparc_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
 static void cpu_sparc_disas_set_info(CPUState *cpu, disassemble_info *info)
 {
     info->print_insn = print_insn_sparc;
+    info->endian = BFD_ENDIAN_BIG;
 #ifdef TARGET_SPARC64
     info->mach = bfd_mach_sparc_v9b;
 #endif
@@ -574,7 +579,7 @@ static void print_features(uint32_t features, const char *prefix)
     }
 }
 
-void sparc_cpu_list(void)
+static void sparc_cpu_list(void)
 {
     unsigned int i;
 
@@ -711,11 +716,77 @@ static void sparc_cpu_synchronize_from_tb(CPUState *cs,
     cpu->env.npc = tb->cs_base;
 }
 
+static TCGTBCPUState sparc_get_tb_cpu_state(CPUState *cs)
+{
+    CPUSPARCState *env = cpu_env(cs);
+    uint32_t flags = cpu_mmu_index(cs, false);
+
+#ifndef CONFIG_USER_ONLY
+    if (cpu_supervisor_mode(env)) {
+        flags |= TB_FLAG_SUPER;
+    }
+#endif
+#ifdef TARGET_SPARC64
+#ifndef CONFIG_USER_ONLY
+    if (cpu_hypervisor_mode(env)) {
+        flags |= TB_FLAG_HYPER;
+    }
+#endif
+    if (env->pstate & PS_AM) {
+        flags |= TB_FLAG_AM_ENABLED;
+    }
+    if ((env->pstate & PS_PEF) && (env->fprs & FPRS_FEF)) {
+        flags |= TB_FLAG_FPU_ENABLED;
+    }
+    flags |= env->asi << TB_FLAG_ASI_SHIFT;
+#else
+    if (env->psref) {
+        flags |= TB_FLAG_FPU_ENABLED;
+    }
+#ifndef CONFIG_USER_ONLY
+    if (env->fsr_qne) {
+        flags |= TB_FLAG_FSR_QNE;
+    }
+#endif /* !CONFIG_USER_ONLY */
+#endif /* TARGET_SPARC64 */
+
+    return (TCGTBCPUState){
+        .pc = env->pc,
+        .flags = flags,
+        .cs_base = env->npc,
+    };
+}
+
+static void sparc_restore_state_to_opc(CPUState *cs,
+                                       const TranslationBlock *tb,
+                                       const uint64_t *data)
+{
+    CPUSPARCState *env = cpu_env(cs);
+    target_ulong pc = data[0];
+    target_ulong npc = data[1];
+
+    env->pc = pc;
+    if (npc == DYNAMIC_PC) {
+        /* dynamic NPC: already stored */
+    } else if (npc & JUMP_PC) {
+        /* jump PC: use 'cond' and the jump targets of the translation */
+        if (env->cond) {
+            env->npc = npc & ~3;
+        } else {
+            env->npc = pc + 4;
+        }
+    } else {
+        env->npc = npc;
+    }
+}
+
+#ifndef CONFIG_USER_ONLY
 static bool sparc_cpu_has_work(CPUState *cs)
 {
     return (cs->interrupt_request & CPU_INTERRUPT_HARD) &&
            cpu_interrupts_enabled(cpu_env(cs));
 }
+#endif /* !CONFIG_USER_ONLY */
 
 static int sparc_cpu_mmu_index(CPUState *cs, bool ifetch)
 {
@@ -805,7 +876,19 @@ static void sparc_cpu_realizefn(DeviceState *dev, Error **errp)
     env->version |= env->def.maxtl << 8;
     env->version |= env->def.nwindows - 1;
 #endif
-    cpu_put_fsr(env, 0);
+
+    /*
+     * Prefer SNaN over QNaN, order B then A. It's OK to do this in realize
+     * rather than reset, because fp_status is after 'end_reset_fields' in
+     * the CPU state struct so it won't get zeroed on reset.
+     */
+    set_float_2nan_prop_rule(float_2nan_prop_s_ba, &env->fp_status);
+    /* For fused-multiply add, prefer SNaN over QNaN, then C->B->A */
+    set_float_3nan_prop_rule(float_3nan_prop_s_cba, &env->fp_status);
+    /* For inf * 0 + NaN, return the input NaN */
+    set_float_infzeronan_rule(float_infzeronan_dnan_never, &env->fp_status);
+    /* Default NaN value: sign bit clear, all frac bits set */
+    set_float_default_nan_pattern(0b01111111, &env->fp_status);
 
     cpu_exec_realizefn(cs, &local_err);
     if (local_err != NULL) {
@@ -860,14 +943,15 @@ static void sparc_set_nwindows(Object *obj, Visitor *v, const char *name,
     cpu->env.def.nwindows = value;
 }
 
-static PropertyInfo qdev_prop_nwindows = {
-    .name  = "int",
+static const PropertyInfo qdev_prop_nwindows = {
+    .type  = "int",
+    .description = "Number of register windows",
     .get   = sparc_get_nwindows,
     .set   = sparc_set_nwindows,
 };
 
 /* This must match feature_name[]. */
-static Property sparc_cpu_properties[] = {
+static const Property sparc_cpu_properties[] = {
     DEFINE_PROP_BIT("float128", SPARCCPU, env.def.features,
                     CPU_FEATURE_BIT_FLOAT128, false),
 #ifdef TARGET_SPARC64
@@ -903,30 +987,71 @@ static Property sparc_cpu_properties[] = {
     DEFINE_PROP_UINT32("mmu-version", SPARCCPU, env.def.mmu_version, 0),
     DEFINE_PROP("nwindows", SPARCCPU, env.def.nwindows,
                 qdev_prop_nwindows, uint32_t),
-    DEFINE_PROP_END_OF_LIST()
 };
 
 #ifndef CONFIG_USER_ONLY
 #include "hw/core/sysemu-cpu-ops.h"
 
 static const struct SysemuCPUOps sparc_sysemu_ops = {
+    .has_work = sparc_cpu_has_work,
     .get_phys_page_debug = sparc_cpu_get_phys_page_debug,
     .legacy_vmsd = &vmstate_sparc_cpu,
 };
 #endif
 
 #ifdef CONFIG_TCG
-#include "hw/core/tcg-cpu-ops.h"
+#include "accel/tcg/cpu-ops.h"
+
+#ifndef CONFIG_USER_ONLY
+static vaddr sparc_pointer_wrap(CPUState *cs, int mmu_idx,
+                                vaddr result, vaddr base)
+{
+#ifdef TARGET_SPARC64
+    return cpu_env(cs)->pstate & PS_AM ? (uint32_t)result : result;
+#else
+    return (uint32_t)result;
+#endif
+}
+#endif
 
 static const TCGCPUOps sparc_tcg_ops = {
+    /*
+     * From Oracle SPARC Architecture 2015:
+     *
+     *   Compatibility notes: The PSO memory model described in SPARC V8 and
+     *   SPARC V9 compatibility architecture specifications was never
+     *   implemented in a SPARC V9 implementation and is not included in the
+     *   Oracle SPARC Architecture specification.
+     *
+     *   The RMO memory model described in the SPARC V9 specification was
+     *   implemented in some non-Sun SPARC V9 implementations, but is not
+     *   directly supported in Oracle SPARC Architecture 2015 implementations.
+     *
+     * Therefore always use TSO in QEMU.
+     *
+     * D.5 Specification of Partial Store Order (PSO)
+     *   ... [loads] are followed by an implied MEMBAR #LoadLoad | #LoadStore.
+     *
+     * D.6 Specification of Total Store Order (TSO)
+     *   ... PSO with the additional requirement that all [stores] are followed
+     *   by an implied MEMBAR #StoreStore.
+     */
+    .guest_default_memory_order = TCG_MO_LD_LD | TCG_MO_LD_ST | TCG_MO_ST_ST,
+    .mttcg_supported = true,
+
     .initialize = sparc_tcg_init,
+    .translate_code = sparc_translate_code,
+    .get_tb_cpu_state = sparc_get_tb_cpu_state,
     .synchronize_from_tb = sparc_cpu_synchronize_from_tb,
     .restore_state_to_opc = sparc_restore_state_to_opc,
+    .mmu_index = sparc_cpu_mmu_index,
 
 #ifndef CONFIG_USER_ONLY
     .tlb_fill = sparc_cpu_tlb_fill,
+    .pointer_wrap = sparc_pointer_wrap,
     .cpu_exec_interrupt = sparc_cpu_exec_interrupt,
     .cpu_exec_halt = sparc_cpu_has_work,
+    .cpu_exec_reset = cpu_reset,
     .do_interrupt = sparc_cpu_do_interrupt,
     .do_transaction_failed = sparc_cpu_do_transaction_failed,
     .do_unaligned_access = sparc_cpu_do_unaligned_access,
@@ -934,7 +1059,7 @@ static const TCGCPUOps sparc_tcg_ops = {
 };
 #endif /* CONFIG_TCG */
 
-static void sparc_cpu_class_init(ObjectClass *oc, void *data)
+static void sparc_cpu_class_init(ObjectClass *oc, const void *data)
 {
     SPARCCPUClass *scc = SPARC_CPU_CLASS(oc);
     CPUClass *cc = CPU_CLASS(oc);
@@ -949,9 +1074,8 @@ static void sparc_cpu_class_init(ObjectClass *oc, void *data)
                                        &scc->parent_phases);
 
     cc->class_by_name = sparc_cpu_class_by_name;
+    cc->list_cpus = sparc_cpu_list,
     cc->parse_features = sparc_cpu_parse_features;
-    cc->has_work = sparc_cpu_has_work;
-    cc->mmu_index = sparc_cpu_mmu_index;
     cc->dump_state = sparc_cpu_dump_state;
 #if !defined(TARGET_SPARC64) && !defined(CONFIG_USER_ONLY)
     cc->memory_rw_debug = sparc_cpu_memory_rw_debug;
@@ -984,7 +1108,7 @@ static const TypeInfo sparc_cpu_type_info = {
     .class_init = sparc_cpu_class_init,
 };
 
-static void sparc_cpu_cpudef_class_init(ObjectClass *oc, void *data)
+static void sparc_cpu_cpudef_class_init(ObjectClass *oc, const void *data)
 {
     SPARCCPUClass *scc = SPARC_CPU_CLASS(oc);
     scc->cpu_def = data;
@@ -997,10 +1121,10 @@ static void sparc_register_cpudef_type(const struct sparc_def_t *def)
         .name = typename,
         .parent = TYPE_SPARC_CPU,
         .class_init = sparc_cpu_cpudef_class_init,
-        .class_data = (void *)def,
+        .class_data = def,
     };
 
-    type_register(&ti);
+    type_register_static(&ti);
     g_free(typename);
 }
 

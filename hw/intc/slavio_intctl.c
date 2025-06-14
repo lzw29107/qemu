@@ -441,12 +441,12 @@ static void slavio_intctl_init(Object *obj)
     }
 }
 
-static void slavio_intctl_class_init(ObjectClass *klass, void *data)
+static void slavio_intctl_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     InterruptStatsProviderClass *ic = INTERRUPT_STATS_PROVIDER_CLASS(klass);
 
-    dc->reset = slavio_intctl_reset;
+    device_class_set_legacy_reset(dc, slavio_intctl_reset);
     dc->vmsd = &vmstate_intctl;
 #ifdef DEBUG_IRQ_COUNT
     ic->get_statistics = slavio_intctl_get_statistics;
@@ -460,7 +460,7 @@ static const TypeInfo slavio_intctl_info = {
     .instance_size = sizeof(SLAVIO_INTCTLState),
     .instance_init = slavio_intctl_init,
     .class_init    = slavio_intctl_class_init,
-    .interfaces = (InterfaceInfo[]) {
+    .interfaces = (const InterfaceInfo[]) {
         { TYPE_INTERRUPT_STATS_PROVIDER },
         { }
     },

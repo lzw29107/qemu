@@ -14,8 +14,9 @@ Board-specific documentation
 .. toctree::
    :maxdepth: 1
 
-   i386/microvm
    i386/pc
+   i386/microvm
+   i386/nitro-enclave
 
 Architectural features
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -26,9 +27,11 @@ Architectural features
    i386/cpu
    i386/hyperv
    i386/xen
+   i386/xenpvh
    i386/kvm-pv
    i386/sgx
    i386/amd-memory-encryption
+   i386/tdx
 
 OS requirements
 ~~~~~~~~~~~~~~~

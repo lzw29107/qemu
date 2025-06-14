@@ -294,17 +294,16 @@ static const VMStateDescription vmstate_aspeed_sdmc = {
     }
 };
 
-static Property aspeed_sdmc_properties[] = {
+static const Property aspeed_sdmc_properties[] = {
     DEFINE_PROP_UINT64("max-ram-size", AspeedSDMCState, max_ram_size, 0),
     DEFINE_PROP_BOOL("unlocked", AspeedSDMCState, unlocked, false),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
-static void aspeed_sdmc_class_init(ObjectClass *klass, void *data)
+static void aspeed_sdmc_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     dc->realize = aspeed_sdmc_realize;
-    dc->reset = aspeed_sdmc_reset;
+    device_class_set_legacy_reset(dc, aspeed_sdmc_reset);
     dc->desc = "ASPEED SDRAM Memory Controller";
     dc->vmsd = &vmstate_aspeed_sdmc;
     device_class_set_props(dc, aspeed_sdmc_properties);
@@ -381,7 +380,7 @@ static void aspeed_2400_sdmc_write(AspeedSDMCState *s, uint32_t reg,
 static const uint64_t
 aspeed_2400_ram_sizes[] = { 64 * MiB, 128 * MiB, 256 * MiB, 512 * MiB, 0};
 
-static void aspeed_2400_sdmc_class_init(ObjectClass *klass, void *data)
+static void aspeed_2400_sdmc_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     AspeedSDMCClass *asc = ASPEED_SDMC_CLASS(klass);
@@ -449,7 +448,7 @@ static void aspeed_2500_sdmc_write(AspeedSDMCState *s, uint32_t reg,
 static const uint64_t
 aspeed_2500_ram_sizes[] = { 128 * MiB, 256 * MiB, 512 * MiB, 1024 * MiB, 0};
 
-static void aspeed_2500_sdmc_class_init(ObjectClass *klass, void *data)
+static void aspeed_2500_sdmc_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     AspeedSDMCClass *asc = ASPEED_SDMC_CLASS(klass);
@@ -543,7 +542,7 @@ static void aspeed_2600_sdmc_write(AspeedSDMCState *s, uint32_t reg,
 static const uint64_t
 aspeed_2600_ram_sizes[] = { 256 * MiB, 512 * MiB, 1024 * MiB, 2048 * MiB, 0};
 
-static void aspeed_2600_sdmc_class_init(ObjectClass *klass, void *data)
+static void aspeed_2600_sdmc_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     AspeedSDMCClass *asc = ASPEED_SDMC_CLASS(klass);
@@ -671,13 +670,13 @@ static const uint64_t
     aspeed_2700_ram_sizes[] = { 256 * MiB, 512 * MiB, 1024 * MiB,
                                 2048 * MiB, 4096 * MiB, 8192 * MiB, 0};
 
-static void aspeed_2700_sdmc_class_init(ObjectClass *klass, void *data)
+static void aspeed_2700_sdmc_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     AspeedSDMCClass *asc = ASPEED_SDMC_CLASS(klass);
 
     dc->desc = "ASPEED 2700 SDRAM Memory Controller";
-    dc->reset = aspeed_2700_sdmc_reset;
+    device_class_set_legacy_reset(dc, aspeed_2700_sdmc_reset);
 
     asc->is_bus64bit = true;
     asc->max_ram_size = 8 * GiB;

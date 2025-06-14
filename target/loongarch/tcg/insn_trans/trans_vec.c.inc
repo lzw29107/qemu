@@ -3480,7 +3480,7 @@ static uint64_t vldi_get_value(DisasContext *ctx, uint32_t imm)
         break;
     case 1:
         /* data: {2{16'0, imm[7:0], 8'0}} */
-        data = (t << 24) | (t << 8);
+        data = (t << 40) | (t << 8);
         break;
     case 2:
         /* data: {2{8'0, imm[7:0], 16'0}} */
@@ -4655,19 +4655,23 @@ TRANS(xvslti_du, LASX, do_xcmpi, MO_64, TCG_COND_LTU)
 
 static bool do_vfcmp_cond_s(DisasContext *ctx, arg_vvv_fcond *a, uint32_t sz)
 {
-    uint32_t flags;
+    uint32_t flags = get_fcmp_flags(ctx, a->fcond >> 1);
     void (*fn)(TCGv_env, TCGv_i32, TCGv_i32, TCGv_i32, TCGv_i32, TCGv_i32);
     TCGv_i32 vd = tcg_constant_i32(a->vd);
     TCGv_i32 vj = tcg_constant_i32(a->vj);
     TCGv_i32 vk = tcg_constant_i32(a->vk);
     TCGv_i32 oprsz = tcg_constant_i32(sz);
 
+    if(flags == -1){
+        generate_exception(ctx, EXCCODE_INE);
+        return true;
+    }
+
     if (!check_vec(ctx, sz)) {
         return true;
     }
 
     fn = (a->fcond & 1 ? gen_helper_vfcmp_s_s : gen_helper_vfcmp_c_s);
-    flags = get_fcmp_flags(a->fcond >> 1);
     fn(tcg_env, oprsz, vd, vj, vk, tcg_constant_i32(flags));
 
     return true;
@@ -4675,19 +4679,23 @@ static bool do_vfcmp_cond_s(DisasContext *ctx, arg_vvv_fcond *a, uint32_t sz)
 
 static bool do_vfcmp_cond_d(DisasContext *ctx, arg_vvv_fcond *a, uint32_t sz)
 {
-    uint32_t flags;
+    uint32_t flags = get_fcmp_flags(ctx, a->fcond >> 1);
     void (*fn)(TCGv_env, TCGv_i32, TCGv_i32, TCGv_i32, TCGv_i32, TCGv_i32);
     TCGv_i32 vd = tcg_constant_i32(a->vd);
     TCGv_i32 vj = tcg_constant_i32(a->vj);
     TCGv_i32 vk = tcg_constant_i32(a->vk);
     TCGv_i32 oprsz = tcg_constant_i32(sz);
 
+    if (flags == -1) {
+        generate_exception(ctx, EXCCODE_INE);
+        return true;
+    }
+
     if (!check_vec(ctx, sz)) {
         return true;
     }
 
     fn = (a->fcond & 1 ? gen_helper_vfcmp_s_d : gen_helper_vfcmp_c_d);
-    flags = get_fcmp_flags(a->fcond >> 1);
     fn(tcg_env, oprsz, vd, vj, vk, tcg_constant_i32(flags));
 
     return true;
@@ -5126,7 +5134,7 @@ static bool do_vbsrl_v(DisasContext *ctx, arg_vv_i *a, uint32_t oprsz)
 {
     int i, ofs;
 
-    if (!check_vec(ctx, 32)) {
+    if (!check_vec(ctx, oprsz)) {
         return true;
     }
 

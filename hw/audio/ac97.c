@@ -24,7 +24,7 @@
 #include "hw/qdev-properties.h"
 #include "migration/vmstate.h"
 #include "qemu/module.h"
-#include "sysemu/dma.h"
+#include "system/dma.h"
 #include "qom/object.h"
 #include "ac97.h"
 
@@ -1324,12 +1324,11 @@ static void ac97_exit(PCIDevice *dev)
     AUD_remove_card(&s->card);
 }
 
-static Property ac97_properties[] = {
+static const Property ac97_properties[] = {
     DEFINE_AUDIO_PROPERTIES(AC97LinkState, card),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
-static void ac97_class_init(ObjectClass *klass, void *data)
+static void ac97_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
@@ -1344,7 +1343,7 @@ static void ac97_class_init(ObjectClass *klass, void *data)
     dc->desc = "Intel 82801AA AC97 Audio";
     dc->vmsd = &vmstate_ac97;
     device_class_set_props(dc, ac97_properties);
-    dc->reset = ac97_on_reset;
+    device_class_set_legacy_reset(dc, ac97_on_reset);
 }
 
 static const TypeInfo ac97_info = {
@@ -1352,7 +1351,7 @@ static const TypeInfo ac97_info = {
     .parent        = TYPE_PCI_DEVICE,
     .instance_size = sizeof(AC97LinkState),
     .class_init    = ac97_class_init,
-    .interfaces = (InterfaceInfo[]) {
+    .interfaces = (const InterfaceInfo[]) {
         { INTERFACE_CONVENTIONAL_PCI_DEVICE },
         { },
     },

@@ -14,7 +14,7 @@
 #include "qemu/osdep.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
-#include "sysemu/blockdev.h"
+#include "system/blockdev.h"
 #include "hw/irq.h"
 #include "hw/sd/bcm2835_sdhost.h"
 #include "migration/vmstate.h"
@@ -428,11 +428,11 @@ static void bcm2835_sdhost_reset(DeviceState *dev)
     s->fifo_len = 0;
 }
 
-static void bcm2835_sdhost_class_init(ObjectClass *klass, void *data)
+static void bcm2835_sdhost_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->reset = bcm2835_sdhost_reset;
+    device_class_set_legacy_reset(dc, bcm2835_sdhost_reset);
     dc->vmsd = &vmstate_bcm2835_sdhost;
 }
 

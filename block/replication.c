@@ -19,9 +19,9 @@
 #include "block/blockjob.h"
 #include "block/block_int.h"
 #include "block/block_backup.h"
-#include "sysemu/block-backend.h"
+#include "system/block-backend.h"
 #include "qapi/error.h"
-#include "qapi/qmp/qdict.h"
+#include "qobject/qdict.h"
 #include "block/replication.h"
 
 typedef enum {
@@ -176,7 +176,6 @@ static void replication_child_perm(BlockDriverState *bs, BdrvChild *c,
     *nshared = BLK_PERM_CONSISTENT_READ
                | BLK_PERM_WRITE
                | BLK_PERM_WRITE_UNCHANGED;
-    return;
 }
 
 static int64_t coroutine_fn GRAPH_RDLOCK
@@ -541,6 +540,7 @@ static void replication_start(ReplicationState *rs, ReplicationMode mode,
             return;
         }
 
+        bdrv_drain_all_begin();
         bdrv_graph_wrlock();
 
         bdrv_ref(hidden_disk->bs);
@@ -550,6 +550,7 @@ static void replication_start(ReplicationState *rs, ReplicationMode mode,
         if (local_err) {
             error_propagate(errp, local_err);
             bdrv_graph_wrunlock();
+            bdrv_drain_all_end();
             return;
         }
 
@@ -560,6 +561,7 @@ static void replication_start(ReplicationState *rs, ReplicationMode mode,
         if (local_err) {
             error_propagate(errp, local_err);
             bdrv_graph_wrunlock();
+            bdrv_drain_all_end();
             return;
         }
 
@@ -572,20 +574,23 @@ static void replication_start(ReplicationState *rs, ReplicationMode mode,
             !check_top_bs(top_bs, bs)) {
             error_setg(errp, "No top_bs or it is invalid");
             bdrv_graph_wrunlock();
+            bdrv_drain_all_end();
             reopen_backing_file(bs, false, NULL);
             return;
         }
         bdrv_op_block_all(top_bs, s->blocker);
-        bdrv_op_unblock(top_bs, BLOCK_OP_TYPE_DATAPLANE, s->blocker);
 
         bdrv_graph_wrunlock();
+        bdrv_drain_all_end();
 
         s->backup_job = backup_job_create(
                                 NULL, s->secondary_disk->bs, s->hidden_disk->bs,
                                 0, MIRROR_SYNC_MODE_NONE, NULL, 0, false, false,
                                 NULL, &perf,
                                 BLOCKDEV_ON_ERROR_REPORT,
-                                BLOCKDEV_ON_ERROR_REPORT, JOB_INTERNAL,
+                                BLOCKDEV_ON_ERROR_REPORT,
+                                ON_CBW_ERROR_BREAK_GUEST_WRITE,
+                                JOB_INTERNAL,
                                 backup_job_completed, bs, NULL, &local_err);
         if (local_err) {
             error_propagate(errp, local_err);
@@ -651,12 +656,14 @@ static void replication_done(void *opaque, int ret)
     if (ret == 0) {
         s->stage = BLOCK_REPLICATION_DONE;
 
+        bdrv_drain_all_begin();
         bdrv_graph_wrlock();
         bdrv_unref_child(bs, s->secondary_disk);
         s->secondary_disk = NULL;
         bdrv_unref_child(bs, s->hidden_disk);
         s->hidden_disk = NULL;
         bdrv_graph_wrunlock();
+        bdrv_drain_all_end();
 
         s->error = 0;
     } else {

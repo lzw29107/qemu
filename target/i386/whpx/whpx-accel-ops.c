@@ -9,12 +9,13 @@
  */
 
 #include "qemu/osdep.h"
-#include "sysemu/kvm_int.h"
+#include "system/kvm_int.h"
 #include "qemu/main-loop.h"
-#include "sysemu/cpus.h"
+#include "system/accel-ops.h"
+#include "system/cpus.h"
 #include "qemu/guest-random.h"
 
-#include "sysemu/whpx.h"
+#include "system/whpx.h"
 #include "whpx-internal.h"
 #include "whpx-accel-ops.h"
 
@@ -82,7 +83,7 @@ static bool whpx_vcpu_thread_is_idle(CPUState *cpu)
     return !whpx_apic_in_platform();
 }
 
-static void whpx_accel_ops_class_init(ObjectClass *oc, void *data)
+static void whpx_accel_ops_class_init(ObjectClass *oc, const void *data)
 {
     AccelOpsClass *ops = ACCEL_OPS_CLASS(oc);
 

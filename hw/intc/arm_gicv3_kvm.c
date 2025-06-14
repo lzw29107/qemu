@@ -24,8 +24,8 @@
 #include "hw/intc/arm_gicv3_common.h"
 #include "qemu/error-report.h"
 #include "qemu/module.h"
-#include "sysemu/kvm.h"
-#include "sysemu/runstate.h"
+#include "system/kvm.h"
+#include "system/runstate.h"
 #include "kvm_arm.h"
 #include "gicv3_internal.h"
 #include "vgic_common.h"
@@ -893,7 +893,7 @@ static void kvm_arm_gicv3_realize(DeviceState *dev, Error **errp)
     }
 }
 
-static void kvm_arm_gicv3_class_init(ObjectClass *klass, void *data)
+static void kvm_arm_gicv3_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     ResettableClass *rc = RESETTABLE_CLASS(klass);

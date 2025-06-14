@@ -90,6 +90,7 @@ struct PCIDevice {
     char name[64];
     PCIIORegion io_regions[PCI_NUM_REGIONS];
     AddressSpace bus_master_as;
+    bool is_master;
     MemoryRegion bus_master_container_region;
     MemoryRegion bus_master_enable_region;
 
@@ -106,6 +107,9 @@ struct PCIDevice {
 
     /* Capability bits */
     uint32_t cap_present;
+
+    /* Offset of PM capability in config space */
+    uint8_t pm_cap;
 
     /* Offset of MSI-X capability in config space */
     uint8_t msix_cap;
@@ -150,7 +154,7 @@ struct PCIDevice {
     uint32_t romsize;
     bool has_rom;
     MemoryRegion rom;
-    uint32_t rom_bar;
+    int32_t rom_bar;
 
     /* INTx routing notifier */
     PCIINTxRoutingNotifier intx_routing_notifier;
@@ -169,6 +173,13 @@ struct PCIDevice {
     /* ID of standby device in net_failover pair */
     char *failover_pair_id;
     uint32_t acpi_index;
+
+    /*
+     * Indirect DMA region bounce buffer size as configured for the device. This
+     * is a configuration parameter that is reflected into bus_master_as when
+     * realizing the device.
+     */
+    uint32_t max_bounce_buffer_size;
 
     char *sriov_pf;
 };
@@ -214,21 +225,6 @@ static inline uint32_t pci_config_size(const PCIDevice *d)
 static inline uint16_t pci_get_bdf(PCIDevice *dev)
 {
     return PCI_BUILD_BDF(pci_bus_num(pci_get_bus(dev)), dev->devfn);
-}
-
-static inline void pci_set_power(PCIDevice *pci_dev, bool state)
-{
-    /*
-     * Don't change the enabled state of VFs when powering on/off the device.
-     *
-     * When powering on, VFs must not be enabled immediately but they must
-     * wait until the guest configures SR-IOV.
-     * When powering off, their corresponding PFs will be reset and disable
-     * VFs.
-     */
-    if (!pci_is_vf(pci_dev)) {
-        pci_set_enabled(pci_dev, state);
-    }
 }
 
 uint16_t pci_requester_id(PCIDevice *dev);

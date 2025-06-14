@@ -31,23 +31,15 @@
 #include "migration/vmstate.h"
 #include "qemu/timer.h"
 #include "hw/core/cpu.h"
-#include "sysemu/reset.h"
-#include "sysemu/runstate.h"
+#include "system/reset.h"
+#include "system/runstate.h"
 #include "hw/acpi/acpi.h"
 #include "hw/acpi/ich9_tco.h"
+#include "hw/acpi/ich9_timer.h"
 
 #include "hw/southbridge/ich9.h"
 #include "hw/mem/pc-dimm.h"
 #include "hw/mem/nvdimm.h"
-
-//#define DEBUG
-
-#ifdef DEBUG
-#define ICH9_DEBUG(fmt, ...) \
-do { printf("%s "fmt, __func__, ## __VA_ARGS__); } while (0)
-#else
-#define ICH9_DEBUG(fmt, ...)    do { } while (0)
-#endif
 
 static void ich9_pm_update_sci_fn(ACPIREGS *regs)
 {
@@ -108,6 +100,18 @@ static void ich9_smi_writel(void *opaque, hwaddr addr, uint64_t val,
         }
         pm->smi_en &= ~pm->smi_en_wmask;
         pm->smi_en |= (val & pm->smi_en_wmask);
+        if (pm->swsmi_timer_enabled) {
+            ich9_pm_update_swsmi_timer(pm, pm->smi_en &
+                                               ICH9_PMIO_SMI_EN_SWSMI_EN);
+        }
+        if (pm->periodic_timer_enabled) {
+            ich9_pm_update_periodic_timer(pm, pm->smi_en &
+                                                  ICH9_PMIO_SMI_EN_PERIODIC_EN);
+        }
+        break;
+    case 4:
+        pm->smi_sts &= ~pm->smi_sts_wmask;
+        pm->smi_sts |= (val & pm->smi_sts_wmask);
         break;
     }
 }
@@ -122,8 +126,6 @@ static const MemoryRegionOps ich9_smi_ops = {
 
 void ich9_pm_iospace_update(ICH9LPCPMRegs *pm, uint32_t pm_io_base)
 {
-    ICH9_DEBUG("to 0x%x\n", pm_io_base);
-
     assert((pm_io_base & ICH9_PMIO_MASK) == 0);
 
     pm->pm_io_base = pm_io_base;
@@ -286,6 +288,8 @@ static void pm_powerdown_req(Notifier *n, void *opaque)
 
 void ich9_pm_init(PCIDevice *lpc_pci, ICH9LPCPMRegs *pm, qemu_irq sci_irq)
 {
+    pm->smi_sts_wmask = 0;
+
     memory_region_init(&pm->io, OBJECT(lpc_pci), "ich9-pm", ICH9_PMIO_SIZE);
     memory_region_set_enabled(&pm->io, false);
     memory_region_add_subregion(pci_address_space_io(lpc_pci),
@@ -304,6 +308,14 @@ void ich9_pm_init(PCIDevice *lpc_pci, ICH9LPCPMRegs *pm, qemu_irq sci_irq)
     memory_region_init_io(&pm->io_smi, OBJECT(lpc_pci), &ich9_smi_ops, pm,
                           "acpi-smi", 8);
     memory_region_add_subregion(&pm->io, ICH9_PMIO_SMI_EN, &pm->io_smi);
+
+    if (pm->swsmi_timer_enabled) {
+        ich9_pm_swsmi_timer_init(pm);
+    }
+
+    if (pm->periodic_timer_enabled) {
+        ich9_pm_periodic_timer_init(pm);
+    }
 
     if (pm->enable_tco) {
         acpi_pm_tco_init(&pm->tco_regs, &pm->io);
@@ -547,7 +559,7 @@ void ich9_pm_device_unplug_cb(HotplugHandler *hotplug_dev, DeviceState *dev,
 bool ich9_pm_is_hotpluggable_bus(HotplugHandler *hotplug_dev, BusState *bus)
 {
     ICH9LPCState *lpc = ICH9_LPC_DEVICE(hotplug_dev);
-    return acpi_pcihp_is_hotpluggbale_bus(&lpc->pm.acpi_pci_hotplug, bus);
+    return acpi_pcihp_is_hotpluggable_bus(&lpc->pm.acpi_pci_hotplug, bus);
 }
 
 void ich9_pm_ospm_status(AcpiDeviceIf *adev, ACPIOSTInfoList ***list)

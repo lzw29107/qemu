@@ -48,8 +48,8 @@
 # @password: the new password
 #
 # @connected: How to handle existing clients when changing the
-#     password.  If nothing is specified, defaults to 'keep'. For VNC,
-#     only 'keep' is currently implemented.
+#     password.  If nothing is specified, defaults to 'keep'.  For
+#     VNC, only 'keep' is currently implemented.
 #
 # Since: 7.0
 ##
@@ -107,10 +107,11 @@
 #     - '+INT' where INT is the number of seconds from now (integer)
 #     - 'INT' where INT is the absolute time in seconds
 #
-# .. note:: Time is relative to the server and currently there is no way
-#    to coordinate server time with client time.  It is not recommended
-#    to use the absolute time version of the @time parameter unless
-#    you're sure you are on the same machine as the QEMU instance.
+# .. note:: Time is relative to the server and currently there is no
+#    way to coordinate server time with client time.  It is not
+#    recommended to use the absolute time version of the @time
+#    parameter unless you're sure you are on the same machine as the
+#    QEMU instance.
 #
 # Since: 7.0
 ##
@@ -174,8 +175,8 @@
 # @filename: the path of a new file to store the image
 #
 # @device: ID of the display device that should be dumped.  If this
-#     parameter is missing, the primary display will be used.  (Since
-#     2.12)
+#     parameter is missing, the primary display will be used.
+#     (Since 2.12)
 #
 # @head: head to use in case the device supports multiple heads.  If
 #     this parameter is missing, head #0 will be used.  Also note that
@@ -322,7 +323,7 @@
 ##
 # @query-spice:
 #
-# Returns information about the current SPICE server
+# Return information about the current SPICE server
 #
 # Returns: @SpiceInfo
 #
@@ -624,7 +625,7 @@
 # @id: vnc server name.
 #
 # @server: A list of @VncBasincInfo describing all listening sockets.
-#     The list can be empty (in case the vnc server is disabled). It
+#     The list can be empty (in case the vnc server is disabled).  It
 #     also may have multiple entries: normal + websocket, possibly
 #     also ipv4 + ipv6 in the future.
 #
@@ -653,7 +654,7 @@
 ##
 # @query-vnc:
 #
-# Returns information about the current VNC server
+# Return information about the current VNC server
 #
 # Returns: @VncInfo
 #
@@ -684,7 +685,7 @@
 ##
 # @query-vnc-servers:
 #
-# Returns a list of vnc servers.  The list can be empty.
+# Return a list of vnc servers.  The list can be empty.
 #
 # Returns: a list of @VncInfo2
 #
@@ -719,8 +720,8 @@
 #
 # @client: client information
 #
-# .. note:: This event is emitted before any authentication takes place,
-#    thus the authentication ID is not provided.
+# .. note:: This event is emitted before any authentication takes
+#    place, thus the authentication ID is not provided.
 #
 # Since: 0.13
 #
@@ -819,7 +820,7 @@
 ##
 # @query-mice:
 #
-# Returns information about each active mouse device
+# Return information about each active mouse device
 #
 # Returns: a list of @MouseInfo for each device
 #
@@ -948,6 +949,7 @@
 # Since: 1.3
 ##
 { 'enum': 'QKeyCode',
+  'prefix': 'Q_KEY_CODE',
   'data': [ 'unmapped',
             'shift', 'shift_r', 'alt', 'alt_r', 'ctrl',
             'ctrl_r', 'menu', 'esc', '1', '2', '3', '4', '5', '6', '7', '8',
@@ -1131,7 +1133,7 @@
 # @axis: Which axis is referenced by @value.
 #
 # @value: Pointer position.  For absolute coordinates the valid range
-#     is 0 -> 0x7ffff
+#     is 0 to 0x7fff.
 #
 # Since: 2.0
 ##
@@ -1266,7 +1268,7 @@
 # Since: 2.6
 #
 # .. note:: The consoles are visible in the qom tree, under
-#    ``/backend/console[$index]``. They have a device link and head
+#    ``/backend/console[$index]``.  They have a device link and head
 #    property, so it is possible to map which console belongs to which
 #    device and display.
 #
@@ -1416,11 +1418,11 @@
 #
 # @left-command-key: Enable/disable forwarding of left command key to
 #     guest.  Allows command-tab window switching on the host without
-#     sending this key to the guest when "off". Defaults to "on"
+#     sending this key to the guest when "off".  Defaults to "on"
 #
 # @full-grab: Capture all key presses, including system combos.  This
 #     requires accessibility permissions, since it performs a global
-#     grab on key events.  (default: off) See
+#     grab on key events.  (default: off)  See
 #     https://support.apple.com/en-in/guide/mac-help/mh32356/mac
 #
 # @swap-opt-cmd: Swap the Option and Command keys so that their key
@@ -1432,7 +1434,7 @@
 #     "off".  (Since 8.2)
 #
 # @zoom-interpolation: Apply interpolation to smooth output when
-#     zoom-to-fit is enabled. Defaults to "off".  (Since 9.0)
+#     zoom-to-fit is enabled.  Defaults to "off".  (Since 9.0)
 #
 # Since: 7.0
 ##
@@ -1524,12 +1526,12 @@
 #
 # Display (user interface) options.
 #
-# @type: Which DisplayType qemu should use.
+# @type: Which DisplayType QEMU should use.
 #
 # @full-screen: Start user interface in fullscreen mode
 #     (default: off).
 #
-# @window-close: Allow to quit qemu with window close button
+# @window-close: Allow to quit QEMU with window close button
 #     (default: on).
 #
 # @show-cursor: Force showing the mouse cursor (default: off).
@@ -1560,7 +1562,7 @@
 ##
 # @query-display-options:
 #
-# Returns information about display configuration
+# Return information about display configuration
 #
 # Returns: @DisplayOptions
 #

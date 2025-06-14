@@ -53,17 +53,9 @@ config USB_XHCI_SYSBUS
     bool
     select USB_XHCI
 
-config USB_MUSB
-    bool
-    select USB
-
 config USB_DWC2
     bool
     select USB
-
-config TUSB6010
-    bool
-    select USB_MUSB
 
 config USB_HUB
     bool
@@ -151,3 +143,7 @@ config USB_DWC3
 config XLNX_USB_SUBSYS
     bool
     select USB_DWC3
+
+config USB_CHIPIDEA
+    bool
+    select USB_EHCI_SYSBUS

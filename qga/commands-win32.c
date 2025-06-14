@@ -826,8 +826,6 @@ static void get_disk_properties(HANDLE vol_h, GuestDiskAddress *disk,
     }
 out_free:
     g_free(dev_desc);
-
-    return;
 }
 
 static void get_single_disk_info(int disk_number,
@@ -891,7 +889,6 @@ static void get_single_disk_info(int disk_number,
 
 err_close:
     CloseHandle(disk_h);
-    return;
 }
 
 /* VSS provider works with volumes, thus there is no difference if
@@ -1273,6 +1270,9 @@ int64_t qmp_guest_fsfreeze_thaw(Error **errp)
     qga_vss_fsfreeze(&i, false, NULL, errp);
 
     ga_unset_frozen(ga_state);
+
+    slog("guest-fsthaw called");
+
     return i;
 }
 
@@ -1914,7 +1914,7 @@ void qmp_guest_set_user_password(const char *username,
     GError *gerr = NULL;
 
     if (crypted) {
-        error_setg(errp, QERR_UNSUPPORTED);
+        error_setg(errp, "'crypted' must be off on this host");
         return;
     }
 
@@ -2088,7 +2088,7 @@ static const ga_win_10_0_t WIN_10_0_SERVER_VERSION_MATRIX[] = {
     {14393, "Microsoft Windows Server 2016",    "2016"},
     {17763, "Microsoft Windows Server 2019",    "2019"},
     {20344, "Microsoft Windows Server 2022",    "2022"},
-    {26040, "MIcrosoft Windows Server 2025",    "2025"},
+    {26040, "Microsoft Windows Server 2025",    "2025"},
     { }
 };
 
@@ -2114,7 +2114,6 @@ static void ga_get_win_version(RTL_OSVERSIONINFOEXW *info, Error **errp)
 
     rtl_get_version_t rtl_get_version = (rtl_get_version_t)fun;
     rtl_get_version(info);
-    return;
 }
 
 static char *ga_get_win_name(const OSVERSIONINFOEXW *os_version, bool id)

@@ -15,7 +15,7 @@
 #include "block/block_int.h"
 #include "block/qdict.h"
 #include "qapi/error.h"
-#include "qapi/qmp/qdict.h"
+#include "qobject/qdict.h"
 #include "qapi/qmp/qerror.h"
 #include "qemu/error-report.h"
 #include "qemu/module.h"
@@ -514,7 +514,6 @@ static int qemu_gluster_parse_json(BlockdevOptionsGluster *gconf,
     SocketAddressList **tail;
     QDict *backing_options = NULL;
     Error *local_err = NULL;
-    char *str = NULL;
     const char *ptr;
     int i, type, num_servers;
 
@@ -547,7 +546,8 @@ static int qemu_gluster_parse_json(BlockdevOptionsGluster *gconf,
     tail = &gconf->server;
 
     for (i = 0; i < num_servers; i++) {
-        str = g_strdup_printf(GLUSTER_OPT_SERVER_PATTERN"%d.", i);
+        g_autofree char *str = g_strdup_printf(GLUSTER_OPT_SERVER_PATTERN"%d.",
+                                               i);
         qdict_extract_subqdict(options, &backing_options, str);
 
         /* create opts info from runtime_type_opts list */
@@ -658,8 +658,6 @@ static int qemu_gluster_parse_json(BlockdevOptionsGluster *gconf,
 
         qobject_unref(backing_options);
         backing_options = NULL;
-        g_free(str);
-        str = NULL;
     }
 
     return 0;
@@ -668,7 +666,6 @@ out:
     error_propagate(errp, local_err);
     qapi_free_SocketAddress(gsconf);
     qemu_opts_del(opts);
-    g_free(str);
     qobject_unref(backing_options);
     errno = EINVAL;
     return -errno;
@@ -808,6 +805,8 @@ static int qemu_gluster_open(BlockDriverState *bs,  QDict *options,
         ret = -EINVAL;
         goto out;
     }
+
+    warn_report_once("'gluster' is deprecated");
 
     filename = qemu_opt_get(opts, GLUSTER_OPT_FILENAME);
 
@@ -973,8 +972,6 @@ static void qemu_gluster_reopen_commit(BDRVReopenState *state)
 
     g_free(state->opaque);
     state->opaque = NULL;
-
-    return;
 }
 
 
@@ -994,8 +991,6 @@ static void qemu_gluster_reopen_abort(BDRVReopenState *state)
 
     g_free(state->opaque);
     state->opaque = NULL;
-
-    return;
 }
 
 #ifdef CONFIG_GLUSTERFS_ZEROFILL
@@ -1466,7 +1461,7 @@ exit:
  * (Based on raw_co_block_status() from file-posix.c.)
  */
 static int coroutine_fn qemu_gluster_co_block_status(BlockDriverState *bs,
-                                                     bool want_zero,
+                                                     unsigned int mode,
                                                      int64_t offset,
                                                      int64_t bytes,
                                                      int64_t *pnum,
@@ -1483,7 +1478,7 @@ static int coroutine_fn qemu_gluster_co_block_status(BlockDriverState *bs,
         return ret;
     }
 
-    if (!want_zero) {
+    if (!(mode & BDRV_WANT_ZERO)) {
         *pnum = bytes;
         *map = offset;
         *file = bs;

@@ -42,13 +42,6 @@ static const MemoryRegionOps loongarch_pch_msi_ops = {
     .endianness = DEVICE_LITTLE_ENDIAN,
 };
 
-static void pch_msi_irq_handler(void *opaque, int irq, int level)
-{
-    LoongArchPCHMSI *s = LOONGARCH_PCH_MSI(opaque);
-
-    qemu_set_irq(s->pch_msi_irq[irq], level);
-}
-
 static void loongarch_pch_msi_realize(DeviceState *dev, Error **errp)
 {
     LoongArchPCHMSI *s = LOONGARCH_PCH_MSI(dev);
@@ -59,9 +52,7 @@ static void loongarch_pch_msi_realize(DeviceState *dev, Error **errp)
     }
 
     s->pch_msi_irq = g_new(qemu_irq, s->irq_num);
-
     qdev_init_gpio_out(dev, s->pch_msi_irq, s->irq_num);
-    qdev_init_gpio_in(dev, pch_msi_irq_handler, s->irq_num);
 }
 
 static void loongarch_pch_msi_unrealize(DeviceState *dev)
@@ -83,13 +74,12 @@ static void loongarch_pch_msi_init(Object *obj)
 
 }
 
-static Property loongarch_msi_properties[] = {
+static const Property loongarch_msi_properties[] = {
     DEFINE_PROP_UINT32("msi_irq_base", LoongArchPCHMSI, irq_base, 0),
     DEFINE_PROP_UINT32("msi_irq_num",  LoongArchPCHMSI, irq_num, 0),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
-static void loongarch_pch_msi_class_init(ObjectClass *klass, void *data)
+static void loongarch_pch_msi_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 

@@ -26,10 +26,10 @@
 #include "cpu.h"
 #include "cpu-models.h"
 #include "qemu/timer.h"
-#include "sysemu/hw_accel.h"
+#include "system/hw_accel.h"
 #include "kvm_ppc.h"
-#include "sysemu/cpus.h"
-#include "sysemu/device_tree.h"
+#include "system/cpus.h"
+#include "system/device_tree.h"
 #include "mmu-hash64.h"
 
 #include "hw/ppc/spapr.h"
@@ -37,17 +37,19 @@
 #include "hw/hw.h"
 #include "hw/ppc/ppc.h"
 #include "migration/qemu-file-types.h"
-#include "sysemu/watchdog.h"
+#include "system/watchdog.h"
 #include "trace.h"
 #include "gdbstub/enums.h"
 #include "exec/memattrs.h"
-#include "exec/ram_addr.h"
-#include "sysemu/hostmem.h"
+#include "system/ram_addr.h"
+#include "system/hostmem.h"
 #include "qemu/cutils.h"
 #include "qemu/main-loop.h"
 #include "qemu/mmap-alloc.h"
 #include "elf.h"
-#include "sysemu/kvm_int.h"
+#include "system/kvm_int.h"
+#include "system/kvm.h"
+#include "accel/accel-cpu-target.h"
 
 #include CONFIG_DEVICES
 
@@ -90,6 +92,7 @@ static int cap_large_decr;
 static int cap_fwnmi;
 static int cap_rpt_invalidate;
 static int cap_ail_mode_3;
+static int cap_dawr1;
 
 #ifdef CONFIG_PSERIES
 static int cap_papr;
@@ -150,6 +153,7 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
     cap_ppc_nested_kvm_hv = kvm_vm_check_extension(s, KVM_CAP_PPC_NESTED_HV);
     cap_large_decr = kvmppc_get_dec_bits();
     cap_fwnmi = kvm_vm_check_extension(s, KVM_CAP_PPC_FWNMI);
+    cap_dawr1 = kvm_vm_check_extension(s, KVM_CAP_PPC_DAWR1);
     /*
      * Note: setting it to false because there is not such capability
      * in KVM at this moment.
@@ -473,6 +477,11 @@ static void kvmppc_hw_debug_points_init(CPUPPCState *cenv)
         fprintf(stderr, "Error initializing h/w breakpoints\n");
         return;
     }
+}
+
+int kvm_arch_pre_create_vcpu(CPUState *cpu, Error **errp)
+{
+    return 0;
 }
 
 int kvm_arch_init_vcpu(CPUState *cs)
@@ -898,7 +907,7 @@ int kvmppc_put_books_sregs(PowerPCCPU *cpu)
     return kvm_vcpu_ioctl(CPU(cpu), KVM_SET_SREGS, &sregs);
 }
 
-int kvm_arch_put_registers(CPUState *cs, int level)
+int kvm_arch_put_registers(CPUState *cs, int level, Error **errp)
 {
     PowerPCCPU *cpu = POWERPC_CPU(cs);
     CPUPPCState *env = &cpu->env;
@@ -1203,7 +1212,7 @@ static int kvmppc_get_books_sregs(PowerPCCPU *cpu)
     return 0;
 }
 
-int kvm_arch_get_registers(CPUState *cs)
+int kvm_arch_get_registers(CPUState *cs, Error **errp)
 {
     PowerPCCPU *cpu = POWERPC_CPU(cs);
     CPUPPCState *env = &cpu->env;
@@ -1328,7 +1337,6 @@ int kvmppc_set_interrupt(PowerPCCPU *cpu, int irq, int level)
 
 void kvm_arch_pre_run(CPUState *cs, struct kvm_run *run)
 {
-    return;
 }
 
 MemTxAttrs kvm_arch_post_run(CPUState *cs, struct kvm_run *run)
@@ -2112,6 +2120,16 @@ int kvmppc_set_fwnmi(PowerPCCPU *cpu)
     return kvm_vcpu_enable_cap(cs, KVM_CAP_PPC_FWNMI, 0);
 }
 
+bool kvmppc_has_cap_dawr1(void)
+{
+    return !!cap_dawr1;
+}
+
+int kvmppc_set_cap_dawr1(int enable)
+{
+    return kvm_vm_enable_cap(kvm_state, KVM_CAP_PPC_DAWR1, 0, enable);
+}
+
 int kvmppc_smt_threads(void)
 {
     return cap_ppc_smt ? cap_ppc_smt : 1;
@@ -2346,7 +2364,31 @@ static void alter_insns(uint64_t *word, uint64_t flags, bool on)
     }
 }
 
-static void kvmppc_host_cpu_class_init(ObjectClass *oc, void *data)
+static bool kvmppc_cpu_realize(CPUState *cs, Error **errp)
+{
+    int ret;
+    const char *vcpu_str = (cs->parent_obj.hotplugged == true) ?
+                           "hotplug" : "create";
+    cs->cpu_index = cpu_get_free_index();
+
+    POWERPC_CPU(cs)->vcpu_id = cs->cpu_index;
+
+    /* create and park to fail gracefully in case vcpu hotplug fails */
+    ret = kvm_create_and_park_vcpu(cs);
+    if (ret) {
+        /*
+         * This causes QEMU to terminate if initial CPU creation
+         * fails, and only CPU hotplug failure if the error happens
+         * there.
+         */
+        error_setg(errp, "%s: vcpu %s failed with %d",
+                         __func__, vcpu_str, ret);
+        return false;
+    }
+    return true;
+}
+
+static void kvmppc_host_cpu_class_init(ObjectClass *oc, const void *data)
 {
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
     uint32_t dcache_size = kvmppc_read_int_cpu_dt("d-cache-size");
@@ -2607,7 +2649,7 @@ static int kvm_ppc_register_host_cpu_type(void)
         return -1;
     }
     type_info.parent = object_class_get_name(OBJECT_CLASS(pvr_pcc));
-    type_register(&type_info);
+    type_register_static(&type_info);
     /* override TCG default cpu type with 'host' cpu model */
     object_class_foreach(pseries_machine_class_fixup, TYPE_SPAPR_MACHINE,
                          false, NULL);
@@ -2966,3 +3008,23 @@ void kvmppc_set_reg_tb_offset(PowerPCCPU *cpu, int64_t tb_offset)
 void kvm_arch_accel_class_init(ObjectClass *oc)
 {
 }
+
+static void kvm_cpu_accel_class_init(ObjectClass *oc, const void *data)
+{
+    AccelCPUClass *acc = ACCEL_CPU_CLASS(oc);
+
+    acc->cpu_target_realize = kvmppc_cpu_realize;
+}
+
+static const TypeInfo kvm_cpu_accel_type_info = {
+    .name = ACCEL_CPU_NAME("kvm"),
+
+    .parent = TYPE_ACCEL_CPU,
+    .class_init = kvm_cpu_accel_class_init,
+    .abstract = true,
+};
+static void kvm_cpu_accel_register_types(void)
+{
+    type_register_static(&kvm_cpu_accel_type_info);
+}
+type_init(kvm_cpu_accel_register_types);
