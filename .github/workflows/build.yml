@@ -104,7 +104,7 @@ jobs:
     - name: 'Workaround for clangarm64 nsis'
       if: ${{ endsWith(matrix.os, 'arm') && matrix.mode == 'dynamic' }}
       run: |
-          ln -s /clang64/share/nsis/ /clangarm64/share/nsis/
+          ln -d -s /clang64/share/nsis /clangarm64/share/nsis
           ln /clang64/etc/nsisconf.nsh /clangarm64/etc/nsisconf.nsh
           ln /clang64/bin/makensis.exe /clangarm64/bin/makensis.exe
 
