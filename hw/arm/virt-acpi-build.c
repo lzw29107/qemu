@@ -784,6 +784,10 @@ build_madt(GArray *table_data, BIOSLinker *linker, VirtMachineState *vms)
     build_append_int_noprefix(table_data, vms->gic_version, 1);
     build_append_int_noprefix(table_data, 0, 3);   /* Reserved */
 
+    /*
+     * ACPI Parking Protocol: Each CPU gets a unique parked address in the reserved region
+     * [0x09ff8000, 0x09fff000), 0x1000 per CPU, up to 8 CPUs. See VIRT_PARKING_PROTOCOL_BASE in virt.h.
+     */
     for (i = 0; i < MACHINE(vms)->smp.cpus; i++) {
         ARMCPU *armcpu = ARM_CPU(qemu_get_cpu(i));
         uint64_t physical_base_address = 0, gich = 0, gicv = 0;
@@ -806,10 +810,14 @@ build_madt(GArray *table_data, BIOSLinker *linker, VirtMachineState *vms)
         /* Flags */
         build_append_int_noprefix(table_data, 1, 4);    /* Enabled */
         /* Parking Protocol Version */
-        build_append_int_noprefix(table_data, 0, 4);
+        build_append_int_noprefix(table_data, 1, 4);
         /* Performance Interrupt GSIV */
         build_append_int_noprefix(table_data, pmu_interrupt, 4);
-        build_append_int_noprefix(table_data, 0, 8); /* Parked Address */
+        /*
+         * Parked Address: unique per CPU, non-conflicting, see VIRT_PARKING_PROTOCOL_BASE
+         * and reserved region [0x09ff8000, 0x09fff000), 0x1000 per CPU, up to 8 CPUs
+         */
+        build_append_int_noprefix(table_data, memmap[VIRT_PARKING_PROTOCOL_BASE].base + (i * 0x1000), 8);
         /* Physical Base Address */
         build_append_int_noprefix(table_data, physical_base_address, 8);
         build_append_int_noprefix(table_data, gicv, 8); /* GICV */

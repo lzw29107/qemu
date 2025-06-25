@@ -89,6 +89,8 @@
 #include "hw/char/pl011.h"
 #include "qemu/guest-random.h"
 #include "hw/sd/sdhci.h"
+#include "system/memory.h"
+#include "system/cpus.h"
 
 static GlobalProperty arm_virt_compat[] = {
     { TYPE_VIRTIO_IOMMU_PCI, "aw-bits", "48" },
@@ -184,8 +186,10 @@ static const MemMapEntry base_memmap[] = {
     [VIRT_ACPI_GED] =           { 0x09080000, ACPI_GED_EVT_SEL_LEN },
     [VIRT_NVDIMM_ACPI] =        { 0x09090000, NVDIMM_ACPI_IO_LEN},
     [VIRT_PVTIME] =             { 0x090a0000, 0x00010000 },
+    /* ACPI Parking Protocol reserved region: 0x09ff8000 - 0x09fff000, 0x1000 per CPU, up to 8 CPUs */
+    [VIRT_PARKING_PROTOCOL_BASE] = { 0x09ff8000, 0x00008000 },
     [VIRT_SECURE_GPIO] =        { 0x090b0000, 0x00001000 },
-    [VIRT_EHCI_XHCI] =               { 0x090c0000, XHCI_LEN_REGS },
+    [VIRT_EHCI_XHCI] =          { 0x090c0000, XHCI_LEN_REGS },
     [VIRT_SDHCI] =              { 0x090d0000, 0x00010000 },
     [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
@@ -243,6 +247,64 @@ static const int a15irqmap[] = {
     [VIRT_SMMU] = 74,    /* ...to 74 + NUM_SMMU_IRQS - 1 */
     [VIRT_PLATFORM_BUS] = 112, /* ...to 112 + PLATFORM_BUS_NUM_IRQS -1 */
 };
+
+typedef struct VirtParkingProtocolState {
+    MemoryRegion region;
+    CPUState *cpus[8];
+    bool parked[8];
+    int num_cpus;
+} VirtParkingProtocolState;
+
+static uint64_t parking_protocol_read(void *opaque, hwaddr addr, unsigned size)
+{
+    VirtParkingProtocolState *s = (VirtParkingProtocolState *)opaque;
+    int cpu = (addr >> 12) & 0x7;
+    if (cpu >= s->num_cpus) {
+        return 0;
+    }
+    // Optionally: return parked state as 0 (unparked) or 1 (parked)
+    return s->parked[cpu] ? 1 : 0;
+}
+
+static void parking_protocol_write(void *opaque, hwaddr addr, uint64_t data, unsigned size)
+{
+    VirtParkingProtocolState *s = (VirtParkingProtocolState *)opaque;
+    int cpu = (addr >> 12) & 0x7;
+    if (cpu >= s->num_cpus) {
+        return;
+    }
+    if (s->parked[cpu]) {
+        /* Unpark/start the CPU */
+        s->parked[cpu] = false;
+        qemu_cpu_kick(s->cpus[cpu]);
+        /* Optionally: use qemu_cpu_start if needed */
+    }
+}
+
+static const MemoryRegionOps parking_protocol_ops = {
+    .read = parking_protocol_read,
+    .write = parking_protocol_write,
+    .endianness = DEVICE_NATIVE_ENDIAN,
+    .valid = {
+        .min_access_size = 4,
+        .max_access_size = 8,
+    },
+};
+
+static void virt_register_parking_protocol_region(VirtMachineState *vms, MemoryRegion *sysmem)
+{
+    VirtParkingProtocolState *pps = g_new0(VirtParkingProtocolState, 1);
+    int i;
+    pps->num_cpus = MIN(ARRAY_SIZE(pps->cpus), MACHINE(vms)->smp.cpus);
+    for (i = 0; i < pps->num_cpus; ++i) {
+        pps->cpus[i] = qemu_get_cpu(i);
+        pps->parked[i] = true; // Start parked
+    }
+    memory_region_init_io(&pps->region, OBJECT(vms), &parking_protocol_ops, pps,
+                         "acpi-parking-protocol", 0x1000 * pps->num_cpus);
+    memory_region_add_subregion(sysmem, vms->memmap[VIRT_PARKING_PROTOCOL_BASE].base, &pps->region);
+    // Optionally: store pps in vms if needed for later
+}
 
 static void create_randomness(MachineState *ms, const char *node)
 {
@@ -2320,6 +2382,9 @@ static void machvirt_init(MachineState *machine)
 
     create_fdt(vms);
 
+    /* Register ACPI Parking Protocol region */
+    virt_register_parking_protocol_region(vms, sysmem);
+
     assert(possible_cpus->len == max_cpus);
     for (n = 0; n < possible_cpus->len; n++) {
         Object *cpuobj;
@@ -2332,6 +2397,13 @@ static void machvirt_init(MachineState *machine)
         cpuobj = object_new(possible_cpus->cpus[n].type);
         object_property_set_int(cpuobj, "mp-affinity",
                                 possible_cpus->cpus[n].arch_id, NULL);
+        /*
+         * For ACPI Parking Protocol: start all secondary CPUs (index > 0) powered off (parked).
+         * They will only be started/unparked by the guest via the protocol handler.
+         */
+        if (n > 0) {
+            object_property_set_bool(cpuobj, "start-powered-off", true, &error_abort);
+        }
 
         cs = CPU(cpuobj);
         cs->cpu_index = n;
