@@ -81,7 +81,7 @@ enum {
     VIRT_ACPI_GED,
     VIRT_NVDIMM_ACPI,
     VIRT_PVTIME,
-    VIRT_PARKING_PROTOCOL_BASE,
+    VIRT_PARKING_PROTOCOL,
     VIRT_LOWMEMMAP_LAST,
 };
 
@@ -157,7 +157,7 @@ struct VirtMachineState {
     bool xhci;
     bool madt;
     bool force_el3;
-    bool force_psci;
+    OnOffAuto psci;
     OnOffAuto acpi;
     VirtGICType gic_version;
     VirtIOMMUType iommu;
@@ -183,6 +183,21 @@ struct VirtMachineState {
     char *oem_table_id;
     bool ns_el2_virt_timer_irq;
 };
+
+typedef struct VirtParkingMailboxPage {
+    uint32_t processor_id;
+    uint32_t reserved;
+    uint64_t jump_address;
+    uint8_t os_reserved[2032];
+    uint8_t firmware_reserved[2048];
+} __attribute__((packed)) VirtParkingMailboxPage;
+
+typedef struct VirtParkingProtocolState {
+    MemoryRegion region;
+    bool parked[8];
+    VirtParkingMailboxPage mailbox[8];
+    int num_cpus;
+} VirtParkingProtocolState;
 
 #define VIRT_ECAM_ID(high) (high ? VIRT_HIGH_PCIE_ECAM : VIRT_PCIE_ECAM)
 

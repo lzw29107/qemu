@@ -222,8 +222,16 @@ madt
 force_el3
   Set ``on``/``off`` to enable/disable EL3 without secure. The default is ``off``.
 
-force_psci
-  Set ``on``/``off`` to enable/disable builtin PSCI emulation even when EL3 is enabled. The default is ``off``.
+
+psci
+  Set ``on``, ``off``, or ``auto`` to control PSCI (Power State Coordination Interface) support:
+
+  ``on``
+    Always enable QEMU's PSCI implementation (even if EL3 is present).
+  ``off``
+    Always disable PSCI and enable the ACPI Parking Protocol for secondary CPU startup.
+  ``auto``
+    Use QEMU's default logic (enable PSCI unless EL3 firmware is present). This is the default.
 
 Linux guest kernel configuration
 """"""""""""""""""""""""""""""""

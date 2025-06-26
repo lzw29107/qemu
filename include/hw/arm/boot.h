@@ -132,7 +132,11 @@ struct arm_boot_info {
     bool secure_board_setup;
 
     arm_endianness endianness;
-    bool force_psci;
+    /*
+     * PSCI policy: use OnOffAuto enum for QEMU-wide policy.
+     * Set by board code based on OnOffAuto property.
+     */
+    OnOffAuto psci_policy;
 };
 
 /**

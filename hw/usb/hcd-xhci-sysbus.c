@@ -68,12 +68,12 @@ static void xhci_sysbus_instance_init(Object *obj)
     s->xhci.intr_raise = xhci_sysbus_intr_raise;
 }
 
-void xhci_sysbus_build_aml(Aml *scope, uint32_t mmio, unsigned int irq)
+void xhci_sysbus_build_aml(Aml *scope, uint32_t mmio, uint32_t size, unsigned int irq)
 {
     Aml *dev = aml_device("XHCI");
     Aml *crs = aml_resource_template();
 
-    aml_append(crs, aml_memory32_fixed(mmio, XHCI_LEN_REGS, AML_READ_WRITE));
+    aml_append(crs, aml_memory32_fixed(mmio, size, AML_READ_WRITE));
     aml_append(crs, aml_interrupt(AML_CONSUMER, AML_LEVEL, AML_ACTIVE_HIGH,
                                   AML_EXCLUSIVE, &irq, 1));
 

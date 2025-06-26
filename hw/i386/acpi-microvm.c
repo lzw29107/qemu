@@ -86,7 +86,7 @@ static void acpi_dsdt_add_virtio(Aml *scope,
 static void acpi_dsdt_add_xhci(Aml *scope, MicrovmMachineState *mms)
 {
     if (machine_usb(MACHINE(mms))) {
-        xhci_sysbus_build_aml(scope, MICROVM_XHCI_BASE, MICROVM_XHCI_IRQ);
+        xhci_sysbus_build_aml(scope, MICROVM_XHCI_BASE, XHCI_LEN_REGS, MICROVM_XHCI_IRQ);
     }
 }
 
