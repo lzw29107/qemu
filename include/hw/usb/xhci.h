@@ -14,8 +14,8 @@
 #define XHCI_MAXINTRS 16
 
 /* must be power of 2 */
-#define XHCI_LEN_REGS 0x10000
+#define XHCI_LEN_REGS 0x4000
 
-void xhci_sysbus_build_aml(Aml *scope, uint32_t mmio, unsigned int irq);
+void xhci_sysbus_build_aml(Aml *scope, uint32_t mmio, uint32_t size, unsigned int irq);
 
 #endif

@@ -1277,10 +1277,20 @@ void arm_load_kernel(ARMCPU *cpu, MachineState *ms, struct arm_boot_info *info)
         boot_el = arm_feature(env, ARM_FEATURE_EL2) ? 2 : 1;
     }
 
-    if (!info->force_psci &&
-        ((info->psci_conduit == QEMU_PSCI_CONDUIT_HVC && boot_el >= 2) ||
-        (info->psci_conduit == QEMU_PSCI_CONDUIT_SMC && boot_el == 3))) {
+
+    /*
+     * PSCI enablement logic using OnOffAuto:
+     *   ON_OFF_AUTO_ON: always enable PSCI
+     *   ON_OFF_AUTO_OFF: always disable PSCI
+     *   ON_OFF_AUTO_AUTO: legacy QEMU logic
+     */
+    if (info->psci_policy == ON_OFF_AUTO_OFF) {
         info->psci_conduit = QEMU_PSCI_CONDUIT_DISABLED;
+    } else if (info->psci_policy == ON_OFF_AUTO_AUTO) {
+        if ((info->psci_conduit == QEMU_PSCI_CONDUIT_HVC && boot_el >= 2) ||
+            (info->psci_conduit == QEMU_PSCI_CONDUIT_SMC && boot_el == 3)) {
+            info->psci_conduit = QEMU_PSCI_CONDUIT_DISABLED;
+        }
     }
 
     if (info->psci_conduit != QEMU_PSCI_CONDUIT_DISABLED) {

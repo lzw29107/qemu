@@ -81,7 +81,7 @@ enum {
     VIRT_ACPI_GED,
     VIRT_NVDIMM_ACPI,
     VIRT_PVTIME,
-    VIRT_PARKING_PROTOCOL_BASE,
+    VIRT_PARKING_PROTOCOL,
     VIRT_LOWMEMMAP_LAST,
 };
 
@@ -157,7 +157,7 @@ struct VirtMachineState {
     bool xhci;
     bool madt;
     bool force_el3;
-    bool force_psci;
+    OnOffAuto psci;
     OnOffAuto acpi;
     VirtGICType gic_version;
     VirtIOMMUType iommu;

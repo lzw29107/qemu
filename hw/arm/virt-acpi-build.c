@@ -140,7 +140,7 @@ static void acpi_dsdt_add_ehci(Aml *scope, const MemMapEntry *ehci_memmap,
 static void acpi_dsdt_add_xhci(Aml *scope, const MemMapEntry *xhci_memmap,
                               uint32_t xhci_irq)
 {
-    xhci_sysbus_build_aml(scope, xhci_memmap->base, xhci_irq);
+    xhci_sysbus_build_aml(scope, xhci_memmap->base, xhci_memmap->size, xhci_irq);
 }
 
 static void acpi_dsdt_add_pci(Aml *scope, const MemMapEntry *memmap,
@@ -786,14 +786,21 @@ build_madt(GArray *table_data, BIOSLinker *linker, VirtMachineState *vms)
 
     /*
      * ACPI Parking Protocol: Each CPU gets a unique parked address in the reserved region
-     * [0x09ff8000, 0x09fff000), 0x1000 per CPU, up to 8 CPUs. See VIRT_PARKING_PROTOCOL_BASE in virt.h.
+     * [0x09ff8000, 0x09fff000), 0x1000 per CPU, up to 8 CPUs. See VIRT_PARKING_PROTOCOL in virt.h.
      */
     for (i = 0; i < MACHINE(vms)->smp.cpus; i++) {
         ARMCPU *armcpu = ARM_CPU(qemu_get_cpu(i));
-        uint64_t physical_base_address = 0, gich = 0, gicv = 0;
+        uint32_t parking_protocol_version = 0;
+        uint64_t parking_protocol_base = 0, physical_base_address = 0, gich = 0, gicv = 0;
         uint32_t vgic_interrupt = vms->virt ? ARCH_GIC_MAINT_IRQ : 0;
         uint32_t pmu_interrupt = arm_feature(&armcpu->env, ARM_FEATURE_PMU) ?
                                              VIRTUAL_PMU_IRQ : 0;
+
+        if (vms->psci == ON_OFF_AUTO_OFF) {
+            parking_protocol_version = 1;
+            parking_protocol_base = memmap[VIRT_PARKING_PROTOCOL].base +
+                       (memmap[VIRT_PARKING_PROTOCOL].size - ((i + 1) * 0x1000));
+        }
 
         if (vms->gic_version == VIRT_GIC_VERSION_2) {
             physical_base_address = memmap[VIRT_GIC_CPU].base;
@@ -810,14 +817,11 @@ build_madt(GArray *table_data, BIOSLinker *linker, VirtMachineState *vms)
         /* Flags */
         build_append_int_noprefix(table_data, 1, 4);    /* Enabled */
         /* Parking Protocol Version */
-        build_append_int_noprefix(table_data, 1, 4);
+        build_append_int_noprefix(table_data, parking_protocol_version, 4);
         /* Performance Interrupt GSIV */
         build_append_int_noprefix(table_data, pmu_interrupt, 4);
-        /*
-         * Parked Address: unique per CPU, non-conflicting, see VIRT_PARKING_PROTOCOL_BASE
-         * and reserved region [0x09ff8000, 0x09fff000), 0x1000 per CPU, up to 8 CPUs
-         */
-        build_append_int_noprefix(table_data, memmap[VIRT_PARKING_PROTOCOL_BASE].base + (i * 0x1000), 8);
+        /* Parking Protocol Base Address */
+        build_append_int_noprefix(table_data, parking_protocol_base, 8);
         /* Physical Base Address */
         build_append_int_noprefix(table_data, physical_base_address, 8);
         build_append_int_noprefix(table_data, gicv, 8); /* GICV */

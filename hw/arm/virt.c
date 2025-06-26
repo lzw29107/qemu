@@ -186,11 +186,11 @@ static const MemMapEntry base_memmap[] = {
     [VIRT_ACPI_GED] =           { 0x09080000, ACPI_GED_EVT_SEL_LEN },
     [VIRT_NVDIMM_ACPI] =        { 0x09090000, NVDIMM_ACPI_IO_LEN},
     [VIRT_PVTIME] =             { 0x090a0000, 0x00010000 },
-    /* ACPI Parking Protocol reserved region: 0x09ff8000 - 0x09fff000, 0x1000 per CPU, up to 8 CPUs */
-    [VIRT_PARKING_PROTOCOL_BASE] = { 0x09ff8000, 0x00008000 },
     [VIRT_SECURE_GPIO] =        { 0x090b0000, 0x00001000 },
-    [VIRT_EHCI_XHCI] =          { 0x090c0000, XHCI_LEN_REGS },
+    [VIRT_EHCI_XHCI] =          { 0x090c0000, 0x00010000 },
     [VIRT_SDHCI] =              { 0x090d0000, 0x00010000 },
+    /* ACPI Parking Protocol reserved region: 0x09ff8000 - 0x09fff000, 0x1000 per CPU, up to 8 CPUs */
+    [VIRT_PARKING_PROTOCOL] =   { 0x09ff8000, 0x00008000 },
     [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
     [VIRT_PLATFORM_BUS] =       { 0x0c000000, 0x02000000 },
@@ -258,26 +258,30 @@ typedef struct VirtParkingProtocolState {
 static uint64_t parking_protocol_read(void *opaque, hwaddr addr, unsigned size)
 {
     VirtParkingProtocolState *s = (VirtParkingProtocolState *)opaque;
-    int cpu = (addr >> 12) & 0x7;
-    if (cpu >= s->num_cpus) {
+    int slot = (addr >> 12) & 0x7;
+    int cpu = s->num_cpus - 1 - slot;
+    if (cpu < 0 || cpu >= s->num_cpus) {
         return 0;
     }
-    // Optionally: return parked state as 0 (unparked) or 1 (parked)
     return s->parked[cpu] ? 1 : 0;
 }
 
 static void parking_protocol_write(void *opaque, hwaddr addr, uint64_t data, unsigned size)
 {
     VirtParkingProtocolState *s = (VirtParkingProtocolState *)opaque;
-    int cpu = (addr >> 12) & 0x7;
-    if (cpu >= s->num_cpus) {
+    int slot = (addr >> 12) & 0x7;
+    int cpu = s->num_cpus - 1 - slot;
+    if (cpu < 0 || cpu >= s->num_cpus) {
         return;
     }
-    if (s->parked[cpu]) {
-        /* Unpark/start the CPU */
+    if (s->parked[cpu] && data) {
+        CPUState *cs = s->cpus[cpu];
+        if (cs) {
+            cpu_reset(cs);
+            cpu_set_pc(cs, data);
+        }
         s->parked[cpu] = false;
-        qemu_cpu_kick(s->cpus[cpu]);
-        /* Optionally: use qemu_cpu_start if needed */
+        qemu_cpu_kick(cs);
     }
 }
 
@@ -285,10 +289,6 @@ static const MemoryRegionOps parking_protocol_ops = {
     .read = parking_protocol_read,
     .write = parking_protocol_write,
     .endianness = DEVICE_NATIVE_ENDIAN,
-    .valid = {
-        .min_access_size = 4,
-        .max_access_size = 8,
-    },
 };
 
 static void virt_register_parking_protocol_region(VirtMachineState *vms, MemoryRegion *sysmem)
@@ -301,8 +301,8 @@ static void virt_register_parking_protocol_region(VirtMachineState *vms, MemoryR
         pps->parked[i] = true; // Start parked
     }
     memory_region_init_io(&pps->region, OBJECT(vms), &parking_protocol_ops, pps,
-                         "acpi-parking-protocol", 0x1000 * pps->num_cpus);
-    memory_region_add_subregion(sysmem, vms->memmap[VIRT_PARKING_PROTOCOL_BASE].base, &pps->region);
+                         "acpi-parking-protocol", vms->memmap[VIRT_PARKING_PROTOCOL].size);
+    memory_region_add_subregion(sysmem, vms->memmap[VIRT_PARKING_PROTOCOL].base, &pps->region);
     // Optionally: store pps in vms if needed for later
 }
 
@@ -2316,22 +2316,31 @@ static void machvirt_init(MachineState *machine)
     firmware_loaded = virt_firmware_init(vms, sysmem,
                                          secure_sysmem ?: sysmem);
 
-    /* If we have an EL3 boot ROM then the assumption is that it will
-     * implement PSCI itself, so disable QEMU's internal implementation
-     * so it doesn't get in the way. Instead of starting secondary
-     * CPUs in PSCI powerdown state we will start them all running and
-     * let the boot ROM sort them out.
-     * The usual case is that we do use QEMU's PSCI implementation;
-     * if the guest has EL2 then we will use SMC as the conduit,
-     * and otherwise we will use HVC (for backwards compatibility and
-     * because if we're using KVM then we must use HVC).
-     */
-    if (vms->secure && firmware_loaded) {
+    switch (vms->psci) {
+    case ON_OFF_AUTO_ON:
+        /* Always enable QEMU PSCI implementation */
+        if (vms->virt) {
+            vms->psci_conduit = QEMU_PSCI_CONDUIT_SMC;
+        } else {
+            vms->psci_conduit = QEMU_PSCI_CONDUIT_HVC;
+        }
+        break;
+    case ON_OFF_AUTO_OFF:
+        /* Always disable PSCI, enable ACPI Parking Protocol */
         vms->psci_conduit = QEMU_PSCI_CONDUIT_DISABLED;
-    } else if (vms->virt) {
-        vms->psci_conduit = QEMU_PSCI_CONDUIT_SMC;
-    } else {
-        vms->psci_conduit = QEMU_PSCI_CONDUIT_HVC;
+        /* Register ACPI Parking Protocol region (already done below) */
+        break;
+    case ON_OFF_AUTO_AUTO:
+    default:
+        /* Default QEMU logic for PSCI enablement */
+        if (vms->secure && firmware_loaded) {
+            vms->psci_conduit = QEMU_PSCI_CONDUIT_DISABLED;
+        } else if (vms->virt) {
+            vms->psci_conduit = QEMU_PSCI_CONDUIT_SMC;
+        } else {
+            vms->psci_conduit = QEMU_PSCI_CONDUIT_HVC;
+        }
+        break;
     }
 
     /*
@@ -2614,6 +2623,7 @@ static void machvirt_init(MachineState *machine)
                                vms->fw_cfg, OBJECT(vms));
     }
 
+
     vms->bootinfo.ram_size = machine->ram_size;
     vms->bootinfo.board_id = -1;
     vms->bootinfo.loader_start = vms->memmap[VIRT_MEM].base;
@@ -2621,7 +2631,8 @@ static void machvirt_init(MachineState *machine)
     vms->bootinfo.skip_dtb_autoload = true;
     vms->bootinfo.firmware_loaded = firmware_loaded;
     vms->bootinfo.psci_conduit = vms->psci_conduit;
-    vms->bootinfo.force_psci = vms->force_psci;
+    /* Pass PSCI policy to bootinfo using OnOffAuto enum */
+    vms->bootinfo.psci_policy = vms->psci;
     arm_load_kernel(ARM_CPU(first_cpu), machine, &vms->bootinfo);
 
     vms->machine_done.notify = virt_machine_done;
@@ -3009,18 +3020,19 @@ static void virt_set_force_el3(Object *obj, bool value, Error **errp)
     vms->force_el3 = value;
 }
 
-static bool virt_get_force_psci(Object *obj, Error **errp)
+
+
+static void virt_get_psci(Object *obj, Visitor *v, const char *name, void *opaque, Error **errp)
 {
     VirtMachineState *vms = VIRT_MACHINE(obj);
-
-    return vms->force_psci;
+    OnOffAuto psci = vms->psci;
+    visit_type_OnOffAuto(v, name, &psci, errp);
 }
 
-static void virt_set_force_psci(Object *obj, bool value, Error **errp)
+static void virt_set_psci(Object *obj, Visitor *v, const char *name, void *opaque, Error **errp)
 {
     VirtMachineState *vms = VIRT_MACHINE(obj);
-
-    vms->force_psci = value;
+    visit_type_OnOffAuto(v, name, &vms->psci, errp);
 }
 
 static bool virt_get_xhci(Object *obj, Error **errp)
@@ -3588,11 +3600,12 @@ static void virt_machine_class_init(ObjectClass *oc, const void *data)
                                           "Force enable EL3 even when secure is false");
  
  
-    object_class_property_add_bool(oc, "force-psci",
-                                   virt_get_force_psci,
-                                   virt_set_force_psci);
-    object_class_property_set_description(oc, "force-psci",
-                                          "Enable QEMU's builtin PSCI emulation even when EL3 is enabled");
+
+    object_class_property_add(oc, "psci", "OnOffAuto",
+        virt_get_psci, virt_set_psci,
+        NULL, NULL);
+    object_class_property_set_description(oc, "psci",
+        "PSCI support: 'auto' (default QEMU logic), 'on' (always enable), 'off' (always disable, use ACPI Parking Protocol)");
 }
 
 static void virt_instance_init(Object *obj)
@@ -3653,7 +3666,7 @@ static void virt_instance_init(Object *obj)
     vms->xhci = false;
     vms->madt = true;
     vms->force_el3 = false;
-    vms->force_psci = false;
+    vms->psci = ON_OFF_AUTO_AUTO;
 }
 
 static const TypeInfo virt_machine_info = {
