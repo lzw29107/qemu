@@ -1402,7 +1402,7 @@ vhdx_co_writev(BlockDriverState *bs, int64_t sector_num, int nb_sectors,
     QEMUIOVector hd_qiov;
     struct iovec iov1 = { 0 };
     struct iovec iov2 = { 0 };
-    int sectors_to_write;
+    // int sectors_to_write;
     int bat_state;
     uint64_t bat_prior_offset = 0;
     bool bat_update = false;
@@ -1425,7 +1425,7 @@ vhdx_co_writev(BlockDriverState *bs, int64_t sector_num, int nb_sectors,
             goto exit;
         } else {
             vhdx_block_translate(s, sector_num, nb_sectors, &sinfo);
-            sectors_to_write = sinfo.sectors_avail;
+            // sectors_to_write = sinfo.sectors_avail;
 
             qemu_iovec_reset(&hd_qiov);
             /* check the payload block state */
@@ -1474,7 +1474,7 @@ vhdx_co_writev(BlockDriverState *bs, int64_t sector_num, int nb_sectors,
                         memset(iov1.iov_base, 0, iov1.iov_len);
                         qemu_iovec_concat_iov(&hd_qiov, &iov1, 1, 0,
                                               iov1.iov_len);
-                        sectors_to_write += iov1.iov_len >> BDRV_SECTOR_BITS;
+                        // sectors_to_write += iov1.iov_len >> BDRV_SECTOR_BITS;
                     }
 
                     /* our actual data */
@@ -1490,7 +1490,7 @@ vhdx_co_writev(BlockDriverState *bs, int64_t sector_num, int nb_sectors,
                         memset(iov2.iov_base, 0, iov2.iov_len);
                         qemu_iovec_concat_iov(&hd_qiov, &iov2, 1, 0,
                                               iov2.iov_len);
-                        sectors_to_write += iov2.iov_len >> BDRV_SECTOR_BITS;
+                        // sectors_to_write += iov2.iov_len >> BDRV_SECTOR_BITS;
                     }
                 }
 
