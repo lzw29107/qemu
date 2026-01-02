@@ -10,7 +10,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/module.h"
-#include "audio.h"
+#include "qemu/audio.h"
 #include "qemu/error-report.h"
 #include "qapi/error.h"
 #include <spa/param/audio/format-utils.h>
@@ -324,7 +324,7 @@ done_unlock:
 }
 
 static int
-audfmt_to_pw(AudioFormat fmt, int endianness)
+audfmt_to_pw(AudioFormat fmt, bool big_endian)
 {
     int format;
 
@@ -336,19 +336,19 @@ audfmt_to_pw(AudioFormat fmt, int endianness)
         format = SPA_AUDIO_FORMAT_U8;
         break;
     case AUDIO_FORMAT_S16:
-        format = endianness ? SPA_AUDIO_FORMAT_S16_BE : SPA_AUDIO_FORMAT_S16_LE;
+        format = big_endian ? SPA_AUDIO_FORMAT_S16_BE : SPA_AUDIO_FORMAT_S16_LE;
         break;
     case AUDIO_FORMAT_U16:
-        format = endianness ? SPA_AUDIO_FORMAT_U16_BE : SPA_AUDIO_FORMAT_U16_LE;
+        format = big_endian ? SPA_AUDIO_FORMAT_U16_BE : SPA_AUDIO_FORMAT_U16_LE;
         break;
     case AUDIO_FORMAT_S32:
-        format = endianness ? SPA_AUDIO_FORMAT_S32_BE : SPA_AUDIO_FORMAT_S32_LE;
+        format = big_endian ? SPA_AUDIO_FORMAT_S32_BE : SPA_AUDIO_FORMAT_S32_LE;
         break;
     case AUDIO_FORMAT_U32:
-        format = endianness ? SPA_AUDIO_FORMAT_U32_BE : SPA_AUDIO_FORMAT_U32_LE;
+        format = big_endian ? SPA_AUDIO_FORMAT_U32_BE : SPA_AUDIO_FORMAT_U32_LE;
         break;
     case AUDIO_FORMAT_F32:
-        format = endianness ? SPA_AUDIO_FORMAT_F32_BE : SPA_AUDIO_FORMAT_F32_LE;
+        format = big_endian ? SPA_AUDIO_FORMAT_F32_BE : SPA_AUDIO_FORMAT_F32_LE;
         break;
     default:
         dolog("Internal logic error: Bad audio format %d\n", fmt);
@@ -769,13 +769,15 @@ qpw_audio_init(Audiodev *dev, Error **errp)
     pw->core = pw_context_connect(pw->context, NULL, 0);
     if (pw->core == NULL) {
         pw_thread_loop_unlock(pw->thread_loop);
-        goto fail_error;
+        error_setg_errno(errp, errno, "Failed to connect to PipeWire instance");
+        goto fail;
     }
 
     if (pw_core_add_listener(pw->core, &pw->core_listener,
                              &core_events, pw) < 0) {
         pw_thread_loop_unlock(pw->thread_loop);
-        goto fail_error;
+        error_setg(errp, "Failed to add PipeWire listener");
+        goto fail;
     }
     if (wait_resync(pw) < 0) {
         pw_thread_loop_unlock(pw->thread_loop);
@@ -785,8 +787,6 @@ qpw_audio_init(Audiodev *dev, Error **errp)
 
     return g_steal_pointer(&pw);
 
-fail_error:
-    error_setg(errp, "Failed to initialize PW context");
 fail:
     if (pw->thread_loop) {
         pw_thread_loop_stop(pw->thread_loop);
@@ -838,7 +838,6 @@ static struct audio_pcm_ops qpw_pcm_ops = {
 
 static struct audio_driver pw_audio_driver = {
     .name = "pipewire",
-    .descr = "http://www.pipewire.org/",
     .init = qpw_audio_init,
     .fini = qpw_audio_fini,
     .pcm_ops = &qpw_pcm_ops,

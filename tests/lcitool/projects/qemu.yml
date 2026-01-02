@@ -3,6 +3,7 @@ packages:
  - alsa
  - bash
  - bc
+ - bindgen
  - bison
  - brlapi
  - bzip2
@@ -12,6 +13,7 @@ packages:
  - clang
  - cmocka
  - column
+ - coreutils
  - ctags
  - cyrus-sasl
  - daxctl
@@ -32,6 +34,7 @@ packages:
  - glusterfs
  - gnutls
  - gtk3
+ - gtk-vnc
  - hostname
  - json-c
  - libaio
@@ -41,6 +44,8 @@ packages:
  - libc-static
  - libcacard
  - libcap-ng
+ - libcbor
+ - libclang-rt
  - libcurl
  - libdrm
  - libepoxy
@@ -88,7 +93,6 @@ packages:
  - pkg-config
  - pulseaudio
  - python3
- - python3-imp
  - python3-numpy
  - python3-opencv
  - python3-pillow
@@ -100,6 +104,8 @@ packages:
  - python3-tomli
  - python3-venv
  - rpm2cpio
+ - rust
+ - rust-std
  - sdl2
  - sdl2-image
  - sed
@@ -118,6 +124,7 @@ packages:
  - usbredir
  - virglrenderer
  - vte
+ - vulkan-tools
  - which
  - xen
  - xorriso

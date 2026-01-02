@@ -19,16 +19,16 @@
 #include "hw/virtio/virtio-net.h"
 #include "chardev/char-fe.h"
 #include "io/channel-socket.h"
-#include "sysemu/kvm.h"
+#include "system/kvm.h"
 #include "qemu/error-report.h"
 #include "qemu/main-loop.h"
 #include "qemu/uuid.h"
 #include "qemu/sockets.h"
-#include "sysemu/runstate.h"
-#include "sysemu/cryptodev.h"
+#include "system/runstate.h"
+#include "system/cryptodev.h"
 #include "migration/postcopy-ram.h"
 #include "trace.h"
-#include "exec/ramblock.h"
+#include "system/ramblock.h"
 
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -275,7 +275,7 @@ struct scrub_regions {
 static int vhost_user_read_header(struct vhost_dev *dev, VhostUserMsg *msg)
 {
     struct vhost_user *u = dev->opaque;
-    CharBackend *chr = u->user->chr;
+    CharFrontend *chr = u->user->chr;
     uint8_t *p = (uint8_t *) msg;
     int r, size = VHOST_USER_HDR_SIZE;
 
@@ -303,7 +303,7 @@ static int vhost_user_read_header(struct vhost_dev *dev, VhostUserMsg *msg)
 static int vhost_user_read(struct vhost_dev *dev, VhostUserMsg *msg)
 {
     struct vhost_user *u = dev->opaque;
-    CharBackend *chr = u->user->chr;
+    CharFrontend *chr = u->user->chr;
     uint8_t *p = (uint8_t *) msg;
     int r, size;
 
@@ -383,7 +383,7 @@ static int vhost_user_write(struct vhost_dev *dev, VhostUserMsg *msg,
                             int *fds, int fd_num)
 {
     struct vhost_user *u = dev->opaque;
-    CharBackend *chr = u->user->chr;
+    CharFrontend *chr = u->user->chr;
     int ret, size = VHOST_USER_HDR_SIZE + msg->hdr.size;
 
     /*
@@ -654,8 +654,6 @@ static void scrub_shadow_regions(struct vhost_dev *dev,
     }
     *nr_rem_reg = rm_idx;
     *nr_add_reg = add_idx;
-
-    return;
 }
 
 static int send_remove_regions(struct vhost_dev *dev,
@@ -1185,9 +1183,16 @@ static int vhost_user_set_vring_num(struct vhost_dev *dev,
 
 static void vhost_user_host_notifier_free(VhostUserHostNotifier *n)
 {
-    assert(n && n->unmap_addr);
-    munmap(n->unmap_addr, qemu_real_host_page_size());
-    n->unmap_addr = NULL;
+    if (n->unmap_addr) {
+        munmap(n->unmap_addr, qemu_real_host_page_size());
+        n->unmap_addr = NULL;
+    }
+    if (n->destroy) {
+        memory_region_transaction_begin();
+        object_unparent(OBJECT(&n->mr));
+        memory_region_transaction_commit();
+        g_free(n);
+    }
 }
 
 /*
@@ -1195,17 +1200,28 @@ static void vhost_user_host_notifier_free(VhostUserHostNotifier *n)
  * under rcu.
  */
 static void vhost_user_host_notifier_remove(VhostUserHostNotifier *n,
-                                            VirtIODevice *vdev)
+                                            VirtIODevice *vdev, bool destroy)
 {
+    /*
+     * if destroy == false and n->addr == NULL, we have nothing to do.
+     * so, just return.
+     */
+    if (!n || (!destroy && !n->addr)) {
+        return;
+    }
+
     if (n->addr) {
         if (vdev) {
+            memory_region_transaction_begin();
             virtio_queue_set_host_notifier_mr(vdev, n->idx, &n->mr, false);
+            memory_region_transaction_commit();
         }
         assert(!n->unmap_addr);
         n->unmap_addr = n->addr;
         n->addr = NULL;
-        call_rcu(n, vhost_user_host_notifier_free, rcu);
     }
+    n->destroy = destroy;
+    call_rcu(n, vhost_user_host_notifier_free, rcu);
 }
 
 static int vhost_user_set_vring_base(struct vhost_dev *dev,
@@ -1279,9 +1295,7 @@ static int vhost_user_get_vring_base(struct vhost_dev *dev,
     struct vhost_user *u = dev->opaque;
 
     VhostUserHostNotifier *n = fetch_notifier(u->user, ring->index);
-    if (n) {
-        vhost_user_host_notifier_remove(n, dev->vdev);
-    }
+    vhost_user_host_notifier_remove(n, dev->vdev, false);
 
     ret = vhost_user_write(dev, &msg, NULL, 0);
     if (ret < 0) {
@@ -1313,8 +1327,11 @@ static int vhost_set_vring_file(struct vhost_dev *dev,
                                 VhostUserRequest request,
                                 struct vhost_vring_file *file)
 {
+    int ret;
     int fds[VHOST_USER_MAX_RAM_SLOTS];
     size_t fd_num = 0;
+    bool reply_supported = virtio_has_feature(dev->protocol_features,
+                                              VHOST_USER_PROTOCOL_F_REPLY_ACK);
     VhostUserMsg msg = {
         .hdr.request = request,
         .hdr.flags = VHOST_USER_VERSION,
@@ -1322,13 +1339,32 @@ static int vhost_set_vring_file(struct vhost_dev *dev,
         .hdr.size = sizeof(msg.payload.u64),
     };
 
+    if (reply_supported) {
+        msg.hdr.flags |= VHOST_USER_NEED_REPLY_MASK;
+    }
+
     if (file->fd > 0) {
         fds[fd_num++] = file->fd;
     } else {
         msg.payload.u64 |= VHOST_USER_VRING_NOFD_MASK;
     }
 
-    return vhost_user_write(dev, &msg, fds, fd_num);
+    ret = vhost_user_write(dev, &msg, fds, fd_num);
+    if (ret < 0) {
+        return ret;
+    }
+
+    if (reply_supported) {
+        /*
+         * wait for the back-end's confirmation that the new FD is active,
+         * otherwise guest_notifier_mask() could check for pending interrupts
+         * while the back-end is still using the masked event FD, losing
+         * interrupts that occur before the back-end installs the FD
+         */
+        return process_message_reply(dev, &msg);
+    }
+
+    return 0;
 }
 
 static int vhost_user_set_vring_kick(struct vhost_dev *dev,
@@ -1562,7 +1598,7 @@ static int vhost_user_backend_handle_vring_host_notifier(struct vhost_dev *dev,
      * new mapped address.
      */
     n = fetch_or_create_notifier(user, queue_idx);
-    vhost_user_host_notifier_remove(n, vdev);
+    vhost_user_host_notifier_remove(n, vdev, false);
 
     if (area->u64 & VHOST_USER_VRING_NOFD_MASK) {
         return 0;
@@ -1607,9 +1643,14 @@ vhost_user_backend_handle_shared_object_add(struct vhost_dev *dev,
     QemuUUID uuid;
 
     memcpy(uuid.data, object->uuid, sizeof(object->uuid));
-    return virtio_add_vhost_device(&uuid, dev);
+    return !virtio_add_vhost_device(&uuid, dev);
 }
 
+/*
+ * Handle VHOST_USER_BACKEND_SHARED_OBJECT_REMOVE backend requests.
+ *
+ * Return: 0 on success, 1 on error.
+ */
 static int
 vhost_user_backend_handle_shared_object_remove(struct vhost_dev *dev,
                                                VhostUserShared *object)
@@ -1623,16 +1664,16 @@ vhost_user_backend_handle_shared_object_remove(struct vhost_dev *dev,
         struct vhost_dev *owner = virtio_lookup_vhost_device(&uuid);
         if (dev != owner) {
             /* Not allowed to remove non-owned entries */
-            return 0;
+            return 1;
         }
         break;
     }
     default:
         /* Not allowed to remove non-owned entries */
-        return 0;
+        return 1;
     }
 
-    return virtio_remove_resource(&uuid);
+    return !virtio_remove_resource(&uuid);
 }
 
 static bool vhost_user_send_resp(QIOChannel *ioc, VhostUserHeader *hdr,
@@ -1649,19 +1690,11 @@ static bool vhost_user_send_resp(QIOChannel *ioc, VhostUserHeader *hdr,
     return !qio_channel_writev_all(ioc, iov, ARRAY_SIZE(iov), errp);
 }
 
-static bool
-vhost_user_backend_send_dmabuf_fd(QIOChannel *ioc, VhostUserHeader *hdr,
-                                  VhostUserPayload *payload, Error **errp)
-{
-    hdr->size = sizeof(payload->u64);
-    return vhost_user_send_resp(ioc, hdr, payload, errp);
-}
-
 int vhost_user_get_shared_object(struct vhost_dev *dev, unsigned char *uuid,
                                  int *dmabuf_fd)
 {
     struct vhost_user *u = dev->opaque;
-    CharBackend *chr = u->user->chr;
+    CharFrontend *chr = u->user->chr;
     int ret;
     VhostUserMsg msg = {
         .hdr.request = VHOST_USER_GET_SHARED_OBJECT,
@@ -1697,19 +1730,15 @@ int vhost_user_get_shared_object(struct vhost_dev *dev, unsigned char *uuid,
 
 static int
 vhost_user_backend_handle_shared_object_lookup(struct vhost_user *u,
-                                               QIOChannel *ioc,
-                                               VhostUserHeader *hdr,
-                                               VhostUserPayload *payload)
+                                               VhostUserShared *object)
 {
     QemuUUID uuid;
-    CharBackend *chr = u->user->chr;
-    Error *local_err = NULL;
+    CharFrontend *chr = u->user->chr;
     int dmabuf_fd = -1;
     int fd_num = 0;
 
-    memcpy(uuid.data, payload->object.uuid, sizeof(payload->object.uuid));
+    memcpy(uuid.data, object->uuid, sizeof(object->uuid));
 
-    payload->u64 = 0;
     switch (virtio_object_type(&uuid)) {
     case TYPE_DMABUF:
         dmabuf_fd = virtio_lookup_dmabuf(&uuid);
@@ -1718,18 +1747,16 @@ vhost_user_backend_handle_shared_object_lookup(struct vhost_user *u,
     {
         struct vhost_dev *dev = virtio_lookup_vhost_device(&uuid);
         if (dev == NULL) {
-            payload->u64 = -EINVAL;
-            break;
+            return -EINVAL;
         }
         int ret = vhost_user_get_shared_object(dev, uuid.data, &dmabuf_fd);
         if (ret < 0) {
-            payload->u64 = ret;
+            return ret;
         }
         break;
     }
     case TYPE_INVALID:
-        payload->u64 = -EINVAL;
-        break;
+        return -EINVAL;
     }
 
     if (dmabuf_fd != -1) {
@@ -1738,11 +1765,6 @@ vhost_user_backend_handle_shared_object_lookup(struct vhost_user *u,
 
     if (qemu_chr_fe_set_msgfds(chr, &dmabuf_fd, fd_num) < 0) {
         error_report("Failed to set msg fds.");
-        payload->u64 = -EINVAL;
-    }
-
-    if (!vhost_user_backend_send_dmabuf_fd(ioc, hdr, payload, &local_err)) {
-        error_report_err(local_err);
         return -EINVAL;
     }
 
@@ -1771,6 +1793,7 @@ static gboolean backend_read(QIOChannel *ioc, GIOCondition condition,
     struct iovec iov;
     g_autofree int *fd = NULL;
     size_t fdsize = 0;
+    bool reply_ack;
     int i;
 
     /* Read header */
@@ -1788,6 +1811,8 @@ static gboolean backend_read(QIOChannel *ioc, GIOCondition condition,
                 VHOST_USER_PAYLOAD_SIZE);
         goto err;
     }
+
+    reply_ack = hdr.flags & VHOST_USER_NEED_REPLY_MASK;
 
     /* Read payload */
     if (qio_channel_read_all(ioc, (char *) &payload, hdr.size, &local_err)) {
@@ -1814,8 +1839,10 @@ static gboolean backend_read(QIOChannel *ioc, GIOCondition condition,
                                                              &payload.object);
         break;
     case VHOST_USER_BACKEND_SHARED_OBJECT_LOOKUP:
-        ret = vhost_user_backend_handle_shared_object_lookup(dev->opaque, ioc,
-                                                             &hdr, &payload);
+        /* The backend always expects a response */
+        reply_ack = true;
+        ret = vhost_user_backend_handle_shared_object_lookup(dev->opaque,
+                                                             &payload.object);
         break;
     default:
         error_report("Received unexpected msg type: %d.", hdr.request);
@@ -1826,7 +1853,7 @@ static gboolean backend_read(QIOChannel *ioc, GIOCondition condition,
      * REPLY_ACK feature handling. Other reply types has to be managed
      * directly in their request handlers.
      */
-    if (hdr.flags & VHOST_USER_NEED_REPLY_MASK) {
+    if (reply_ack) {
         payload.u64 = !!ret;
         hdr.size = sizeof(payload.u64);
 
@@ -1985,7 +2012,7 @@ static int vhost_user_postcopy_advise(struct vhost_dev *dev, Error **errp)
 {
 #ifdef CONFIG_LINUX
     struct vhost_user *u = dev->opaque;
-    CharBackend *chr = u->user->chr;
+    CharFrontend *chr = u->user->chr;
     int ufd;
     int ret;
     VhostUserMsg msg = {
@@ -2020,7 +2047,10 @@ static int vhost_user_postcopy_advise(struct vhost_dev *dev, Error **errp)
         error_setg(errp, "%s: Failed to get ufd", __func__);
         return -EIO;
     }
-    qemu_socket_set_nonblock(ufd);
+    if (!qemu_set_blocking(ufd, false, errp)) {
+        close(ufd);
+        return -EINVAL;
+    }
 
     /* register ufd with userfault thread */
     u->postcopy_fd.fd = ufd;
@@ -2648,7 +2678,7 @@ static int vhost_user_get_inflight_fd(struct vhost_dev *dev,
     int fd;
     int ret;
     struct vhost_user *u = dev->opaque;
-    CharBackend *chr = u->user->chr;
+    CharFrontend *chr = u->user->chr;
     VhostUserMsg msg = {
         .hdr.request = VHOST_USER_GET_INFLIGHT_FD,
         .hdr.flags = VHOST_USER_VERSION,
@@ -2736,18 +2766,10 @@ static int vhost_user_set_inflight_fd(struct vhost_dev *dev,
 static void vhost_user_state_destroy(gpointer data)
 {
     VhostUserHostNotifier *n = (VhostUserHostNotifier *) data;
-    if (n) {
-        vhost_user_host_notifier_remove(n, NULL);
-        object_unparent(OBJECT(&n->mr));
-        /*
-         * We can't free until vhost_user_host_notifier_remove has
-         * done it's thing so schedule the free with RCU.
-         */
-        g_free_rcu(n, rcu);
-    }
+    vhost_user_host_notifier_remove(n, NULL, true);
 }
 
-bool vhost_user_init(VhostUserState *user, CharBackend *chr, Error **errp)
+bool vhost_user_init(VhostUserState *user, CharFrontend *chr, Error **errp)
 {
     if (user->chr) {
         error_setg(errp, "Cannot initialize vhost-user state");
@@ -2765,9 +2787,7 @@ void vhost_user_cleanup(VhostUserState *user)
     if (!user->chr) {
         return;
     }
-    memory_region_transaction_begin();
     user->notifiers = (GPtrArray *) g_ptr_array_free(user->notifiers, true);
-    memory_region_transaction_commit();
     user->chr = NULL;
 }
 
@@ -2775,7 +2795,7 @@ void vhost_user_cleanup(VhostUserState *user)
 typedef struct {
     vu_async_close_fn cb;
     DeviceState *dev;
-    CharBackend *cd;
+    CharFrontend *cd;
     struct vhost_dev *vhost;
 } VhostAsyncCallback;
 
@@ -2794,7 +2814,7 @@ static void vhost_user_async_close_bh(void *opaque)
  * purposes.
  */
 void vhost_user_async_close(DeviceState *d,
-                            CharBackend *chardev, struct vhost_dev *vhost,
+                            CharFrontend *chardev, struct vhost_dev *vhost,
                             vu_async_close_fn cb)
 {
     if (!runstate_check(RUN_STATE_SHUTDOWN)) {

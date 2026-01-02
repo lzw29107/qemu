@@ -46,8 +46,8 @@ Here is an example of clocks::
                                                 | +-------+    |
                                                 +--------------+
 
-Clocks are defined in the ``include/hw/clock.h`` header and device
-related functions are defined in the ``include/hw/qdev-clock.h``
+Clocks are defined in the ``include/hw/core/clock.h`` header and device
+related functions are defined in the ``include/hw/core/qdev-clock.h``
 header.
 
 The clock state
@@ -97,7 +97,7 @@ Note that it is possible to create a static array describing clock inputs and
 outputs. The function ``qdev_init_clocks()`` must be called with the array as
 parameter to initialize the clocks: it has the same behaviour as calling the
 ``qdev_init_clock_in/out()`` for each clock in the array. To ease the array
-construction, some macros are defined in ``include/hw/qdev-clock.h``.
+construction, some macros are defined in ``include/hw/core/qdev-clock.h``.
 As an example, the following creates 2 clocks to a device: one input and one
 output.
 
@@ -357,6 +357,12 @@ If you are only interested in the frequency for displaying it to
 humans (for instance in debugging), use ``clock_display_freq()``,
 which returns a prettified string-representation, e.g. "33.3 MHz".
 The caller must free the string with g_free() after use.
+
+It's also possible to retrieve the clock period from a QTest by
+accessing QOM property ``qtest-clock-period`` using a QMP command.
+This property is only present when the device is being run under
+the ``qtest`` accelerator; it is not available when QEMU is
+being run normally.
 
 Calculating expiry deadlines
 ----------------------------

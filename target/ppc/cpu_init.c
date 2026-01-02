@@ -22,9 +22,9 @@
 #include "qemu/osdep.h"
 #include "disas/dis-asm.h"
 #include "gdbstub/helpers.h"
-#include "sysemu/cpus.h"
-#include "sysemu/hw_accel.h"
-#include "sysemu/tcg.h"
+#include "system/cpus.h"
+#include "system/hw_accel.h"
+#include "system/tcg.h"
 #include "cpu-models.h"
 #include "mmu-hash32.h"
 #include "mmu-hash64.h"
@@ -32,26 +32,26 @@
 #include "qemu/module.h"
 #include "qemu/qemu-print.h"
 #include "qapi/error.h"
-#include "qapi/qmp/qnull.h"
+#include "qobject/qnull.h"
 #include "qapi/visitor.h"
-#include "hw/qdev-properties.h"
+#include "hw/core/qdev-properties.h"
 #include "hw/ppc/ppc.h"
 #include "mmu-book3s-v3.h"
 #include "qemu/cutils.h"
 #include "disas/capstone.h"
 #include "fpu/softfloat.h"
-
+#include "exec/watchpoint.h"
 #include "helper_regs.h"
 #include "internal.h"
 #include "spr_common.h"
 #include "power8-pmu.h"
-
 #ifndef CONFIG_USER_ONLY
-#include "hw/boards.h"
+#include "hw/core/boards.h"
 #include "hw/intc/intc.h"
 #include "kvm_ppc.h"
 #endif
 
+#include "cpu_init.h"
 /* #define PPC_DEBUG_SPR */
 /* #define USE_APPLE_GDB */
 
@@ -850,6 +850,13 @@ static void register_BookE206_sprs(CPUPPCState *env, uint32_t mas_mask,
         SPR_BOOKE_MAS0, SPR_BOOKE_MAS1, SPR_BOOKE_MAS2, SPR_BOOKE_MAS3,
         SPR_BOOKE_MAS4, SPR_BOOKE_MAS5, SPR_BOOKE_MAS6, SPR_BOOKE_MAS7,
     };
+    const char *tlbcfg_names[4] = {
+        "TLB0CFG", "TLB1CFG", "TLB2CFG", "TLB3CFG",
+    };
+    const int tlbcfg_sprn[4] = {
+        SPR_BOOKE_TLB0CFG, SPR_BOOKE_TLB1CFG,
+        SPR_BOOKE_TLB2CFG, SPR_BOOKE_TLB3CFG,
+    };
     int i;
 
     /* TLB assist registers */
@@ -889,36 +896,27 @@ static void register_BookE206_sprs(CPUPPCState *env, uint32_t mas_mask,
                  SPR_NOACCESS, SPR_NOACCESS,
                  &spr_read_generic, SPR_NOACCESS,
                  mmucfg);
-    switch (env->nb_ways) {
-    case 4:
-        spr_register(env, SPR_BOOKE_TLB3CFG, "TLB3CFG",
+
+    assert(env->nb_ways <= ARRAY_SIZE(tlbcfg_names));
+    for (i = 0; i < env->nb_ways; i++) {
+        spr_register(env, tlbcfg_sprn[i], tlbcfg_names[i],
                      SPR_NOACCESS, SPR_NOACCESS,
                      &spr_read_generic, SPR_NOACCESS,
-                     tlbncfg[3]);
-        /* Fallthru */
-    case 3:
-        spr_register(env, SPR_BOOKE_TLB2CFG, "TLB2CFG",
-                     SPR_NOACCESS, SPR_NOACCESS,
-                     &spr_read_generic, SPR_NOACCESS,
-                     tlbncfg[2]);
-        /* Fallthru */
-    case 2:
-        spr_register(env, SPR_BOOKE_TLB1CFG, "TLB1CFG",
-                     SPR_NOACCESS, SPR_NOACCESS,
-                     &spr_read_generic, SPR_NOACCESS,
-                     tlbncfg[1]);
-        /* Fallthru */
-    case 1:
-        spr_register(env, SPR_BOOKE_TLB0CFG, "TLB0CFG",
-                     SPR_NOACCESS, SPR_NOACCESS,
-                     &spr_read_generic, SPR_NOACCESS,
-                     tlbncfg[0]);
-        /* Fallthru */
-    case 0:
-    default:
-        break;
+                     tlbncfg[i]);
     }
 #endif
+}
+
+static void register_atb_sprs(CPUPPCState *env)
+{
+    spr_register(env, SPR_ATBL, "ATBL",
+                 &spr_read_atbl, SPR_NOACCESS,
+                 &spr_read_atbl, SPR_NOACCESS,
+                 0x00000000);
+    spr_register(env, SPR_ATBU, "ATBU",
+                 &spr_read_atbu, SPR_NOACCESS,
+                 &spr_read_atbu, SPR_NOACCESS,
+                 0x00000000);
 }
 
 /* SPR specific to PowerPC 440 implementation */
@@ -1641,6 +1639,47 @@ static void register_8xx_sprs(CPUPPCState *env)
  * ... and more (thermal management, performance counters, ...)
  */
 
+static void register_ppe42_sprs(CPUPPCState *env)
+{
+    spr_register(env, SPR_PPE42_EDR, "EDR",
+                 SPR_NOACCESS, SPR_NOACCESS,
+                 &spr_read_generic, &spr_write_generic,
+                 0x00000000);
+    spr_register(env, SPR_PPE42_ISR, "ISR",
+                 SPR_NOACCESS, SPR_NOACCESS,
+                 &spr_read_generic, &spr_write_generic,
+                 0x00000000);
+    spr_register(env, SPR_PPE42_IVPR, "IVPR",
+                 SPR_NOACCESS, SPR_NOACCESS,
+                 &spr_read_generic, SPR_NOACCESS,
+                 0xfff80000);
+    spr_register(env, SPR_PPE42_PIR, "PIR",
+                 SPR_NOACCESS, SPR_NOACCESS,
+                 &spr_read_generic, &spr_write_pir,
+                 0x00000000);
+    spr_register(env, SPR_PPE42_DBCR, "DBCR",
+                 SPR_NOACCESS, SPR_NOACCESS,
+                 &spr_read_generic, &spr_write_40x_dbcr0,
+                 0x00000000);
+    spr_register(env, SPR_PPE42_DACR, "DACR",
+                 SPR_NOACCESS, SPR_NOACCESS,
+                 &spr_read_generic, &spr_write_generic,
+                 0x00000000);
+    /* Timer */
+    spr_register(env, SPR_DECR, "DECR",
+                 SPR_NOACCESS, SPR_NOACCESS,
+                 &spr_read_decr, &spr_write_decr,
+                 0x00000000);
+    spr_register(env, SPR_PPE42_TSR, "TSR",
+                 SPR_NOACCESS, SPR_NOACCESS,
+                 &spr_read_generic, &spr_write_booke_tsr,
+                 0x00000000);
+    spr_register(env, SPR_BOOKE_TCR, "TCR",
+                 SPR_NOACCESS, SPR_NOACCESS,
+                 &spr_read_generic, &spr_write_booke_tcr,
+                 0x00000000);
+}
+
 /*****************************************************************************/
 /* Exception vectors models                                                  */
 static void init_excp_4xx(CPUPPCState *env)
@@ -1664,6 +1703,30 @@ static void init_excp_4xx(CPUPPCState *env)
     env->ivpr_mask = 0xFFFF0000UL;
     /* Hardware reset vector */
     env->hreset_vector = 0xFFFFFFFCUL;
+#endif
+}
+
+static void init_excp_ppe42(CPUPPCState *env)
+{
+#if !defined(CONFIG_USER_ONLY)
+    /* Machine Check vector changed after version 0 */
+    if (((env->spr[SPR_PVR] & 0xf00000ul) >> 20) == 0) {
+        env->excp_vectors[POWERPC_EXCP_MCHECK]   = 0x00000000;
+    } else {
+        env->excp_vectors[POWERPC_EXCP_MCHECK]   = 0x00000020;
+    }
+    env->excp_vectors[POWERPC_EXCP_RESET]    = 0x00000040;
+    env->excp_vectors[POWERPC_EXCP_DSI]      = 0x00000060;
+    env->excp_vectors[POWERPC_EXCP_ISI]      = 0x00000080;
+    env->excp_vectors[POWERPC_EXCP_EXTERNAL] = 0x000000A0;
+    env->excp_vectors[POWERPC_EXCP_ALIGN]    = 0x000000C0;
+    env->excp_vectors[POWERPC_EXCP_PROGRAM]  = 0x000000E0;
+    env->excp_vectors[POWERPC_EXCP_DECR]     = 0x00000100;
+    env->excp_vectors[POWERPC_EXCP_FIT]      = 0x00000120;
+    env->excp_vectors[POWERPC_EXCP_WDT]      = 0x00000140;
+    env->ivpr_mask = 0xFFFFFE00UL;
+    /* Hardware reset vector */
+    env->hreset_vector = 0x00000040UL;
 #endif
 }
 
@@ -1748,7 +1811,7 @@ static void init_excp_G2(CPUPPCState *env)
 #endif
 }
 
-static void init_excp_e200(CPUPPCState *env, target_ulong ivpr_mask)
+static void init_excp_e500(CPUPPCState *env, target_ulong ivpr_mask)
 {
 #if !defined(CONFIG_USER_ONLY)
     env->excp_vectors[POWERPC_EXCP_RESET]    = 0x00000FFC;
@@ -2154,7 +2217,7 @@ static void init_proc_405(CPUPPCState *env)
     SET_WDT_PERIOD(16, 20, 24, 28);
 }
 
-POWERPC_FAMILY(405)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(405)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -2186,6 +2249,80 @@ POWERPC_FAMILY(405)(ObjectClass *oc, void *data)
     pcc->bfd_mach = bfd_mach_ppc_403;
     pcc->flags = POWERPC_FLAG_CE | POWERPC_FLAG_DWE |
                  POWERPC_FLAG_DE | POWERPC_FLAG_BUS_CLK;
+}
+
+static void init_proc_ppe42(CPUPPCState *env)
+{
+    register_ppe42_sprs(env);
+
+    init_excp_ppe42(env);
+    env->dcache_line_size = 32;
+    env->icache_line_size = 32;
+    /* Allocate hardware IRQ controller */
+    ppc40x_irq_init(env_archcpu(env));
+
+    SET_FIT_PERIOD(8, 12, 16, 20);
+    SET_WDT_PERIOD(16, 20, 24, 28);
+}
+
+static void ppe42_class_common_init(PowerPCCPUClass *pcc)
+{
+    pcc->init_proc = init_proc_ppe42;
+    pcc->check_pow = check_pow_nocheck;
+    pcc->check_attn = check_attn_none;
+    pcc->insns_flags = PPC_INSNS_BASE |
+                       PPC_WRTEE |
+                       PPC_CACHE |
+                       PPC_CACHE_DCBZ |
+                       PPC_MEM_SYNC;
+    pcc->msr_mask = R_MSR_SEM_MASK |
+                    (1ull << MSR_IS0) |
+                    R_MSR_SIBRC_MASK |
+                    (1ull << MSR_LP) |
+                    (1ull << MSR_WE) |
+                    (1ull << MSR_IS1) |
+                    (1ull << MSR_UIE) |
+                    (1ull << MSR_EE) |
+                    (1ull << MSR_ME) |
+                    (1ull << MSR_IS2) |
+                    (1ull << MSR_IS3) |
+                    (1ull << MSR_IPE) |
+                    R_MSR_SIBRCA_MASK;
+    pcc->mmu_model = POWERPC_MMU_REAL;
+    pcc->excp_model = POWERPC_EXCP_PPE42;
+    pcc->bus_model = PPC_FLAGS_INPUT_PPE42;
+    pcc->bfd_mach = bfd_mach_ppc_403;
+    pcc->flags = POWERPC_FLAG_PPE42 | POWERPC_FLAG_BUS_CLK;
+}
+
+POWERPC_FAMILY(ppe42)(ObjectClass *oc, const void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(oc);
+    PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
+
+    dc->desc = "PPE 42";
+    pcc->insns_flags2 = PPC2_PPE42;
+    ppe42_class_common_init(pcc);
+}
+
+POWERPC_FAMILY(ppe42x)(ObjectClass *oc, const void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(oc);
+    PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
+
+    dc->desc = "PPE 42X";
+    pcc->insns_flags2 = PPC2_PPE42 | PPC2_PPE42X;
+    ppe42_class_common_init(pcc);
+}
+
+POWERPC_FAMILY(ppe42xm)(ObjectClass *oc, const void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(oc);
+    PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
+
+    dc->desc = "PPE 42XM";
+    pcc->insns_flags2 = PPC2_PPE42 | PPC2_PPE42X | PPC2_PPE42XM;
+    ppe42_class_common_init(pcc);
 }
 
 static void init_proc_440EP(CPUPPCState *env)
@@ -2222,7 +2359,7 @@ static void init_proc_440EP(CPUPPCState *env)
     SET_WDT_PERIOD(20, 24, 28, 32);
 }
 
-POWERPC_FAMILY(440EP)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(440EP)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -2261,7 +2398,7 @@ POWERPC_FAMILY(440EP)(ObjectClass *oc, void *data)
                  POWERPC_FLAG_DE | POWERPC_FLAG_BUS_CLK;
 }
 
-POWERPC_FAMILY(460EX)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(460EX)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -2316,7 +2453,7 @@ static void init_proc_440GP(CPUPPCState *env)
     SET_WDT_PERIOD(20, 24, 28, 32);
 }
 
-POWERPC_FAMILY(440GP)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(440GP)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -2386,7 +2523,7 @@ static void init_proc_440x5(CPUPPCState *env)
     SET_WDT_PERIOD(20, 24, 28, 32);
 }
 
-POWERPC_FAMILY(440x5)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(440x5)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -2422,7 +2559,7 @@ POWERPC_FAMILY(440x5)(ObjectClass *oc, void *data)
                  POWERPC_FLAG_DE | POWERPC_FLAG_BUS_CLK;
 }
 
-POWERPC_FAMILY(440x5wDFPU)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(440x5wDFPU)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -2471,7 +2608,7 @@ static void init_proc_MPC5xx(CPUPPCState *env)
     /* XXX: TODO: allocate internal IRQ controller */
 }
 
-POWERPC_FAMILY(MPC5xx)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(MPC5xx)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -2514,7 +2651,7 @@ static void init_proc_MPC8xx(CPUPPCState *env)
     /* XXX: TODO: allocate internal IRQ controller */
 }
 
-POWERPC_FAMILY(MPC8xx)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(MPC8xx)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -2565,7 +2702,7 @@ static void init_proc_G2(CPUPPCState *env)
     ppc6xx_irq_init(env_archcpu(env));
 }
 
-POWERPC_FAMILY(G2)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(G2)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -2604,7 +2741,7 @@ POWERPC_FAMILY(G2)(ObjectClass *oc, void *data)
                  POWERPC_FLAG_BE | POWERPC_FLAG_BUS_CLK;
 }
 
-POWERPC_FAMILY(G2LE)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(G2LE)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -2643,157 +2780,6 @@ POWERPC_FAMILY(G2LE)(ObjectClass *oc, void *data)
     pcc->bfd_mach = bfd_mach_ppc_ec603e;
     pcc->flags = POWERPC_FLAG_TGPR | POWERPC_FLAG_SE |
                  POWERPC_FLAG_BE | POWERPC_FLAG_BUS_CLK;
-}
-
-static void init_proc_e200(CPUPPCState *env)
-{
-    register_BookE_sprs(env, 0x000000070000FFFFULL);
-
-    spr_register(env, SPR_BOOKE_SPEFSCR, "SPEFSCR",
-                 &spr_read_spefscr, &spr_write_spefscr,
-                 &spr_read_spefscr, &spr_write_spefscr,
-                 0x00000000);
-    /* Memory management */
-    register_BookE206_sprs(env, 0x0000005D, NULL, 0);
-    register_usprgh_sprs(env);
-
-    spr_register(env, SPR_HID0, "HID0",
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 &spr_read_generic, &spr_write_generic,
-                 0x00000000);
-
-    spr_register(env, SPR_HID1, "HID1",
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 &spr_read_generic, &spr_write_generic,
-                 0x00000000);
-
-    spr_register(env, SPR_Exxx_ALTCTXCR, "ALTCTXCR",
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 &spr_read_generic, &spr_write_generic,
-                 0x00000000);
-
-    spr_register(env, SPR_Exxx_BUCSR, "BUCSR",
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 &spr_read_generic, &spr_write_generic,
-                 0x00000000);
-
-    spr_register(env, SPR_Exxx_CTXCR, "CTXCR",
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 &spr_read_generic, &spr_write_generic,
-                 0x00000000);
-
-    spr_register(env, SPR_Exxx_DBCNT, "DBCNT",
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 &spr_read_generic, &spr_write_generic,
-                 0x00000000);
-
-    spr_register(env, SPR_Exxx_DBCR3, "DBCR3",
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 &spr_read_generic, &spr_write_generic,
-                 0x00000000);
-
-    spr_register(env, SPR_Exxx_L1CFG0, "L1CFG0",
-                 &spr_read_generic, SPR_NOACCESS,
-                 &spr_read_generic, SPR_NOACCESS,
-                 0x00000000);
-
-    spr_register(env, SPR_Exxx_L1CSR0, "L1CSR0",
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 &spr_read_generic, &spr_write_generic,
-                 0x00000000);
-
-    spr_register(env, SPR_Exxx_L1FINV0, "L1FINV0",
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 &spr_read_generic, &spr_write_generic,
-                 0x00000000);
-
-    spr_register(env, SPR_BOOKE_TLB0CFG, "TLB0CFG",
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 &spr_read_generic, &spr_write_generic,
-                 0x00000000);
-
-    spr_register(env, SPR_BOOKE_TLB1CFG, "TLB1CFG",
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 &spr_read_generic, &spr_write_generic,
-                 0x00000000);
-
-    spr_register(env, SPR_BOOKE_IAC3, "IAC3",
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 &spr_read_generic, &spr_write_generic,
-                 0x00000000);
-
-    spr_register(env, SPR_BOOKE_IAC4, "IAC4",
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 &spr_read_generic, &spr_write_generic,
-                 0x00000000);
-
-    spr_register(env, SPR_MMUCSR0, "MMUCSR0",
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 &spr_read_generic, &spr_write_generic,
-                 0x00000000); /* TOFIX */
-    spr_register(env, SPR_BOOKE_DSRR0, "DSRR0",
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 &spr_read_generic, &spr_write_generic,
-                 0x00000000);
-    spr_register(env, SPR_BOOKE_DSRR1, "DSRR1",
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 &spr_read_generic, &spr_write_generic,
-                 0x00000000);
-
-    init_tlbs_emb(env);
-    init_excp_e200(env, 0xFFFF0000UL);
-    env->dcache_line_size = 32;
-    env->icache_line_size = 32;
-    /* XXX: TODO: allocate internal IRQ controller */
-}
-
-POWERPC_FAMILY(e200)(ObjectClass *oc, void *data)
-{
-    DeviceClass *dc = DEVICE_CLASS(oc);
-    PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
-
-    dc->desc = "e200 core";
-    pcc->init_proc = init_proc_e200;
-    pcc->check_pow = check_pow_hid0;
-    pcc->check_attn = check_attn_none;
-    /*
-     * XXX: unimplemented instructions:
-     * dcblc
-     * dcbtlst
-     * dcbtstls
-     * icblc
-     * icbtls
-     * tlbivax
-     * all SPE multiply-accumulate instructions
-     */
-    pcc->insns_flags = PPC_INSNS_BASE | PPC_ISEL |
-                       PPC_SPE | PPC_SPE_SINGLE |
-                       PPC_WRTEE | PPC_RFDI |
-                       PPC_CACHE | PPC_CACHE_LOCK | PPC_CACHE_ICBI |
-                       PPC_CACHE_DCBZ | PPC_CACHE_DCBA |
-                       PPC_MEM_TLBSYNC | PPC_TLBIVAX |
-                       PPC_BOOKE;
-    pcc->msr_mask = (1ull << MSR_UCLE) |
-                    (1ull << MSR_SPE) |
-                    (1ull << MSR_POW) |
-                    (1ull << MSR_CE) |
-                    (1ull << MSR_EE) |
-                    (1ull << MSR_PR) |
-                    (1ull << MSR_FP) |
-                    (1ull << MSR_ME) |
-                    (1ull << MSR_FE0) |
-                    (1ull << MSR_DWE) |
-                    (1ull << MSR_DE) |
-                    (1ull << MSR_FE1) |
-                    (1ull << MSR_IR) |
-                    (1ull << MSR_DR);
-    pcc->mmu_model = POWERPC_MMU_BOOKE206;
-    pcc->excp_model = POWERPC_EXCP_BOOKE;
-    pcc->bus_model = PPC_FLAGS_INPUT_BookE;
-    pcc->bfd_mach = bfd_mach_ppc_860;
-    pcc->flags = POWERPC_FLAG_SPE | POWERPC_FLAG_CE |
-                 POWERPC_FLAG_UBLE | POWERPC_FLAG_DE |
-                 POWERPC_FLAG_BUS_CLK;
 }
 
 enum fsl_e500_version {
@@ -2910,6 +2896,11 @@ static void init_proc_e500(CPUPPCState *env, int version)
     register_BookE206_sprs(env, 0x000000DF, tlbncfg, mmucfg);
     register_usprgh_sprs(env);
 
+    if (version != fsl_e500v1) {
+        /* e500v1 has no support for alternate timebase */
+        register_atb_sprs(env);
+    }
+
     spr_register(env, SPR_HID0, "HID0",
                  SPR_NOACCESS, SPR_NOACCESS,
                  &spr_read_generic, &spr_write_generic,
@@ -3025,7 +3016,7 @@ static void init_proc_e500(CPUPPCState *env, int version)
     }
 #endif
 
-    init_excp_e200(env, ivpr_mask);
+    init_excp_e500(env, ivpr_mask);
     /* Allocate hardware IRQ controller */
     ppce500_irq_init(env_archcpu(env));
 }
@@ -3035,7 +3026,7 @@ static void init_proc_e500v1(CPUPPCState *env)
     init_proc_e500(env, fsl_e500v1);
 }
 
-POWERPC_FAMILY(e500v1)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(e500v1)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -3079,7 +3070,7 @@ static void init_proc_e500v2(CPUPPCState *env)
     init_proc_e500(env, fsl_e500v2);
 }
 
-POWERPC_FAMILY(e500v2)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(e500v2)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -3123,7 +3114,7 @@ static void init_proc_e500mc(CPUPPCState *env)
     init_proc_e500(env, fsl_e500mc);
 }
 
-POWERPC_FAMILY(e500mc)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(e500mc)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -3170,7 +3161,7 @@ static void init_proc_e5500(CPUPPCState *env)
     init_proc_e500(env, fsl_e5500);
 }
 
-POWERPC_FAMILY(e5500)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(e5500)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -3219,7 +3210,7 @@ static void init_proc_e6500(CPUPPCState *env)
     init_proc_e500(env, fsl_e6500);
 }
 
-POWERPC_FAMILY(e6500)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(e6500)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -3282,7 +3273,7 @@ static void init_proc_603(CPUPPCState *env)
     ppc6xx_irq_init(env_archcpu(env));
 }
 
-POWERPC_FAMILY(603)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(603)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -3322,7 +3313,7 @@ POWERPC_FAMILY(603)(ObjectClass *oc, void *data)
                  POWERPC_FLAG_BE | POWERPC_FLAG_BUS_CLK;
 }
 
-POWERPC_FAMILY(603E)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(603E)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -3368,7 +3359,7 @@ static void init_proc_e300(CPUPPCState *env)
     register_e300_sprs(env);
 }
 
-POWERPC_FAMILY(e300)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(e300)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -3424,7 +3415,7 @@ static void init_proc_604(CPUPPCState *env)
     ppc6xx_irq_init(env_archcpu(env));
 }
 
-POWERPC_FAMILY(604)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(604)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -3470,7 +3461,7 @@ static void init_proc_604E(CPUPPCState *env)
     register_604e_sprs(env);
 }
 
-POWERPC_FAMILY(604E)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(604E)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -3527,7 +3518,7 @@ static void init_proc_740(CPUPPCState *env)
     ppc6xx_irq_init(env_archcpu(env));
 }
 
-POWERPC_FAMILY(740)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(740)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -3593,7 +3584,7 @@ static void init_proc_750(CPUPPCState *env)
     ppc6xx_irq_init(env_archcpu(env));
 }
 
-POWERPC_FAMILY(750)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(750)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -3740,7 +3731,7 @@ static void init_proc_750cl(CPUPPCState *env)
     ppc6xx_irq_init(env_archcpu(env));
 }
 
-POWERPC_FAMILY(750cl)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(750cl)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -3848,7 +3839,7 @@ static void init_proc_750cx(CPUPPCState *env)
     ppc6xx_irq_init(env_archcpu(env));
 }
 
-POWERPC_FAMILY(750cx)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(750cx)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -3921,7 +3912,7 @@ static void init_proc_750fx(CPUPPCState *env)
     ppc6xx_irq_init(env_archcpu(env));
 }
 
-POWERPC_FAMILY(750fx)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(750fx)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -3994,7 +3985,7 @@ static void init_proc_750gx(CPUPPCState *env)
     ppc6xx_irq_init(env_archcpu(env));
 }
 
-POWERPC_FAMILY(750gx)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(750gx)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -4054,7 +4045,7 @@ static void init_proc_745(CPUPPCState *env)
     ppc6xx_irq_init(env_archcpu(env));
 }
 
-POWERPC_FAMILY(745)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(745)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -4100,7 +4091,7 @@ static void init_proc_755(CPUPPCState *env)
     register_755_sprs(env);
 }
 
-POWERPC_FAMILY(755)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(755)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -4167,7 +4158,7 @@ static void init_proc_7400(CPUPPCState *env)
     ppc6xx_irq_init(env_archcpu(env));
 }
 
-POWERPC_FAMILY(7400)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(7400)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -4247,7 +4238,7 @@ static void init_proc_7410(CPUPPCState *env)
     ppc6xx_irq_init(env_archcpu(env));
 }
 
-POWERPC_FAMILY(7410)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(7410)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -4348,7 +4339,7 @@ static void init_proc_7440(CPUPPCState *env)
     ppc6xx_irq_init(env_archcpu(env));
 }
 
-POWERPC_FAMILY(7440)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(7440)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -4471,7 +4462,7 @@ static void init_proc_7450(CPUPPCState *env)
     ppc6xx_irq_init(env_archcpu(env));
 }
 
-POWERPC_FAMILY(7450)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(7450)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -4601,7 +4592,7 @@ static void init_proc_7445(CPUPPCState *env)
     ppc6xx_irq_init(env_archcpu(env));
 }
 
-POWERPC_FAMILY(7445)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(7445)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -4733,7 +4724,7 @@ static void init_proc_7455(CPUPPCState *env)
     ppc6xx_irq_init(env_archcpu(env));
 }
 
-POWERPC_FAMILY(7455)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(7455)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -4885,7 +4876,7 @@ static void init_proc_7457(CPUPPCState *env)
     ppc6xx_irq_init(env_archcpu(env));
 }
 
-POWERPC_FAMILY(7457)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(7457)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -5020,7 +5011,7 @@ static void init_proc_e600(CPUPPCState *env)
     ppc6xx_irq_init(env_archcpu(env));
 }
 
-POWERPC_FAMILY(e600)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(e600)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -5169,6 +5160,20 @@ static void register_book3s_207_dbg_sprs(CPUPPCState *env)
                         SPR_NOACCESS, SPR_NOACCESS,
                         &spr_read_generic, &spr_write_ciabr,
                         KVM_REG_PPC_CIABR, 0x00000000);
+}
+
+static void register_book3s_310_dbg_sprs(CPUPPCState *env)
+{
+    spr_register_kvm_hv(env, SPR_DAWR1, "DAWR1",
+                        SPR_NOACCESS, SPR_NOACCESS,
+                        SPR_NOACCESS, SPR_NOACCESS,
+                        &spr_read_generic, &spr_write_dawr1,
+                        KVM_REG_PPC_DAWR1, 0x00000000);
+    spr_register_kvm_hv(env, SPR_DAWRX1, "DAWRX1",
+                        SPR_NOACCESS, SPR_NOACCESS,
+                        SPR_NOACCESS, SPR_NOACCESS,
+                        &spr_read_generic, &spr_write_dawrx1,
+                        KVM_REG_PPC_DAWRX1, 0x00000000);
 }
 
 static void register_970_dbg_sprs(CPUPPCState *env)
@@ -5760,16 +5765,6 @@ static void register_power_common_book4_sprs(CPUPPCState *env)
                  SPR_NOACCESS, SPR_NOACCESS,
                  &spr_read_generic, &spr_core_write_generic,
                  0x00000000);
-    spr_register_hv(env, SPR_POWER_SPRC, "SPRC",
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 &spr_read_generic, &spr_write_sprc,
-                 0x00000000);
-    spr_register_hv(env, SPR_POWER_SPRD, "SPRD",
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 SPR_NOACCESS, SPR_NOACCESS,
-                 &spr_read_sprd, &spr_write_sprd,
-                 0x00000000);
 #endif
 }
 
@@ -5782,6 +5777,23 @@ static void register_power9_book4_sprs(CPUPPCState *env)
                      SPR_NOACCESS, SPR_NOACCESS,
                      &spr_read_generic, &spr_write_generic,
                      KVM_REG_PPC_WORT, 0);
+    spr_register_hv(env, SPR_RWMR, "RWMR",
+                 SPR_NOACCESS, SPR_NOACCESS,
+                 &spr_read_generic, &spr_write_generic,
+                 &spr_read_generic, &spr_write_generic,
+                 0x00000000);
+
+    /* SPRC/SPRD exist in earlier CPUs but only tested on POWER9/10 */
+    spr_register_hv(env, SPR_POWER_SPRC, "SPRC",
+                 SPR_NOACCESS, SPR_NOACCESS,
+                 SPR_NOACCESS, SPR_NOACCESS,
+                 &spr_read_generic, &spr_write_sprc,
+                 0x00000000);
+    spr_register_hv(env, SPR_POWER_SPRD, "SPRD",
+                 SPR_NOACCESS, SPR_NOACCESS,
+                 SPR_NOACCESS, SPR_NOACCESS,
+                 &spr_read_sprd, &spr_write_sprd,
+                 0x00000000);
 #endif
 }
 
@@ -5873,22 +5885,22 @@ static void register_power10_hash_sprs(CPUPPCState *env)
         ((uint64_t)g_rand_int(rand) << 32) | (uint64_t)g_rand_int(rand);
     g_rand_free(rand);
 #endif
-    spr_register(env, SPR_HASHKEYR, "HASHKEYR",
+    spr_register_kvm(env, SPR_HASHKEYR, "HASHKEYR",
             SPR_NOACCESS, SPR_NOACCESS,
             &spr_read_generic, &spr_write_generic,
-            hashkeyr_initial_value);
-    spr_register_hv(env, SPR_HASHPKEYR, "HASHPKEYR",
+            KVM_REG_PPC_HASHKEYR, hashkeyr_initial_value);
+    spr_register_kvm_hv(env, SPR_HASHPKEYR, "HASHPKEYR",
             SPR_NOACCESS, SPR_NOACCESS,
             SPR_NOACCESS, SPR_NOACCESS,
             &spr_read_generic, &spr_write_generic,
-            hashpkeyr_initial_value);
+            KVM_REG_PPC_HASHPKEYR, hashpkeyr_initial_value);
 }
 
 static void register_power10_dexcr_sprs(CPUPPCState *env)
 {
-    spr_register(env, SPR_DEXCR, "DEXCR",
+    spr_register_kvm(env, SPR_DEXCR, "DEXCR",
             SPR_NOACCESS, SPR_NOACCESS,
-            &spr_read_generic, &spr_write_generic,
+            &spr_read_generic, &spr_write_generic, KVM_REG_PPC_DEXCR,
             0);
 
     spr_register(env, SPR_UDEXCR, "UDEXCR",
@@ -5964,7 +5976,7 @@ static void init_proc_970(CPUPPCState *env)
     ppc970_irq_init(env_archcpu(env));
 }
 
-POWERPC_FAMILY(970)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(970)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -6039,7 +6051,7 @@ static void init_proc_power5plus(CPUPPCState *env)
     ppc970_irq_init(env_archcpu(env));
 }
 
-POWERPC_FAMILY(POWER5P)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(POWER5P)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
@@ -6145,13 +6157,14 @@ static bool ppc_pvr_match_power7(PowerPCCPUClass *pcc, uint32_t pvr, bool best)
     return true;
 }
 
-POWERPC_FAMILY(POWER7)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(POWER7)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
 
     dc->fw_name = "PowerPC,POWER7";
     dc->desc = "POWER7";
+    pcc->spapr_logical_pvr = CPU_POWERPC_LOGICAL_2_06_PLUS;
     pcc->pvr_match = ppc_pvr_match_power7;
     pcc->pcr_mask = PCR_VEC_DIS | PCR_VSX_DIS | PCR_COMPAT_2_05;
     pcc->pcr_supported = PCR_COMPAT_2_06 | PCR_COMPAT_2_05;
@@ -6308,13 +6321,14 @@ static bool ppc_pvr_match_power8(PowerPCCPUClass *pcc, uint32_t pvr, bool best)
     return true;
 }
 
-POWERPC_FAMILY(POWER8)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(POWER8)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
 
     dc->fw_name = "PowerPC,POWER8";
     dc->desc = "POWER8";
+    pcc->spapr_logical_pvr = CPU_POWERPC_LOGICAL_2_07;
     pcc->pvr_match = ppc_pvr_match_power8;
     pcc->pcr_mask = PCR_TM_DIS | PCR_COMPAT_2_06 | PCR_COMPAT_2_05;
     pcc->pcr_supported = PCR_COMPAT_2_07 | PCR_COMPAT_2_06 | PCR_COMPAT_2_05;
@@ -6406,7 +6420,7 @@ static struct ppc_radix_page_info POWER9_radix_page_info = {
 #endif /* CONFIG_USER_ONLY */
 
 #define POWER9_BHRB_ENTRIES_LOG2 5
-static void init_proc_POWER9(CPUPPCState *env)
+static void register_power9_common_sprs(CPUPPCState *env)
 {
     /* Common Registers */
     init_proc_book3s_common(env);
@@ -6425,7 +6439,6 @@ static void init_proc_POWER9(CPUPPCState *env)
     register_power5p_ear_sprs(env);
     register_power5p_tb_sprs(env);
     register_power6_common_sprs(env);
-    register_HEIR32_spr(env);
     register_power6_dbg_sprs(env);
     register_power7_common_sprs(env);
     register_power8_tce_address_control_sprs(env);
@@ -6443,16 +6456,32 @@ static void init_proc_POWER9(CPUPPCState *env)
     register_power8_rpr_sprs(env);
     register_power9_mmu_sprs(env);
 
-    /* POWER9 Specific registers */
-    spr_register_kvm(env, SPR_TIDR, "TIDR", NULL, NULL,
-                     spr_read_generic, spr_write_generic,
-                     KVM_REG_PPC_TIDR, 0);
-
     /* FIXME: Filter fields properly based on privilege level */
     spr_register_kvm_hv(env, SPR_PSSCR, "PSSCR", NULL, NULL, NULL, NULL,
                         spr_read_generic, spr_write_generic,
                         KVM_REG_PPC_PSSCR, 0);
 
+    spr_register_hv(env, SPR_PMSR, "PMSR",
+                    SPR_NOACCESS, SPR_NOACCESS,
+                    SPR_NOACCESS, SPR_NOACCESS,
+                    &spr_read_pmsr, SPR_NOACCESS,
+                    0);
+    spr_register_hv(env, SPR_PMCR, "PMCR",
+                    SPR_NOACCESS, SPR_NOACCESS,
+                    SPR_NOACCESS, SPR_NOACCESS,
+                    &spr_read_generic, &spr_write_pmcr,
+                    PPC_BIT(63)); /* Version 1 (POWER9/10) */
+
+}
+
+static void init_proc_POWER9(CPUPPCState *env)
+{
+    register_power9_common_sprs(env);
+    register_HEIR32_spr(env);
+    /* POWER9 Specific registers */
+    spr_register_kvm(env, SPR_TIDR, "TIDR", NULL, NULL,
+                     spr_read_generic, spr_write_generic,
+                     KVM_REG_PPC_TIDR, 0);
     /* env variables */
     env->dcache_line_size = 128;
     env->icache_line_size = 128;
@@ -6501,66 +6530,24 @@ static bool ppc_pvr_match_power9(PowerPCCPUClass *pcc, uint32_t pvr, bool best)
     return false;
 }
 
-POWERPC_FAMILY(POWER9)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(POWER9)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
 
     dc->fw_name = "PowerPC,POWER9";
     dc->desc = "POWER9";
+    pcc->spapr_logical_pvr = CPU_POWERPC_LOGICAL_3_00;
     pcc->pvr_match = ppc_pvr_match_power9;
-    pcc->pcr_mask = PCR_COMPAT_2_05 | PCR_COMPAT_2_06 | PCR_COMPAT_2_07;
-    pcc->pcr_supported = PCR_COMPAT_3_00 | PCR_COMPAT_2_07 | PCR_COMPAT_2_06 |
-                         PCR_COMPAT_2_05;
+    pcc->pcr_mask = PPC_PCR_MASK_POWER9;
+    pcc->pcr_supported = PPC_PCR_SUPPORTED_POWER9;
     pcc->init_proc = init_proc_POWER9;
     pcc->check_pow = check_pow_nocheck;
     pcc->check_attn = check_attn_hid0_power9;
-    pcc->insns_flags = PPC_INSNS_BASE | PPC_ISEL | PPC_STRING | PPC_MFTB |
-                       PPC_FLOAT | PPC_FLOAT_FSEL | PPC_FLOAT_FRES |
-                       PPC_FLOAT_FSQRT | PPC_FLOAT_FRSQRTE |
-                       PPC_FLOAT_FRSQRTES |
-                       PPC_FLOAT_STFIWX |
-                       PPC_FLOAT_EXT |
-                       PPC_CACHE | PPC_CACHE_ICBI | PPC_CACHE_DCBZ |
-                       PPC_MEM_SYNC | PPC_MEM_EIEIO |
-                       PPC_MEM_TLBIE | PPC_MEM_TLBSYNC |
-                       PPC_64B | PPC_64H | PPC_64BX | PPC_ALTIVEC |
-                       PPC_SEGMENT_64B | PPC_SLBI |
-                       PPC_POPCNTB | PPC_POPCNTWD |
-                       PPC_CILDST;
-    pcc->insns_flags2 = PPC2_VSX | PPC2_VSX207 | PPC2_DFP | PPC2_DBRX |
-                        PPC2_PERM_ISA206 | PPC2_DIVE_ISA206 |
-                        PPC2_ATOMIC_ISA206 | PPC2_FP_CVT_ISA206 |
-                        PPC2_FP_TST_ISA206 | PPC2_BCTAR_ISA207 |
-                        PPC2_LSQ_ISA207 | PPC2_ALTIVEC_207 |
-                        PPC2_ISA205 | PPC2_ISA207S | PPC2_FP_CVT_S64 |
-                        PPC2_TM | PPC2_ISA300 | PPC2_PRCNTL | PPC2_MEM_LWSYNC |
-                        PPC2_BCDA_ISA206;
-    pcc->msr_mask = (1ull << MSR_SF) |
-                    (1ull << MSR_HV) |
-                    (1ull << MSR_TM) |
-                    (1ull << MSR_VR) |
-                    (1ull << MSR_VSX) |
-                    (1ull << MSR_EE) |
-                    (1ull << MSR_PR) |
-                    (1ull << MSR_FP) |
-                    (1ull << MSR_ME) |
-                    (1ull << MSR_FE0) |
-                    (1ull << MSR_SE) |
-                    (1ull << MSR_DE) |
-                    (1ull << MSR_FE1) |
-                    (1ull << MSR_IR) |
-                    (1ull << MSR_DR) |
-                    (1ull << MSR_PMM) |
-                    (1ull << MSR_RI) |
-                    (1ull << MSR_LE);
-    pcc->lpcr_mask = LPCR_VPM1 | LPCR_ISL | LPCR_KBV | LPCR_DPFD |
-        (LPCR_PECE_U_MASK & LPCR_HVEE) | LPCR_ILE | LPCR_AIL |
-        LPCR_UPRT | LPCR_EVIRT | LPCR_ONL | LPCR_HR | LPCR_LD |
-        (LPCR_PECE_L_MASK & (LPCR_PDEE | LPCR_HDEE | LPCR_EEE |
-                             LPCR_DEE | LPCR_OEE))
-        | LPCR_MER | LPCR_GTSE | LPCR_TC |
-        LPCR_HEIC | LPCR_LPES0 | LPCR_HVICE | LPCR_HDICE;
+    pcc->insns_flags = PPC_INSNS_FLAGS_POWER9;
+    pcc->insns_flags2 = PPC_INSNS_FLAGS2_POWER9;
+    pcc->msr_mask = PPC_MSR_MASK_POWER9;
+    pcc->lpcr_mask = PPC_LPCR_MASK_POWER9;
     pcc->lpcr_pm = LPCR_PDEE | LPCR_HDEE | LPCR_EEE | LPCR_DEE | LPCR_OEE;
     pcc->mmu_model = POWERPC_MMU_3_00;
 #if !defined(CONFIG_USER_ONLY)
@@ -6573,10 +6560,7 @@ POWERPC_FAMILY(POWER9)(ObjectClass *oc, void *data)
     pcc->excp_model = POWERPC_EXCP_POWER9;
     pcc->bus_model = PPC_FLAGS_INPUT_POWER9;
     pcc->bfd_mach = bfd_mach_ppc64;
-    pcc->flags = POWERPC_FLAG_VRE | POWERPC_FLAG_SE |
-                 POWERPC_FLAG_BE | POWERPC_FLAG_PMM |
-                 POWERPC_FLAG_BUS_CLK | POWERPC_FLAG_CFAR |
-                 POWERPC_FLAG_VSX | POWERPC_FLAG_TM | POWERPC_FLAG_SCV;
+    pcc->flags = POWERPC_FLAGS_POWER9;
     pcc->l1_dcache_size = 0x8000;
     pcc->l1_icache_size = 0x8000;
 }
@@ -6603,50 +6587,13 @@ static struct ppc_radix_page_info POWER10_radix_page_info = {
 #define POWER10_BHRB_ENTRIES_LOG2 5
 static void init_proc_POWER10(CPUPPCState *env)
 {
-    /* Common Registers */
-    init_proc_book3s_common(env);
-    register_book3s_207_dbg_sprs(env);
-
-    /* Common TCG PMU */
-    init_tcg_pmu_power8(env);
-
-    /* POWER8 Specific Registers */
-    register_book3s_ids_sprs(env);
-    register_amr_sprs(env);
-    register_iamr_sprs(env);
-    register_book3s_purr_sprs(env);
-    register_power5p_common_sprs(env);
-    register_power5p_lpar_sprs(env);
-    register_power5p_ear_sprs(env);
-    register_power5p_tb_sprs(env);
-    register_power6_common_sprs(env);
+    register_power9_common_sprs(env);
     register_HEIR64_spr(env);
-    register_power6_dbg_sprs(env);
-    register_power7_common_sprs(env);
-    register_power8_tce_address_control_sprs(env);
-    register_power8_ids_sprs(env);
-    register_power8_ebb_sprs(env);
-    register_power8_fscr_sprs(env);
-    register_power8_pmu_sup_sprs(env);
-    register_power8_pmu_user_sprs(env);
-    register_power8_tm_sprs(env);
-    register_power8_pspb_sprs(env);
-    register_power8_dpdes_sprs(env);
-    register_vtb_sprs(env);
-    register_power8_ic_sprs(env);
-    register_power9_book4_sprs(env);
-    register_power8_rpr_sprs(env);
-    register_power9_mmu_sprs(env);
+    register_book3s_310_dbg_sprs(env);
     register_power10_hash_sprs(env);
     register_power10_dexcr_sprs(env);
     register_power10_pmu_sup_sprs(env);
     register_power10_pmu_user_sprs(env);
-
-    /* FIXME: Filter fields properly based on privilege level */
-    spr_register_kvm_hv(env, SPR_PSSCR, "PSSCR", NULL, NULL, NULL, NULL,
-                        spr_read_generic, spr_write_generic,
-                        KVM_REG_PPC_PSSCR, 0);
-
     /* env variables */
     env->dcache_line_size = 128;
     env->icache_line_size = 128;
@@ -6681,68 +6628,24 @@ static bool ppc_pvr_match_power10(PowerPCCPUClass *pcc, uint32_t pvr, bool best)
     return false;
 }
 
-POWERPC_FAMILY(POWER10)(ObjectClass *oc, void *data)
+POWERPC_FAMILY(POWER10)(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
 
     dc->fw_name = "PowerPC,POWER10";
     dc->desc = "POWER10";
+    pcc->spapr_logical_pvr = CPU_POWERPC_LOGICAL_3_10;
     pcc->pvr_match = ppc_pvr_match_power10;
-    pcc->pcr_mask = PCR_COMPAT_2_05 | PCR_COMPAT_2_06 | PCR_COMPAT_2_07 |
-                    PCR_COMPAT_3_00;
-    pcc->pcr_supported = PCR_COMPAT_3_10 | PCR_COMPAT_3_00 | PCR_COMPAT_2_07 |
-                         PCR_COMPAT_2_06 | PCR_COMPAT_2_05;
+    pcc->pcr_mask = PPC_PCR_MASK_POWER10;
+    pcc->pcr_supported = PPC_PCR_SUPPORTED_POWER10;
     pcc->init_proc = init_proc_POWER10;
     pcc->check_pow = check_pow_nocheck;
     pcc->check_attn = check_attn_hid0_power9;
-    pcc->insns_flags = PPC_INSNS_BASE | PPC_ISEL | PPC_STRING | PPC_MFTB |
-                       PPC_FLOAT | PPC_FLOAT_FSEL | PPC_FLOAT_FRES |
-                       PPC_FLOAT_FSQRT | PPC_FLOAT_FRSQRTE |
-                       PPC_FLOAT_FRSQRTES |
-                       PPC_FLOAT_STFIWX |
-                       PPC_FLOAT_EXT |
-                       PPC_CACHE | PPC_CACHE_ICBI | PPC_CACHE_DCBZ |
-                       PPC_MEM_SYNC | PPC_MEM_EIEIO |
-                       PPC_MEM_TLBIE | PPC_MEM_TLBSYNC |
-                       PPC_64B | PPC_64H | PPC_64BX | PPC_ALTIVEC |
-                       PPC_SEGMENT_64B | PPC_SLBI |
-                       PPC_POPCNTB | PPC_POPCNTWD |
-                       PPC_CILDST;
-    pcc->insns_flags2 = PPC2_VSX | PPC2_VSX207 | PPC2_DFP | PPC2_DBRX |
-                        PPC2_PERM_ISA206 | PPC2_DIVE_ISA206 |
-                        PPC2_ATOMIC_ISA206 | PPC2_FP_CVT_ISA206 |
-                        PPC2_FP_TST_ISA206 | PPC2_BCTAR_ISA207 |
-                        PPC2_LSQ_ISA207 | PPC2_ALTIVEC_207 |
-                        PPC2_ISA205 | PPC2_ISA207S | PPC2_FP_CVT_S64 |
-                        PPC2_ISA300 | PPC2_PRCNTL | PPC2_ISA310 |
-                        PPC2_MEM_LWSYNC | PPC2_BCDA_ISA206;
-    pcc->msr_mask = (1ull << MSR_SF) |
-                    (1ull << MSR_HV) |
-                    (1ull << MSR_VR) |
-                    (1ull << MSR_VSX) |
-                    (1ull << MSR_EE) |
-                    (1ull << MSR_PR) |
-                    (1ull << MSR_FP) |
-                    (1ull << MSR_ME) |
-                    (1ull << MSR_FE0) |
-                    (1ull << MSR_SE) |
-                    (1ull << MSR_DE) |
-                    (1ull << MSR_FE1) |
-                    (1ull << MSR_IR) |
-                    (1ull << MSR_DR) |
-                    (1ull << MSR_PMM) |
-                    (1ull << MSR_RI) |
-                    (1ull << MSR_LE);
-    pcc->lpcr_mask = LPCR_VPM1 | LPCR_ISL | LPCR_KBV | LPCR_DPFD |
-        (LPCR_PECE_U_MASK & LPCR_HVEE) | LPCR_ILE | LPCR_AIL |
-        LPCR_UPRT | LPCR_EVIRT | LPCR_ONL | LPCR_HR | LPCR_LD |
-        (LPCR_PECE_L_MASK & (LPCR_PDEE | LPCR_HDEE | LPCR_EEE |
-                             LPCR_DEE | LPCR_OEE))
-        | LPCR_MER | LPCR_GTSE | LPCR_TC |
-        LPCR_HEIC | LPCR_LPES0 | LPCR_HVICE | LPCR_HDICE;
-    /* DD2 adds an extra HAIL bit */
-    pcc->lpcr_mask |= LPCR_HAIL;
+    pcc->insns_flags = PPC_INSNS_FLAGS_POWER10;
+    pcc->insns_flags2 = PPC_INSNS_FLAGS2_POWER10;
+    pcc->msr_mask = PPC_MSR_MASK_POWER10;
+    pcc->lpcr_mask = PPC_LPCR_MASK_POWER10;
 
     pcc->lpcr_pm = LPCR_PDEE | LPCR_HDEE | LPCR_EEE | LPCR_DEE | LPCR_OEE;
     pcc->mmu_model = POWERPC_MMU_3_00;
@@ -6755,11 +6658,67 @@ POWERPC_FAMILY(POWER10)(ObjectClass *oc, void *data)
     pcc->excp_model = POWERPC_EXCP_POWER10;
     pcc->bus_model = PPC_FLAGS_INPUT_POWER9;
     pcc->bfd_mach = bfd_mach_ppc64;
-    pcc->flags = POWERPC_FLAG_VRE | POWERPC_FLAG_SE |
-                 POWERPC_FLAG_BE | POWERPC_FLAG_PMM |
-                 POWERPC_FLAG_BUS_CLK | POWERPC_FLAG_CFAR |
-                 POWERPC_FLAG_VSX | POWERPC_FLAG_SCV |
-                 POWERPC_FLAG_BHRB;
+    pcc->flags = POWERPC_FLAGS_POWER10;
+    pcc->l1_dcache_size = 0x8000;
+    pcc->l1_icache_size = 0x8000;
+}
+
+static void init_proc_POWER11(CPUPPCState *env)
+{
+    init_proc_POWER10(env);
+}
+
+static bool ppc_pvr_match_power11(PowerPCCPUClass *pcc, uint32_t pvr, bool best)
+{
+    uint32_t base = pvr & CPU_POWERPC_POWER_SERVER_MASK;
+    uint32_t pcc_base = pcc->pvr & CPU_POWERPC_POWER_SERVER_MASK;
+
+    if (!best && (base == CPU_POWERPC_POWER11_BASE)) {
+        return true;
+    }
+
+    if (base != pcc_base) {
+        return false;
+    }
+
+    if ((pvr & 0x0f00) == (pcc->pvr & 0x0f00)) {
+        return true;
+    }
+
+    return false;
+}
+
+POWERPC_FAMILY(POWER11)(ObjectClass *oc, const void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(oc);
+    PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
+
+    dc->fw_name = "PowerPC,POWER11";
+    dc->desc = "POWER11";
+    pcc->spapr_logical_pvr = CPU_POWERPC_LOGICAL_3_10_P11;
+    pcc->pvr_match = ppc_pvr_match_power11;
+    pcc->pcr_mask = PPC_PCR_MASK_POWER11;
+    pcc->pcr_supported = PPC_PCR_SUPPORTED_POWER11;
+    pcc->init_proc = init_proc_POWER11;
+    pcc->check_pow = check_pow_nocheck;
+    pcc->check_attn = check_attn_hid0_power9;
+    pcc->insns_flags = PPC_INSNS_FLAGS_POWER11;
+    pcc->insns_flags2 = PPC_INSNS_FLAGS2_POWER11;
+    pcc->msr_mask = PPC_MSR_MASK_POWER11;
+    pcc->lpcr_mask = PPC_LPCR_MASK_POWER11;
+
+    pcc->lpcr_pm = LPCR_PDEE | LPCR_HDEE | LPCR_EEE | LPCR_DEE | LPCR_OEE;
+    pcc->mmu_model = POWERPC_MMU_3_00;
+#if !defined(CONFIG_USER_ONLY)
+    /* segment page size remain the same */
+    pcc->hash64_opts = &ppc_hash64_opts_POWER7;
+    pcc->radix_page_info = &POWER10_radix_page_info;
+    pcc->lrg_decr_bits = 56;
+#endif
+    pcc->excp_model = POWERPC_EXCP_POWER11;
+    pcc->bus_model = PPC_FLAGS_INPUT_POWER9;
+    pcc->bfd_mach = bfd_mach_ppc64;
+    pcc->flags = POWERPC_FLAGS_POWER11;
     pcc->l1_dcache_size = 0x8000;
     pcc->l1_icache_size = 0x8000;
 }
@@ -6785,7 +6744,8 @@ void cpu_ppc_set_1lpar(PowerPCCPU *cpu)
 
     /*
      * pseries SMT means "LPAR per core" mode, e.g., msgsndp is usable
-     * between threads.
+     * between threads. powernv be in either mode, and it mostly affects
+     * supervisor visible registers and instructions.
      */
     if (env->flags & POWERPC_FLAG_SMT) {
         env->flags |= POWERPC_FLAG_SMT_1LPAR;
@@ -6824,53 +6784,64 @@ static void init_ppc_proc(PowerPCCPU *cpu)
 
     /* MSR bits & flags consistency checks */
     if (env->msr_mask & (1 << 25)) {
-        switch (env->flags & (POWERPC_FLAG_SPE | POWERPC_FLAG_VRE)) {
+        switch (env->flags & (POWERPC_FLAG_SPE | POWERPC_FLAG_VRE |
+                              POWERPC_FLAG_PPE42)) {
         case POWERPC_FLAG_SPE:
         case POWERPC_FLAG_VRE:
+        case POWERPC_FLAG_PPE42:
             break;
         default:
             fprintf(stderr, "PowerPC MSR definition inconsistency\n"
-                    "Should define POWERPC_FLAG_SPE or POWERPC_FLAG_VRE\n");
+                    "Should define POWERPC_FLAG_SPE or POWERPC_FLAG_VRE\n"
+                    "or POWERPC_FLAG_PPE42\n");
             exit(1);
         }
-    } else if (env->flags & (POWERPC_FLAG_SPE | POWERPC_FLAG_VRE)) {
+    } else if (env->flags & (POWERPC_FLAG_SPE | POWERPC_FLAG_VRE |
+                             POWERPC_FLAG_PPE42)) {
         fprintf(stderr, "PowerPC MSR definition inconsistency\n"
-                "Should not define POWERPC_FLAG_SPE nor POWERPC_FLAG_VRE\n");
+                "Should not define POWERPC_FLAG_SPE nor POWERPC_FLAG_VRE\n"
+                "nor POWERPC_FLAG_PPE42\n");
         exit(1);
     }
     if (env->msr_mask & (1 << 17)) {
-        switch (env->flags & (POWERPC_FLAG_TGPR | POWERPC_FLAG_CE)) {
+        switch (env->flags & (POWERPC_FLAG_TGPR | POWERPC_FLAG_CE |
+                              POWERPC_FLAG_PPE42)) {
         case POWERPC_FLAG_TGPR:
         case POWERPC_FLAG_CE:
+        case POWERPC_FLAG_PPE42:
             break;
         default:
             fprintf(stderr, "PowerPC MSR definition inconsistency\n"
-                    "Should define POWERPC_FLAG_TGPR or POWERPC_FLAG_CE\n");
+                    "Should define POWERPC_FLAG_TGPR or POWERPC_FLAG_CE\n"
+                    "or POWERPC_FLAG_PPE42\n");
             exit(1);
         }
-    } else if (env->flags & (POWERPC_FLAG_TGPR | POWERPC_FLAG_CE)) {
+    } else if (env->flags & (POWERPC_FLAG_TGPR | POWERPC_FLAG_CE |
+                             POWERPC_FLAG_PPE42)) {
         fprintf(stderr, "PowerPC MSR definition inconsistency\n"
-                "Should not define POWERPC_FLAG_TGPR nor POWERPC_FLAG_CE\n");
+                "Should not define POWERPC_FLAG_TGPR nor POWERPC_FLAG_CE\n"
+                "nor POWERPC_FLAG_PPE42\n");
         exit(1);
     }
     if (env->msr_mask & (1 << 10)) {
         switch (env->flags & (POWERPC_FLAG_SE | POWERPC_FLAG_DWE |
-                              POWERPC_FLAG_UBLE)) {
+                              POWERPC_FLAG_UBLE | POWERPC_FLAG_PPE42)) {
         case POWERPC_FLAG_SE:
         case POWERPC_FLAG_DWE:
         case POWERPC_FLAG_UBLE:
+        case POWERPC_FLAG_PPE42:
             break;
         default:
             fprintf(stderr, "PowerPC MSR definition inconsistency\n"
                     "Should define POWERPC_FLAG_SE or POWERPC_FLAG_DWE or "
-                    "POWERPC_FLAG_UBLE\n");
+                    "POWERPC_FLAG_UBLE or POWERPC_FLAG_PPE42\n");
             exit(1);
         }
     } else if (env->flags & (POWERPC_FLAG_SE | POWERPC_FLAG_DWE |
-                             POWERPC_FLAG_UBLE)) {
+                             POWERPC_FLAG_UBLE | POWERPC_FLAG_PPE42)) {
         fprintf(stderr, "PowerPC MSR definition inconsistency\n"
                 "Should not define POWERPC_FLAG_SE nor POWERPC_FLAG_DWE nor "
-                "POWERPC_FLAG_UBLE\n");
+                "POWERPC_FLAG_UBLE nor POWERPC_FLAG_PPE42\n");
             exit(1);
     }
     if (env->msr_mask & (1 << 9)) {
@@ -6889,18 +6860,23 @@ static void init_ppc_proc(PowerPCCPU *cpu)
         exit(1);
     }
     if (env->msr_mask & (1 << 2)) {
-        switch (env->flags & (POWERPC_FLAG_PX | POWERPC_FLAG_PMM)) {
+        switch (env->flags & (POWERPC_FLAG_PX | POWERPC_FLAG_PMM |
+                              POWERPC_FLAG_PPE42)) {
         case POWERPC_FLAG_PX:
         case POWERPC_FLAG_PMM:
+        case POWERPC_FLAG_PPE42:
             break;
         default:
             fprintf(stderr, "PowerPC MSR definition inconsistency\n"
-                    "Should define POWERPC_FLAG_PX or POWERPC_FLAG_PMM\n");
+                    "Should define POWERPC_FLAG_PX or POWERPC_FLAG_PMM\n"
+                    "or POWERPC_FLAG_PPE42\n");
             exit(1);
         }
-    } else if (env->flags & (POWERPC_FLAG_PX | POWERPC_FLAG_PMM)) {
+    } else if (env->flags & (POWERPC_FLAG_PX | POWERPC_FLAG_PMM |
+                             POWERPC_FLAG_PPE42)) {
         fprintf(stderr, "PowerPC MSR definition inconsistency\n"
-                "Should not define POWERPC_FLAG_PX nor POWERPC_FLAG_PMM\n");
+                "Should not define POWERPC_FLAG_PX nor POWERPC_FLAG_PMM\n"
+                "nor POWERPC_FLAG_PPE42\n");
         exit(1);
     }
     if ((env->flags & POWERPC_FLAG_BUS_CLK) == 0) {
@@ -6975,7 +6951,7 @@ static void ppc_cpu_realize(DeviceState *dev, Error **errp)
 
     pcc->parent_realize(dev, errp);
 
-    if (env_cpu(env)->nr_threads > 1) {
+    if (!ppc_cpu_core_single_threaded(cs)) {
         env->flags |= POWERPC_FLAG_SMT;
     }
 
@@ -7103,7 +7079,7 @@ ObjectClass *ppc_cpu_class_by_name(const char *name)
     if (strcmp(name, "max") == 0) {
         MachineClass *mc = MACHINE_GET_CLASS(qdev_get_machine());
         if (mc) {
-            return object_class_by_name(mc->default_cpu_type);
+            return object_class_by_name(machine_class_default_cpu_type(mc));
         }
     }
 #endif
@@ -7136,7 +7112,7 @@ PowerPCCPUClass *ppc_cpu_get_family_class(PowerPCCPUClass *pcc)
 }
 
 /* Sort by PVR, ordering special case "host" last. */
-static gint ppc_cpu_list_compare(gconstpointer a, gconstpointer b)
+static gint ppc_cpu_list_compare(gconstpointer a, gconstpointer b, gpointer d)
 {
     ObjectClass *oc_a = (ObjectClass *)a;
     ObjectClass *oc_b = (ObjectClass *)b;
@@ -7165,6 +7141,7 @@ static void ppc_cpu_list_entry(gpointer data, gpointer user_data)
 {
     ObjectClass *oc = data;
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
+    CPUClass *cc = CPU_CLASS(oc);
     DeviceClass *family = DEVICE_CLASS(ppc_cpu_get_family_class(pcc));
     const char *typename = object_class_get_name(oc);
     char *name;
@@ -7175,7 +7152,11 @@ static void ppc_cpu_list_entry(gpointer data, gpointer user_data)
     }
 
     name = cpu_model_from_type(typename);
-    qemu_printf("  %-16s PVR %08x\n", name, pcc->pvr);
+    if (cc->deprecation_note) {
+        qemu_printf("  %-16s PVR %08x (deprecated)\n", name, pcc->pvr);
+    } else {
+        qemu_printf("  %-16s PVR %08x\n", name, pcc->pvr);
+    }
     for (i = 0; ppc_cpu_aliases[i].alias != NULL; i++) {
         PowerPCCPUAlias *alias = &ppc_cpu_aliases[i];
         ObjectClass *alias_oc = ppc_cpu_class_by_name(alias->model);
@@ -7198,13 +7179,13 @@ static void ppc_cpu_list_entry(gpointer data, gpointer user_data)
     g_free(name);
 }
 
-void ppc_cpu_list(void)
+static void ppc_cpu_list(void)
 {
     GSList *list;
 
     qemu_printf("Available CPUs:\n");
     list = object_class_get_list(TYPE_POWERPC_CPU, false);
-    list = g_slist_sort(list, ppc_cpu_list_compare);
+    list = g_slist_sort_with_data(list, ppc_cpu_list_compare, NULL);
     g_slist_foreach(list, ppc_cpu_list_entry, NULL);
     g_slist_free(list);
 
@@ -7237,17 +7218,19 @@ static void ppc_restore_state_to_opc(CPUState *cs,
 
     cpu->env.nip = data[0];
 }
-#endif /* CONFIG_TCG */
-
-static bool ppc_cpu_has_work(CPUState *cs)
-{
-    return cs->interrupt_request & CPU_INTERRUPT_HARD;
-}
 
 static int ppc_cpu_mmu_index(CPUState *cs, bool ifetch)
 {
     return ppc_env_mmu_index(cpu_env(cs), ifetch);
 }
+#endif /* CONFIG_TCG */
+
+#ifndef CONFIG_USER_ONLY
+static bool ppc_cpu_has_work(CPUState *cs)
+{
+    return cpu_test_interrupt(cs, CPU_INTERRUPT_HARD);
+}
+#endif /* !CONFIG_USER_ONLY */
 
 static void ppc_cpu_reset_hold(Object *obj, ResetType type)
 {
@@ -7263,39 +7246,40 @@ static void ppc_cpu_reset_hold(Object *obj, ResetType type)
     }
 
     msr = (target_ulong)0;
-    msr |= (target_ulong)MSR_HVB;
-    msr |= (target_ulong)1 << MSR_EP;
+    if (!(env->flags & POWERPC_FLAG_PPE42)) {
+        msr |= (target_ulong)MSR_HVB;
+        msr |= (target_ulong)1 << MSR_EP;
 #if defined(DO_SINGLE_STEP) && 0
-    /* Single step trace mode */
-    msr |= (target_ulong)1 << MSR_SE;
-    msr |= (target_ulong)1 << MSR_BE;
+        /* Single step trace mode */
+        msr |= (target_ulong)1 << MSR_SE;
+        msr |= (target_ulong)1 << MSR_BE;
 #endif
 #if defined(CONFIG_USER_ONLY)
-    msr |= (target_ulong)1 << MSR_FP; /* Allow floating point usage */
-    msr |= (target_ulong)1 << MSR_FE0; /* Allow floating point exceptions */
-    msr |= (target_ulong)1 << MSR_FE1;
-    msr |= (target_ulong)1 << MSR_VR; /* Allow altivec usage */
-    msr |= (target_ulong)1 << MSR_VSX; /* Allow VSX usage */
-    msr |= (target_ulong)1 << MSR_SPE; /* Allow SPE usage */
-    msr |= (target_ulong)1 << MSR_PR;
+        msr |= (target_ulong)1 << MSR_FP; /* Allow floating point usage */
+        msr |= (target_ulong)1 << MSR_FE0; /* Allow floating point exceptions */
+        msr |= (target_ulong)1 << MSR_FE1;
+        msr |= (target_ulong)1 << MSR_VR; /* Allow altivec usage */
+        msr |= (target_ulong)1 << MSR_VSX; /* Allow VSX usage */
+        msr |= (target_ulong)1 << MSR_SPE; /* Allow SPE usage */
+        msr |= (target_ulong)1 << MSR_PR;
 #if defined(TARGET_PPC64)
-    msr |= (target_ulong)1 << MSR_TM; /* Transactional memory */
+        msr |= (target_ulong)1 << MSR_TM; /* Transactional memory */
 #endif
 #if !TARGET_BIG_ENDIAN
-    msr |= (target_ulong)1 << MSR_LE; /* Little-endian user mode */
-    if (!((env->msr_mask >> MSR_LE) & 1)) {
-        fprintf(stderr, "Selected CPU does not support little-endian.\n");
-        exit(1);
-    }
+        msr |= (target_ulong)1 << MSR_LE; /* Little-endian user mode */
+        if (!((env->msr_mask >> MSR_LE) & 1)) {
+            fprintf(stderr, "Selected CPU does not support little-endian.\n");
+            exit(1);
+        }
 #endif
 #endif
 
 #if defined(TARGET_PPC64)
-    if (mmu_is_64bit(env->mmu_model)) {
-        msr |= (1ULL << MSR_SF);
-    }
+        if (mmu_is_64bit(env->mmu_model)) {
+            msr |= (1ULL << MSR_SF);
+        }
 #endif
-
+    }
     hreg_store_msr(env, msr, 1);
 
 #if !defined(CONFIG_USER_ONLY)
@@ -7324,6 +7308,36 @@ static void ppc_cpu_reset_hold(Object *obj, ResetType type)
     /* tininess for underflow is detected before rounding */
     set_float_detect_tininess(float_tininess_before_rounding,
                               &env->fp_status);
+    /* Similarly for flush-to-zero */
+    set_float_ftz_detection(float_ftz_before_rounding, &env->fp_status);
+
+    /*
+     * PowerPC propagation rules:
+     *  1. A if it sNaN or qNaN
+     *  2. B if it sNaN or qNaN
+     * A signaling NaN is always silenced before returning it.
+     */
+    set_float_2nan_prop_rule(float_2nan_prop_ab, &env->fp_status);
+    set_float_2nan_prop_rule(float_2nan_prop_ab, &env->vec_status);
+    /*
+     * NaN propagation for fused multiply-add:
+     * if fRA is a NaN return it; otherwise if fRB is a NaN return it;
+     * otherwise return fRC. Note that muladd on PPC is (fRA * fRC) + frB
+     * whereas QEMU labels the operands as (a * b) + c.
+     */
+    set_float_3nan_prop_rule(float_3nan_prop_acb, &env->fp_status);
+    set_float_3nan_prop_rule(float_3nan_prop_acb, &env->vec_status);
+    /*
+     * For PPC, the (inf,zero,qnan) case sets InvalidOp, but we prefer
+     * to return an input NaN if we have one (ie c) rather than generating
+     * a default NaN
+     */
+    set_float_infzeronan_rule(float_infzeronan_dnan_never, &env->fp_status);
+    set_float_infzeronan_rule(float_infzeronan_dnan_never, &env->vec_status);
+
+    /* Default NaN: sign bit clear, set frac msb */
+    set_float_default_nan_pattern(0b01000000, &env->fp_status);
+    set_float_default_nan_pattern(0b01000000, &env->vec_status);
 
     for (i = 0; i < ARRAY_SIZE(env->spr_cb); i++) {
         ppc_spr_t *spr = &env->spr_cb[i];
@@ -7375,6 +7389,12 @@ static void ppc_cpu_exec_exit(CPUState *cs)
     if (cpu->vhyp) {
         cpu->vhyp_class->cpu_exec_exit(cpu->vhyp, cpu);
     }
+}
+
+static vaddr ppc_pointer_wrap(CPUState *cs, int mmu_idx,
+                              vaddr result, vaddr base)
+{
+    return (cpu_env(cs)->hflags >> HFLAGS_64) & 1 ? result : (uint32_t)result;
 }
 #endif /* CONFIG_TCG */
 
@@ -7433,6 +7453,8 @@ static void ppc_disas_set_info(CPUState *cs, disassemble_info *info)
 
     if ((env->hflags >> MSR_LE) & 1) {
         info->endian = BFD_ENDIAN_LITTLE;
+    } else {
+        info->endian = BFD_ENDIAN_BIG;
     }
     info->mach = env->bfd_mach;
     if (!env->bfd_mach) {
@@ -7449,19 +7471,11 @@ static void ppc_disas_set_info(CPUState *cs, disassemble_info *info)
 #endif
 }
 
-static Property ppc_cpu_properties[] = {
-    DEFINE_PROP_BOOL("pre-2.8-migration", PowerPCCPU, pre_2_8_migration, false),
-    DEFINE_PROP_BOOL("pre-2.10-migration", PowerPCCPU, pre_2_10_migration,
-                     false),
-    DEFINE_PROP_BOOL("pre-3.0-migration", PowerPCCPU, pre_3_0_migration,
-                     false),
-    DEFINE_PROP_END_OF_LIST(),
-};
-
 #ifndef CONFIG_USER_ONLY
 #include "hw/core/sysemu-cpu-ops.h"
 
 static const struct SysemuCPUOps ppc_sysemu_ops = {
+    .has_work = ppc_cpu_has_work,
     .get_phys_page_debug = ppc_cpu_get_phys_page_debug,
     .write_elf32_note = ppc32_cpu_write_elf32_note,
     .write_elf64_note = ppc64_cpu_write_elf64_note,
@@ -7471,18 +7485,25 @@ static const struct SysemuCPUOps ppc_sysemu_ops = {
 #endif
 
 #ifdef CONFIG_TCG
-#include "hw/core/tcg-cpu-ops.h"
+#include "accel/tcg/cpu-ops.h"
 
 static const TCGCPUOps ppc_tcg_ops = {
+  .mttcg_supported = TARGET_LONG_BITS == 64,
+  .guest_default_memory_order = 0,
   .initialize = ppc_translate_init,
+  .translate_code = ppc_translate_code,
+  .get_tb_cpu_state = ppc_get_tb_cpu_state,
   .restore_state_to_opc = ppc_restore_state_to_opc,
+  .mmu_index = ppc_cpu_mmu_index,
 
 #ifdef CONFIG_USER_ONLY
   .record_sigsegv = ppc_cpu_record_sigsegv,
 #else
   .tlb_fill = ppc_cpu_tlb_fill,
+  .pointer_wrap = ppc_pointer_wrap,
   .cpu_exec_interrupt = ppc_cpu_exec_interrupt,
   .cpu_exec_halt = ppc_cpu_has_work,
+  .cpu_exec_reset = cpu_reset,
   .do_interrupt = ppc_cpu_do_interrupt,
   .cpu_exec_enter = ppc_cpu_exec_enter,
   .cpu_exec_exit = ppc_cpu_exec_exit,
@@ -7495,7 +7516,7 @@ static const TCGCPUOps ppc_tcg_ops = {
 };
 #endif /* CONFIG_TCG */
 
-static void ppc_cpu_class_init(ObjectClass *oc, void *data)
+static void ppc_cpu_class_init(ObjectClass *oc, const void *data)
 {
     PowerPCCPUClass *pcc = POWERPC_CPU_CLASS(oc);
     CPUClass *cc = CPU_CLASS(oc);
@@ -7507,14 +7528,12 @@ static void ppc_cpu_class_init(ObjectClass *oc, void *data)
     device_class_set_parent_unrealize(dc, ppc_cpu_unrealize,
                                       &pcc->parent_unrealize);
     pcc->pvr_match = ppc_pvr_match_default;
-    device_class_set_props(dc, ppc_cpu_properties);
 
     resettable_class_set_parent_phases(rc, NULL, ppc_cpu_reset_hold, NULL,
                                        &pcc->parent_phases);
 
     cc->class_by_name = ppc_cpu_class_by_name;
-    cc->has_work = ppc_cpu_has_work;
-    cc->mmu_index = ppc_cpu_mmu_index;
+    cc->list_cpus = ppc_cpu_list;
     cc->dump_state = ppc_cpu_dump_state;
     cc->set_pc = ppc_cpu_set_pc;
     cc->get_pc = ppc_cpu_get_pc;
@@ -7563,7 +7582,7 @@ static const TypeInfo ppc_cpu_type_info = {
     .class_size = sizeof(PowerPCCPUClass),
     .class_init = ppc_cpu_class_init,
 #ifndef CONFIG_USER_ONLY
-    .interfaces = (InterfaceInfo[]) {
+    .interfaces = (const InterfaceInfo[]) {
           { TYPE_INTERRUPT_STATS_PROVIDER },
           { }
     },
@@ -7709,6 +7728,18 @@ void ppc_cpu_dump_state(CPUState *cs, FILE *f, int flags)
          * IVORs are left out as they are large and do not change often --
          * they can be read with "p $ivor0", "p $ivor1", etc.
          */
+        break;
+    case POWERPC_EXCP_PPE42:
+        qemu_fprintf(f, "SRR0 " TARGET_FMT_lx " SRR1 " TARGET_FMT_lx "\n",
+                     env->spr[SPR_SRR0], env->spr[SPR_SRR1]);
+
+        qemu_fprintf(f, "  TCR " TARGET_FMT_lx "   TSR " TARGET_FMT_lx
+                     "    ISR " TARGET_FMT_lx "   EDR " TARGET_FMT_lx "\n",
+                     env->spr[SPR_PPE42_TCR], env->spr[SPR_PPE42_TSR],
+                     env->spr[SPR_PPE42_ISR], env->spr[SPR_PPE42_EDR]);
+
+        qemu_fprintf(f, "  PIR " TARGET_FMT_lx "   IVPR " TARGET_FMT_lx "\n",
+                     env->spr[SPR_PPE42_PIR], env->spr[SPR_PPE42_IVPR]);
         break;
     case POWERPC_EXCP_40x:
         qemu_fprintf(f, "  TCR " TARGET_FMT_lx "   TSR " TARGET_FMT_lx

@@ -90,6 +90,7 @@ cp_portable() {
         -e 's/<linux\/\([^>]*\)>/"standard-headers\/linux\/\1"/' \
         -e "$arch_cmd" \
         -e 's/__bitwise//' \
+        -e 's/__counted_by(\w*)//' \
         -e 's/__attribute__((packed))/QEMU_PACKED/' \
         -e 's/__inline__/inline/' \
         -e 's/__BITS_PER_LONG/HOST_LONG_BITS/' \
@@ -156,13 +157,9 @@ EOF
         cp "$hdrdir/include/asm/unistd_32.h" "$output/linux-headers/asm-s390/"
         cp "$hdrdir/include/asm/unistd_64.h" "$output/linux-headers/asm-s390/"
     fi
-    if [ $arch = arm ]; then
-        cp "$hdrdir/include/asm/unistd-eabi.h" "$output/linux-headers/asm-arm/"
-        cp "$hdrdir/include/asm/unistd-oabi.h" "$output/linux-headers/asm-arm/"
-        cp "$hdrdir/include/asm/unistd-common.h" "$output/linux-headers/asm-arm/"
-    fi
     if [ $arch = arm64 ]; then
         cp "$hdrdir/include/asm/sve_context.h" "$output/linux-headers/asm-arm64/"
+        cp "$hdrdir/include/asm/unistd_64.h" "$output/linux-headers/asm-arm64/"
     fi
     if [ $arch = x86 ]; then
         cp "$hdrdir/include/asm/unistd_32.h" "$output/linux-headers/asm-x86/"
@@ -176,7 +173,7 @@ EOF
 
         # Remove everything except the macros from bootparam.h avoiding the
         # unnecessary import of several video/ist/etc headers
-        sed -e '/__ASSEMBLY__/,/__ASSEMBLY__/d' \
+        sed -e '/__ASSEMBLER__/,/__ASSEMBLER__/d' \
                "$hdrdir/include/asm/bootparam.h" > "$hdrdir/bootparam.h"
         cp_portable "$hdrdir/bootparam.h" \
                     "$output/include/standard-headers/asm-$arch"
@@ -185,6 +182,12 @@ EOF
     fi
     if [ $arch = riscv ]; then
         cp "$hdrdir/include/asm/ptrace.h" "$output/linux-headers/asm-riscv/"
+        cp "$hdrdir/include/asm/unistd_32.h" "$output/linux-headers/asm-riscv/"
+        cp "$hdrdir/include/asm/unistd_64.h" "$output/linux-headers/asm-riscv/"
+    fi
+    if [ $arch = loongarch ]; then
+        cp "$hdrdir/include/asm/kvm_para.h" "$output/linux-headers/asm-loongarch/"
+        cp "$hdrdir/include/asm/unistd_64.h" "$output/linux-headers/asm-loongarch/"
     fi
 done
 arch=
@@ -193,7 +196,7 @@ rm -rf "$output/linux-headers/linux"
 mkdir -p "$output/linux-headers/linux"
 for header in const.h stddef.h kvm.h vfio.h vfio_ccw.h vfio_zdev.h vhost.h \
               psci.h psp-sev.h userfaultfd.h memfd.h mman.h nvme_ioctl.h \
-              vduse.h iommufd.h bits.h; do
+              vduse.h iommufd.h bits.h mshv.h; do
     cp "$hdrdir/include/linux/$header" "$output/linux-headers/linux"
 done
 
@@ -251,6 +254,7 @@ for i in "$hdrdir"/include/linux/*virtio*.h \
          "$hdrdir/include/linux/kernel.h" \
          "$hdrdir/include/linux/kvm_para.h" \
          "$hdrdir/include/linux/vhost_types.h" \
+         "$hdrdir/include/linux/vmclock-abi.h" \
          "$hdrdir/include/linux/sysinfo.h"; do
     cp_portable "$i" "$output/include/standard-headers/linux"
 done

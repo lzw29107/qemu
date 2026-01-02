@@ -19,6 +19,7 @@
 
 import json
 import os
+import math
 import argparse
 import collections
 import struct
@@ -65,6 +66,9 @@ class MigrationFile(object):
     def tell(self):
         return self.file.tell()
 
+    def seek(self, a, b):
+        return self.file.seek(a, b)
+
     # The VMSD description is at the end of the file, after EOF. Look for
     # the last NULL byte, then for the beginning brace of JSON.
     def read_migration_debug_json(self):
@@ -104,7 +108,7 @@ class MigrationFile(object):
         self.file.close()
 
 class RamSection(object):
-    RAM_SAVE_FLAG_COMPRESS = 0x02
+    RAM_SAVE_FLAG_ZERO     = 0x02
     RAM_SAVE_FLAG_MEM_SIZE = 0x04
     RAM_SAVE_FLAG_PAGE     = 0x08
     RAM_SAVE_FLAG_EOS      = 0x10
@@ -124,6 +128,7 @@ class RamSection(object):
         self.dump_memory = ramargs['dump_memory']
         self.write_memory = ramargs['write_memory']
         self.ignore_shared = ramargs['ignore_shared']
+        self.mapped_ram = ramargs['mapped_ram']
         self.sizeinfo = collections.OrderedDict()
         self.data = collections.OrderedDict()
         self.data['section sizes'] = self.sizeinfo
@@ -142,6 +147,57 @@ class RamSection(object):
 
     def getDict(self):
         return self.data
+
+    def parseMappedRamBlob(self, len):
+        version = self.file.read32()
+        if version != 1:
+            raise Exception("Unsupported MappedRamHeader version %s" % version)
+
+        page_size = self.file.read64()
+        if page_size != self.TARGET_PAGE_SIZE:
+            raise Exception("Page size mismatch in MappedRamHeader")
+
+        bitmap_offset = self.file.read64()
+        pages_offset = self.file.read64()
+
+        if self.ignore_shared and bitmap_offset == 0 and pages_offset == 0:
+            # This is a shared ramblock, x-ignore-share must have been
+            # enabled, and mapped-ram didn't allocate bitmap or page blob
+            # for it.
+            return
+
+        if self.dump_memory or self.write_memory:
+            num_pages = len // page_size
+
+            self.file.seek(bitmap_offset, os.SEEK_SET)
+            bitmap_len = int(math.ceil(num_pages / 8))
+            bitmap = self.file.readvar(size=bitmap_len)
+
+            self.file.seek(pages_offset, os.SEEK_SET)
+            for page_num in range(num_pages):
+                page_addr = page_num * page_size
+
+                is_filled = (bitmap[page_num // 8] >> page_num % 8) & 1
+                if is_filled:
+                    data = self.file.readvar(size=self.TARGET_PAGE_SIZE)
+                    if self.write_memory:
+                        self.files[self.name].seek(page_addr, os.SEEK_SET)
+                        self.files[self.name].write(data)
+                    if self.dump_memory:
+                        hexdata = " ".join("{0:02x}".format(c) for c in data)
+                        self.memory['%s (0x%016x)' %
+                                    (self.name, page_addr)] = hexdata
+                else:
+                    self.file.seek(self.TARGET_PAGE_SIZE, os.SEEK_CUR)
+                    if self.write_memory:
+                        self.files[self.name].seek(page_addr, os.SEEK_SET)
+                        self.files[self.name].write(
+                            b'\x00' * self.TARGET_PAGE_SIZE)
+                    if self.dump_memory:
+                        self.memory['%s (0x%016x)' %
+                                    (self.name, page_addr)] = 'Filled with 0x00'
+
+        self.file.seek(pages_offset + len, os.SEEK_SET)
 
     def read(self):
         # Read all RAM sections
@@ -167,21 +223,20 @@ class RamSection(object):
                         self.files[self.name] = f
                     if self.ignore_shared:
                         mr_addr = self.file.read64()
+                    if self.mapped_ram:
+                        self.parseMappedRamBlob(len)
                 flags &= ~self.RAM_SAVE_FLAG_MEM_SIZE
 
-            if flags & self.RAM_SAVE_FLAG_COMPRESS:
+            if flags & self.RAM_SAVE_FLAG_ZERO:
                 if flags & self.RAM_SAVE_FLAG_CONTINUE:
                     flags &= ~self.RAM_SAVE_FLAG_CONTINUE
                 else:
                     self.name = self.file.readstr()
-                fill_char = self.file.read8()
-                # The page in question is filled with fill_char now
-                if self.write_memory and fill_char != 0:
-                    self.files[self.name].seek(addr, os.SEEK_SET)
-                    self.files[self.name].write(chr(fill_char) * self.TARGET_PAGE_SIZE)
+                _fill_char = self.file.read8()
                 if self.dump_memory:
-                    self.memory['%s (0x%016x)' % (self.name, addr)] = 'Filled with 0x%02x' % fill_char
-                flags &= ~self.RAM_SAVE_FLAG_COMPRESS
+                    self.memory['%s (0x%016x)' %
+                                (self.name, addr)] = 'Filled with 0x00'
+                flags &= ~self.RAM_SAVE_FLAG_ZERO
             elif flags & self.RAM_SAVE_FLAG_PAGE:
                 if flags & self.RAM_SAVE_FLAG_CONTINUE:
                     flags &= ~self.RAM_SAVE_FLAG_CONTINUE
@@ -272,11 +327,24 @@ class S390StorageAttributes(object):
         self.section_key = section_key
 
     def read(self):
+        pos = 0
         while True:
             addr_flags = self.file.read64()
             flags = addr_flags & 0xfff
-            if (flags & (self.STATTR_FLAG_DONE | self.STATTR_FLAG_EOS)):
+
+            if flags & self.STATTR_FLAG_DONE:
+                pos = self.file.tell()
+                continue
+            elif flags & self.STATTR_FLAG_EOS:
                 return
+            else:
+                # No EOS came after DONE, that's OK, but rewind the
+                # stream because this is not our data.
+                if pos:
+                    self.file.seek(pos, os.SEEK_SET)
+                    return
+                raise Exception("Unknown flags %x", flags)
+
             if (flags & self.STATTR_FLAG_ERROR):
                 raise Exception("Error in migration stream")
             count = self.file.read64()
@@ -401,6 +469,28 @@ class VMSDFieldIntLE(VMSDFieldInt):
         super(VMSDFieldIntLE, self).__init__(desc, file)
         self.dtype = '<i%d' % self.size
 
+class VMSDFieldNull(VMSDFieldGeneric):
+    NULL_PTR_MARKER = b'0'
+
+    def __init__(self, desc, file):
+        super(VMSDFieldNull, self).__init__(desc, file)
+
+    def __repr__(self):
+        # A NULL pointer is encoded in the stream as a '0' to
+        # disambiguate from a mere 0x0 value and avoid consumers
+        # trying to follow the NULL pointer. Displaying '0', 0x30 or
+        # 0x0 when analyzing the JSON debug stream could become
+        # confusing, so use an explicit term instead.
+        return "nullptr"
+
+    def __str__(self):
+        return self.__repr__()
+
+    def read(self):
+        super(VMSDFieldNull, self).read()
+        assert(self.data == self.NULL_PTR_MARKER)
+        return self.data
+
 class VMSDFieldBool(VMSDFieldGeneric):
     def __init__(self, desc, file):
         super(VMSDFieldBool, self).__init__(desc, file)
@@ -428,6 +518,9 @@ class VMSDFieldStruct(VMSDFieldGeneric):
     def __init__(self, desc, file):
         super(VMSDFieldStruct, self).__init__(desc, file)
         self.data = collections.OrderedDict()
+
+        if 'fields' not in self.desc['struct']:
+            raise Exception("No fields in struct. VMSD:\n%s" % self.desc)
 
         # When we see compressed array elements, unfold them here
         new_fields = []
@@ -461,15 +554,25 @@ class VMSDFieldStruct(VMSDFieldGeneric):
             field['data'] = reader(field, self.file)
             field['data'].read()
 
-            if 'index' in field:
-                if field['name'] not in self.data:
-                    self.data[field['name']] = []
-                a = self.data[field['name']]
-                if len(a) != int(field['index']):
-                    raise Exception("internal index of data field unmatched (%d/%d)" % (len(a), int(field['index'])))
-                a.append(field['data'])
+            fname = field['name']
+            fdata = field['data']
+
+            # The field could be:
+            # i) a single data entry, e.g. uint64
+            # ii) an array, indicated by it containing the 'index' key
+            #
+            # However, the overall data after parsing the whole
+            # stream, could be a mix of arrays and single data fields,
+            # all sharing the same field name due to how QEMU breaks
+            # up arrays with NULL pointers into multiple compressed
+            # array segments.
+            if fname not in self.data:
+                self.data[fname] = fdata
+            elif type(self.data[fname]) == list:
+                self.data[fname].append(fdata)
             else:
-                self.data[field['name']] = field['data']
+                tmp = self.data[fname]
+                self.data[fname] = [tmp, fdata]
 
         if 'subsections' in self.desc['struct']:
             for subsection in self.desc['struct']['subsections']:
@@ -477,6 +580,10 @@ class VMSDFieldStruct(VMSDFieldGeneric):
                     raise Exception("Subsection %s not found at offset %x" % ( subsection['vmsd_name'], self.file.tell()))
                 name = self.file.readstr()
                 version_id = self.file.read32()
+
+                if not subsection:
+                    raise Exception("Empty description for subsection: %s" % name)
+
                 self.data[name] = VMSDSection(self.file, version_id, subsection, (name, 0))
                 self.data[name].read()
 
@@ -535,6 +642,7 @@ vmsd_field_readers = {
     "bitmap" : VMSDFieldGeneric,
     "struct" : VMSDFieldStruct,
     "capability": VMSDFieldCap,
+    "nullptr": VMSDFieldNull,
     "unknown" : VMSDFieldGeneric,
 }
 
@@ -564,7 +672,9 @@ class MigrationDump(object):
     QEMU_VM_SUBSECTION    = 0x05
     QEMU_VM_VMDESCRIPTION = 0x06
     QEMU_VM_CONFIGURATION = 0x07
+    QEMU_VM_COMMAND       = 0x08
     QEMU_VM_SECTION_FOOTER= 0x7e
+    QEMU_MIG_CMD_SWITCHOVER_START = 0x0b
 
     def __init__(self, filename):
         self.section_classes = {
@@ -574,10 +684,13 @@ class MigrationDump(object):
         }
         self.filename = filename
         self.vmsd_desc = None
+        self.vmsd_json = ""
 
-    def read(self, desc_only = False, dump_memory = False, write_memory = False):
+    def read(self, desc_only = False, dump_memory = False,
+             write_memory = False):
         # Read in the whole file
         file = MigrationFile(self.filename)
+        self.vmsd_json = file.read_migration_debug_json()
 
         # File magic
         data = file.read32()
@@ -602,6 +715,7 @@ class MigrationDump(object):
         ramargs['dump_memory'] = dump_memory
         ramargs['write_memory'] = write_memory
         ramargs['ignore_shared'] = False
+        ramargs['mapped_ram'] = False
         self.section_classes[('ram',0)][1] = ramargs
 
         while True:
@@ -613,6 +727,7 @@ class MigrationDump(object):
                 section = ConfigurationSection(file, config_desc)
                 section.read()
                 ramargs['ignore_shared'] = section.has_capability('x-ignore-shared')
+                ramargs['mapped_ram'] = section.has_capability('mapped-ram')
             elif section_type == self.QEMU_VM_SECTION_START or section_type == self.QEMU_VM_SECTION_FULL:
                 section_id = file.read32()
                 name = file.readstr()
@@ -626,6 +741,15 @@ class MigrationDump(object):
             elif section_type == self.QEMU_VM_SECTION_PART or section_type == self.QEMU_VM_SECTION_END:
                 section_id = file.read32()
                 self.sections[section_id].read()
+            elif section_type == self.QEMU_VM_COMMAND:
+                command_type = file.read16()
+                command_data_len = file.read16()
+                if command_type != self.QEMU_MIG_CMD_SWITCHOVER_START:
+                    raise Exception("Unknown QEMU_VM_COMMAND: %x" %
+                                    (command_type))
+                if command_data_len != 0:
+                    raise Exception("Invalid SWITCHOVER_START length: %x" %
+                                    (command_data_len))
             elif section_type == self.QEMU_VM_SECTION_FOOTER:
                 read_section_id = file.read32()
                 if read_section_id != section_id:
@@ -635,9 +759,11 @@ class MigrationDump(object):
         file.close()
 
     def load_vmsd_json(self, file):
-        vmsd_json = file.read_migration_debug_json()
-        self.vmsd_desc = json.loads(vmsd_json, object_pairs_hook=collections.OrderedDict)
+        self.vmsd_desc = json.loads(self.vmsd_json,
+                                    object_pairs_hook=collections.OrderedDict)
         for device in self.vmsd_desc['devices']:
+            if 'fields' not in device:
+                raise Exception("vmstate for device %s has no fields" % device['name'])
             key = (device['name'], device['instance_id'])
             value = ( VMSDSection, device )
             self.section_classes[key] = value
@@ -666,31 +792,34 @@ args = parser.parse_args()
 
 jsonenc = JSONEncoder(indent=4, separators=(',', ': '))
 
-if args.extract:
-    dump = MigrationDump(args.file)
-
-    dump.read(desc_only = True)
-    print("desc.json")
-    f = open("desc.json", "w")
-    f.truncate()
-    f.write(jsonenc.encode(dump.vmsd_desc))
-    f.close()
-
-    dump.read(write_memory = True)
-    dict = dump.getDict()
-    print("state.json")
-    f = open("state.json", "w")
-    f.truncate()
-    f.write(jsonenc.encode(dict))
-    f.close()
-elif args.dump == "state":
-    dump = MigrationDump(args.file)
-    dump.read(dump_memory = args.memory)
-    dict = dump.getDict()
-    print(jsonenc.encode(dict))
-elif args.dump == "desc":
-    dump = MigrationDump(args.file)
-    dump.read(desc_only = True)
-    print(jsonenc.encode(dump.vmsd_desc))
-else:
+if not any([args.extract, args.dump == "state", args.dump == "desc"]):
     raise Exception("Please specify either -x, -d state or -d desc")
+
+try:
+    dump = MigrationDump(args.file)
+
+    if args.extract:
+        dump.read(desc_only = True)
+
+        print("desc.json")
+        f = open("desc.json", "w")
+        f.truncate()
+        f.write(jsonenc.encode(dump.vmsd_desc))
+        f.close()
+
+        dump.read(write_memory = True)
+        dict = dump.getDict()
+        print("state.json")
+        f = open("state.json", "w")
+        f.truncate()
+        f.write(jsonenc.encode(dict))
+        f.close()
+    elif args.dump == "state":
+        dump.read(dump_memory = args.memory)
+        dict = dump.getDict()
+        print(jsonenc.encode(dict))
+    elif args.dump == "desc":
+        dump.read(desc_only = True)
+        print(jsonenc.encode(dump.vmsd_desc))
+except Exception:
+    raise Exception("Full JSON dump:\n%s", dump.vmsd_json)

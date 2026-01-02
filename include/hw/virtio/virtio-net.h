@@ -102,7 +102,7 @@ typedef struct VirtioNetRscStat {
 /* Rsc unit general info used to checking if can coalescing */
 typedef struct VirtioNetRscUnit {
     void *ip;   /* ip header */
-    uint16_t *ip_plen;      /* data len pointer in ip header field */
+    void *ip_plen; /* pointer to unaligned uint16_t data len in ip header */
     struct tcp_header *tcp; /* tcp header */
     uint16_t tcp_hdrlen;    /* tcp header len */
     uint16_t payload;       /* pure payload without virtio/eth/ip/tcp */
@@ -144,7 +144,11 @@ typedef struct VirtioNetRssData {
     bool    enabled_software_rss;
     bool    redirect;
     bool    populate_hash;
-    uint32_t hash_types;
+    bool    peer_hash_available;
+    uint32_t runtime_hash_types;
+    uint32_t supported_hash_types;
+    uint32_t peer_hash_types;
+    OnOffAutoBit64 specified_hash_types;
     uint8_t key[VIRTIO_NET_RSS_MAX_KEY_SIZE];
     uint16_t indirections_len;
     uint16_t *indirections_table;
@@ -178,7 +182,7 @@ struct VirtIONet {
     uint32_t has_vnet_hdr;
     size_t host_hdr_len;
     size_t guest_hdr_len;
-    uint64_t host_features;
+    VIRTIO_DECLARE_FEATURES(host_features);
     uint32_t rsc_timeout;
     uint8_t rsc4_enabled;
     uint8_t rsc6_enabled;

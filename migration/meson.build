@@ -11,8 +11,13 @@ migration_files = files(
 
 system_ss.add(files(
   'block-dirty-bitmap.c',
+  'block-active.c',
   'channel.c',
   'channel-block.c',
+  'cpr.c',
+  'cpr-transfer.c',
+  'cpr-exec.c',
+  'cpu-throttle.c',
   'dirtyrate.c',
   'exec.c',
   'fd.c',
@@ -21,10 +26,13 @@ system_ss.add(files(
   'migration-hmp-cmds.c',
   'migration.c',
   'multifd.c',
+  'multifd-device-state.c',
+  'multifd-nocomp.c',
   'multifd-zlib.c',
   'multifd-zero-page.c',
   'options.c',
   'postcopy-ram.c',
+  'ram.c',
   'savevm.c',
   'socket.c',
   'tls.c',
@@ -41,7 +49,7 @@ system_ss.add(when: rdma, if_true: files('rdma.c'))
 system_ss.add(when: zstd, if_true: files('multifd-zstd.c'))
 system_ss.add(when: qpl, if_true: files('multifd-qpl.c'))
 system_ss.add(when: uadk, if_true: files('multifd-uadk.c'))
-
-specific_ss.add(when: 'CONFIG_SYSTEM_ONLY',
-                if_true: files('ram.c',
-                               'target.c'))
+system_ss.add(when: qatzip, if_true: files('multifd-qatzip.c'))
+system_ss.add(when: 'CONFIG_VFIO',
+              if_true: files('vfio.c'),
+              if_false: files('vfio-stub.c'))

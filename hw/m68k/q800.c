@@ -24,15 +24,16 @@
 #include "qemu/units.h"
 #include "qemu/datadir.h"
 #include "qemu/guest-random.h"
-#include "sysemu/sysemu.h"
+#include "exec/target_page.h"
+#include "system/system.h"
 #include "cpu.h"
-#include "hw/boards.h"
-#include "hw/or-irq.h"
+#include "hw/core/boards.h"
+#include "hw/core/or-irq.h"
 #include "elf.h"
-#include "hw/loader.h"
+#include "hw/core/loader.h"
 #include "ui/console.h"
 #include "hw/char/escc.h"
-#include "hw/sysbus.h"
+#include "hw/core/sysbus.h"
 #include "hw/scsi/esp.h"
 #include "standard-headers/asm-m68k/bootinfo.h"
 #include "standard-headers/asm-m68k/bootinfo-mac.h"
@@ -51,9 +52,9 @@
 #include "net/util.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
-#include "sysemu/qtest.h"
-#include "sysemu/runstate.h"
-#include "sysemu/reset.h"
+#include "system/qtest.h"
+#include "system/runstate.h"
+#include "system/reset.h"
 #include "migration/vmstate.h"
 
 #define MACROM_ADDR     0x40800000
@@ -210,7 +211,6 @@ static uint64_t machine_id_read(void *opaque, hwaddr addr, unsigned size)
 static void machine_id_write(void *opaque, hwaddr addr, uint64_t val,
                              unsigned size)
 {
-    return;
 }
 
 static const MemoryRegionOps machine_id_ops = {
@@ -231,7 +231,6 @@ static uint64_t ramio_read(void *opaque, hwaddr addr, unsigned size)
 static void ramio_write(void *opaque, hwaddr addr, uint64_t val,
                         unsigned size)
 {
-    return;
 }
 
 static const MemoryRegionOps ramio_ops = {
@@ -585,7 +584,7 @@ static void q800_machine_init(MachineState *machine)
         }
 
         kernel_size = load_elf(kernel_filename, NULL, NULL, NULL,
-                               &elf_entry, NULL, &high, NULL, 1,
+                               &elf_entry, NULL, &high, NULL, ELFDATA2MSB,
                                EM_68K, 0, 0);
         if (kernel_size < 0) {
             error_report("could not load kernel '%s'", kernel_filename);
@@ -630,7 +629,7 @@ static void q800_machine_init(MachineState *machine)
 
         /* load initrd */
         if (initrd_filename) {
-            initrd_size = get_image_size(initrd_filename);
+            initrd_size = get_image_size(initrd_filename, NULL);
             if (initrd_size < 0) {
                 error_report("could not load initial ram disk '%s'",
                              initrd_filename);
@@ -639,7 +638,7 @@ static void q800_machine_init(MachineState *machine)
 
             initrd_base = (ram_size - initrd_size) & TARGET_PAGE_MASK;
             load_image_targphys(initrd_filename, initrd_base,
-                                ram_size - initrd_base);
+                                ram_size - initrd_base, NULL);
             BOOTINFO2(param_ptr, BI_RAMDISK, initrd_base,
                       initrd_size);
         } else {
@@ -669,7 +668,8 @@ static void q800_machine_init(MachineState *machine)
 
         /* Load MacROM binary */
         if (filename) {
-            bios_size = load_image_targphys(filename, MACROM_ADDR, MACROM_SIZE);
+            bios_size = load_image_targphys(filename, MACROM_ADDR, MACROM_SIZE,
+                                            NULL);
             g_free(filename);
         } else {
             bios_size = -1;
@@ -684,9 +684,9 @@ static void q800_machine_init(MachineState *machine)
 
             ptr = rom_ptr(MACROM_ADDR, bios_size);
             assert(ptr != NULL);
-            stl_phys(cs->as, 0, ldl_p(ptr));    /* reset initial SP */
+            stl_phys(cs->as, 0, ldl_be_p(ptr));    /* reset initial SP */
             stl_phys(cs->as, 4,
-                     MACROM_ADDR + ldl_p(ptr + 4)); /* reset initial PC */
+                     MACROM_ADDR + ldl_be_p(ptr + 4)); /* reset initial PC */
         }
     }
 }
@@ -728,7 +728,7 @@ static GlobalProperty hw_compat_q800[] = {
 };
 static const size_t hw_compat_q800_len = G_N_ELEMENTS(hw_compat_q800);
 
-static void q800_machine_class_init(ObjectClass *oc, void *data)
+static void q800_machine_class_init(ObjectClass *oc, const void *data)
 {
     static const char * const valid_cpu_types[] = {
         M68K_CPU_TYPE_NAME("m68040"),

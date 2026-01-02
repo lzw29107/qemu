@@ -21,7 +21,7 @@
 #include "qemu.h"
 #include "qemu/timer.h"
 #include "user-internals.h"
-#include "cpu_loop-common.h"
+#include "user/cpu_loop.h"
 #include "signal-common.h"
 #include "user-mmap.h"
 
@@ -172,6 +172,7 @@ static void emulate_vsyscall(CPUX86State *env)
     /*
      * Perform the syscall.  None of the vsyscalls should need restarting.
      */
+    get_task_state(env_cpu(env))->orig_ax = syscall;
     ret = do_syscall(env, syscall, env->regs[R_EDI], env->regs[R_ESI],
                      env->regs[R_EDX], env->regs[10], env->regs[8],
                      env->regs[9], 0, 0);
@@ -213,7 +214,7 @@ void cpu_loop(CPUX86State *env)
         cpu_exec_start(cs);
         trapnr = cpu_exec(cs);
         cpu_exec_end(cs);
-        process_queued_cpu_work(cs);
+        qemu_process_cpu_events(cs);
 
         switch(trapnr) {
         case 0x80:
@@ -221,6 +222,7 @@ void cpu_loop(CPUX86State *env)
         case EXCP_SYSCALL:
 #endif
             /* linux syscall from int $0x80 */
+            get_task_state(cs)->orig_ax = env->regs[R_EAX];
             ret = do_syscall(env,
                              env->regs[R_EAX],
                              env->regs[R_EBX],
@@ -239,6 +241,7 @@ void cpu_loop(CPUX86State *env)
 #ifdef TARGET_X86_64
         case EXCP_SYSCALL:
             /* linux syscall from syscall instruction.  */
+            get_task_state(cs)->orig_ax = env->regs[R_EAX];
             ret = do_syscall(env,
                              env->regs[R_EAX],
                              env->regs[R_EDI],
@@ -328,11 +331,10 @@ static void target_cpu_free(void *obj)
     g_free(obj);
 }
 
-void target_cpu_copy_regs(CPUArchState *env, struct target_pt_regs *regs)
+void init_main_thread(CPUState *cpu, struct image_info *info)
 {
-    CPUState *cpu = env_cpu(env);
+    CPUArchState *env = cpu_env(cpu);
     bool is64 = (env->features[FEAT_8000_0001_EDX] & CPUID_EXT2_LM) != 0;
-    int i;
 
     OBJECT(cpu)->free = target_cpu_free;
     env->cr[0] = CR0_PG_MASK | CR0_WP_MASK | CR0_PE_MASK;
@@ -358,28 +360,25 @@ void target_cpu_copy_regs(CPUArchState *env, struct target_pt_regs *regs)
     /* flags setup : we activate the IRQs by default as in user mode */
     env->eflags |= IF_MASK;
 
-    /* linux register setup */
-#ifndef TARGET_ABI32
-    env->regs[R_EAX] = regs->rax;
-    env->regs[R_EBX] = regs->rbx;
-    env->regs[R_ECX] = regs->rcx;
-    env->regs[R_EDX] = regs->rdx;
-    env->regs[R_ESI] = regs->rsi;
-    env->regs[R_EDI] = regs->rdi;
-    env->regs[R_EBP] = regs->rbp;
-    env->regs[R_ESP] = regs->rsp;
-    env->eip = regs->rip;
-#else
-    env->regs[R_EAX] = regs->eax;
-    env->regs[R_EBX] = regs->ebx;
-    env->regs[R_ECX] = regs->ecx;
-    env->regs[R_EDX] = regs->edx;
-    env->regs[R_ESI] = regs->esi;
-    env->regs[R_EDI] = regs->edi;
-    env->regs[R_EBP] = regs->ebp;
-    env->regs[R_ESP] = regs->esp;
-    env->eip = regs->eip;
-#endif
+    /*
+     * Linux register setup.
+     *
+     * SVR4/i386 ABI (pages 3-31, 3-32) says that when the program
+     * starts %edx contains a pointer to a function which might be
+     * registered using `atexit'.  This provides a mean for the
+     * dynamic linker to call DT_FINI functions for shared libraries
+     * that have been loaded before the code runs.
+     * A value of 0 tells we have no such handler.
+     *
+     * This applies to x86_64 as well as i386.
+     *
+     * That said, the kernel's ELF_PLAT_INIT simply zeros all of the general
+     * registers.  Note that x86_cpu_reset_hold will set %edx to cpuid_version;
+     * clear all general registers defensively.
+     */
+    memset(env->regs, 0, sizeof(env->regs));
+    env->regs[R_ESP] = info->start_stack;
+    env->eip = info->entry;
 
     /* linux interrupt setup */
 #ifndef TARGET_ABI32
@@ -391,7 +390,7 @@ void target_cpu_copy_regs(CPUArchState *env, struct target_pt_regs *regs)
                                 PROT_READ|PROT_WRITE,
                                 MAP_ANONYMOUS|MAP_PRIVATE, -1, 0);
     idt_table = g2h_untagged(env->idt.base);
-    for (i = 0; i < 20; i++) {
+    for (int i = 0; i < 20; i++) {
         set_idt(i, 0, is64);
     }
     set_idt(3, 3, is64);

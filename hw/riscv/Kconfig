@@ -1,3 +1,6 @@
+config RISCV_IOMMU
+    bool
+
 config RISCV_NUMA
     bool
 
@@ -22,6 +25,14 @@ config MICROCHIP_PFSOC
     select SIFIVE_PLIC
     select UNIMP
 
+config MICROBLAZE_V
+    bool
+    default y
+    depends on RISCV32 || RISCV64
+    select XILINX
+    select XILINX_AXI
+    select XILINX_ETHLITE
+
 config OPENTITAN
     bool
     default y
@@ -44,9 +55,10 @@ config RISCV_VIRT
     select PCI
     select PCI_EXPRESS_GENERIC_BRIDGE
     select PFLASH_CFI01
-    select SERIAL
+    select SERIAL_MM
     select RISCV_ACLINT
     select RISCV_APLIC
+    select RISCV_IOMMU
     select RISCV_IMSIC
     select SIFIVE_PLIC
     select SIFIVE_TEST
@@ -107,3 +119,12 @@ config SPIKE
     select HTIF
     select RISCV_ACLINT
     select SIFIVE_PLIC
+
+config XIANGSHAN_KUNMINGHU
+    bool
+    default y
+    depends on RISCV64
+    select RISCV_ACLINT
+    select RISCV_APLIC
+    select RISCV_IMSIC
+    select SERIAL_MM

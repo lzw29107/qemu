@@ -15,7 +15,7 @@
 #include "block/block_int.h"
 #include "block/qdict.h"
 #include "qapi/error.h"
-#include "qapi/qmp/qdict.h"
+#include "qobject/qdict.h"
 #include "qapi/qmp/qerror.h"
 #include "qemu/error-report.h"
 #include "qemu/module.h"
@@ -56,7 +56,6 @@ typedef struct GlusterAIOCB {
     int64_t size;
     int ret;
     Coroutine *coroutine;
-    AioContext *aio_context;
 } GlusterAIOCB;
 
 typedef struct BDRVGlusterState {
@@ -514,7 +513,6 @@ static int qemu_gluster_parse_json(BlockdevOptionsGluster *gconf,
     SocketAddressList **tail;
     QDict *backing_options = NULL;
     Error *local_err = NULL;
-    char *str = NULL;
     const char *ptr;
     int i, type, num_servers;
 
@@ -547,7 +545,8 @@ static int qemu_gluster_parse_json(BlockdevOptionsGluster *gconf,
     tail = &gconf->server;
 
     for (i = 0; i < num_servers; i++) {
-        str = g_strdup_printf(GLUSTER_OPT_SERVER_PATTERN"%d.", i);
+        g_autofree char *str = g_strdup_printf(GLUSTER_OPT_SERVER_PATTERN"%d.",
+                                               i);
         qdict_extract_subqdict(options, &backing_options, str);
 
         /* create opts info from runtime_type_opts list */
@@ -658,8 +657,6 @@ static int qemu_gluster_parse_json(BlockdevOptionsGluster *gconf,
 
         qobject_unref(backing_options);
         backing_options = NULL;
-        g_free(str);
-        str = NULL;
     }
 
     return 0;
@@ -668,7 +665,6 @@ out:
     error_propagate(errp, local_err);
     qapi_free_SocketAddress(gsconf);
     qemu_opts_del(opts);
-    g_free(str);
     qobject_unref(backing_options);
     errno = EINVAL;
     return -errno;
@@ -746,7 +742,17 @@ static void gluster_finish_aiocb(struct glfs_fd *fd, ssize_t ret,
         acb->ret = -EIO; /* Partial read/write - fail it */
     }
 
-    aio_co_schedule(acb->aio_context, acb->coroutine);
+    /*
+     * Safe to call: The coroutine will yield exactly once awaiting this
+     * scheduling, and the context is its own context, so it will be scheduled
+     * once it does yield.
+     *
+     * (aio_co_wake() would call qemu_get_current_aio_context() to check whether
+     * we are in the same context, but we are not in a qemu thread, so we cannot
+     * do that.  Use aio_co_schedule() directly.)
+     */
+    aio_co_schedule(qemu_coroutine_get_aio_context(acb->coroutine),
+                    acb->coroutine);
 }
 
 static void qemu_gluster_parse_flags(int bdrv_flags, int *open_flags)
@@ -808,6 +814,8 @@ static int qemu_gluster_open(BlockDriverState *bs,  QDict *options,
         ret = -EINVAL;
         goto out;
     }
+
+    warn_report_once("'gluster' is deprecated");
 
     filename = qemu_opt_get(opts, GLUSTER_OPT_FILENAME);
 
@@ -973,8 +981,6 @@ static void qemu_gluster_reopen_commit(BDRVReopenState *state)
 
     g_free(state->opaque);
     state->opaque = NULL;
-
-    return;
 }
 
 
@@ -994,8 +1000,6 @@ static void qemu_gluster_reopen_abort(BDRVReopenState *state)
 
     g_free(state->opaque);
     state->opaque = NULL;
-
-    return;
 }
 
 #ifdef CONFIG_GLUSTERFS_ZEROFILL
@@ -1011,7 +1015,6 @@ static coroutine_fn int qemu_gluster_co_pwrite_zeroes(BlockDriverState *bs,
     acb.size = bytes;
     acb.ret = 0;
     acb.coroutine = qemu_coroutine_self();
-    acb.aio_context = bdrv_get_aio_context(bs);
 
     ret = glfs_zerofill_async(s->fd, offset, bytes, gluster_finish_aiocb, &acb);
     if (ret < 0) {
@@ -1189,7 +1192,6 @@ static coroutine_fn int qemu_gluster_co_rw(BlockDriverState *bs,
     acb.size = size;
     acb.ret = 0;
     acb.coroutine = qemu_coroutine_self();
-    acb.aio_context = bdrv_get_aio_context(bs);
 
     if (write) {
         ret = glfs_pwritev_async(s->fd, qiov->iov, qiov->niov, offset, 0,
@@ -1256,7 +1258,6 @@ static coroutine_fn int qemu_gluster_co_flush_to_disk(BlockDriverState *bs)
     acb.size = 0;
     acb.ret = 0;
     acb.coroutine = qemu_coroutine_self();
-    acb.aio_context = bdrv_get_aio_context(bs);
 
     ret = glfs_fsync_async(s->fd, gluster_finish_aiocb, &acb);
     if (ret < 0) {
@@ -1304,7 +1305,6 @@ static coroutine_fn int qemu_gluster_co_pdiscard(BlockDriverState *bs,
     acb.size = 0;
     acb.ret = 0;
     acb.coroutine = qemu_coroutine_self();
-    acb.aio_context = bdrv_get_aio_context(bs);
 
     ret = glfs_discard_async(s->fd, offset, bytes, gluster_finish_aiocb, &acb);
     if (ret < 0) {
@@ -1466,7 +1466,7 @@ exit:
  * (Based on raw_co_block_status() from file-posix.c.)
  */
 static int coroutine_fn qemu_gluster_co_block_status(BlockDriverState *bs,
-                                                     bool want_zero,
+                                                     unsigned int mode,
                                                      int64_t offset,
                                                      int64_t bytes,
                                                      int64_t *pnum,
@@ -1483,7 +1483,7 @@ static int coroutine_fn qemu_gluster_co_block_status(BlockDriverState *bs,
         return ret;
     }
 
-    if (!want_zero) {
+    if (!(mode & BDRV_WANT_ZERO)) {
         *pnum = bytes;
         *map = offset;
         *file = bs;

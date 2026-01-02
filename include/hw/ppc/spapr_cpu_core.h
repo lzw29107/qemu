@@ -10,7 +10,7 @@
 #define HW_SPAPR_CPU_CORE_H
 
 #include "hw/cpu/core.h"
-#include "hw/qdev-core.h"
+#include "hw/core/qdev.h"
 #include "target/ppc/cpu-qom.h"
 #include "target/ppc/cpu.h"
 #include "qom/object.h"
@@ -28,7 +28,6 @@ struct SpaprCpuCore {
     /*< public >*/
     PowerPCCPU **threads;
     int node_id;
-    bool pre_3_0_migration; /* older machine don't know about SpaprCpuState */
 };
 
 struct SpaprCpuCoreClass {

@@ -8,13 +8,13 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "qemu/osdep.h"
-#include "hw/qdev-properties.h"
+#include "hw/core/qdev-properties.h"
 #include "migration/vmstate.h"
 #include "trace.h"
 #include "qapi/error.h"
 #include "hcd-xhci-sysbus.h"
 #include "hw/acpi/aml-build.h"
-#include "hw/irq.h"
+#include "hw/core/irq.h"
 
 static bool xhci_sysbus_intr_raise(XHCIState *xhci, int n, bool level)
 {
@@ -82,10 +82,9 @@ void xhci_sysbus_build_aml(Aml *scope, uint32_t mmio, unsigned int irq)
     aml_append(scope, dev);
 }
 
-static Property xhci_sysbus_props[] = {
+static const Property xhci_sysbus_props[] = {
     DEFINE_PROP_UINT32("intrs", XHCISysbusState, xhci.numintrs, XHCI_MAXINTRS),
     DEFINE_PROP_UINT32("slots", XHCISysbusState, xhci.numslots, XHCI_MAXSLOTS),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static const VMStateDescription vmstate_xhci_sysbus = {
@@ -97,11 +96,11 @@ static const VMStateDescription vmstate_xhci_sysbus = {
     }
 };
 
-static void xhci_sysbus_class_init(ObjectClass *klass, void *data)
+static void xhci_sysbus_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->reset = xhci_sysbus_reset;
+    device_class_set_legacy_reset(dc, xhci_sysbus_reset);
     dc->realize = xhci_sysbus_realize;
     dc->vmsd = &vmstate_xhci_sysbus;
     device_class_set_props(dc, xhci_sysbus_props);

@@ -21,7 +21,7 @@
 #ifndef HW_ARM_SMMUV3_INTERNAL_H
 #define HW_ARM_SMMUV3_INTERNAL_H
 
-#include "hw/registerfields.h"
+#include "hw/core/registerfields.h"
 #include "hw/arm/smmu-common.h"
 
 typedef enum SMMUTranslationStatus {
@@ -599,7 +599,8 @@ static inline int oas2bits(int oas_field)
     case 5:
         return 48;
     }
-    return -1;
+
+    g_assert_not_reached();
 }
 
 /* CD fields */

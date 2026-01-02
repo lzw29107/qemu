@@ -16,9 +16,9 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "hw/char/nrf51_uart.h"
-#include "hw/irq.h"
-#include "hw/qdev-properties.h"
-#include "hw/qdev-properties-system.h"
+#include "hw/core/irq.h"
+#include "hw/core/qdev-properties.h"
+#include "hw/core/qdev-properties-system.h"
 #include "migration/vmstate.h"
 #include "trace.h"
 
@@ -304,16 +304,15 @@ static const VMStateDescription nrf51_uart_vmstate = {
     }
 };
 
-static Property nrf51_uart_properties[] = {
+static const Property nrf51_uart_properties[] = {
     DEFINE_PROP_CHR("chardev", NRF51UARTState, chr),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
-static void nrf51_uart_class_init(ObjectClass *klass, void *data)
+static void nrf51_uart_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->reset = nrf51_uart_reset;
+    device_class_set_legacy_reset(dc, nrf51_uart_reset);
     dc->realize = nrf51_uart_realize;
     device_class_set_props(dc, nrf51_uart_properties);
     dc->vmsd = &nrf51_uart_vmstate;

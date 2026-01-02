@@ -29,25 +29,27 @@
 #include "qemu/units.h"
 #include "qapi/error.h"
 #include "cpu.h"
-#include "sysemu/sysemu.h"
-#include "hw/boards.h"
-#include "hw/loader.h"
-#include "hw/qdev-properties.h"
+#include "system/system.h"
+#include "hw/core/boards.h"
+#include "hw/core/loader.h"
+#include "hw/core/qdev-properties.h"
 #include "elf.h"
-#include "exec/memory.h"
-#include "hw/char/serial.h"
+#include "system/memory.h"
+#include "exec/tswap.h"
+#include "hw/char/serial-mm.h"
 #include "net/net.h"
-#include "hw/sysbus.h"
+#include "hw/core/sysbus.h"
 #include "hw/block/flash.h"
 #include "chardev/char.h"
-#include "sysemu/device_tree.h"
-#include "sysemu/reset.h"
-#include "sysemu/runstate.h"
+#include "system/device_tree.h"
+#include "system/reset.h"
+#include "system/runstate.h"
 #include "qemu/error-report.h"
 #include "qemu/option.h"
 #include "bootparam.h"
 #include "xtensa_memory.h"
 #include "hw/xtensa/mx_pic.h"
+#include "exec/cpu-common.h"
 #include "migration/vmstate.h"
 
 typedef struct XtfpgaFlashDesc {
@@ -267,7 +269,7 @@ static void xtfpga_init(const XtfpgaBoardDesc *board, MachineState *machine)
         /* Need MMU initialized prior to ELF loading,
          * so that ELF gets loaded into virtual addresses
          */
-        cpu_reset(CPU(cpu));
+        reset_mmu(cenv);
     }
     if (smp_cpus > 1) {
         extints = xtensa_mx_pic_get_extints(mx_pic);
@@ -380,7 +382,8 @@ static void xtfpga_init(const XtfpgaBoardDesc *board, MachineState *machine)
             if (initrd_size < 0) {
                 initrd_size = load_image_targphys(initrd_filename,
                                                   cur_lowmem,
-                                                  lowmem_end - cur_lowmem);
+                                                  lowmem_end - cur_lowmem,
+                                                  NULL);
             }
             if (initrd_size < 0) {
                 error_report("could not load initrd '%s'", initrd_filename);
@@ -397,7 +400,8 @@ static void xtfpga_init(const XtfpgaBoardDesc *board, MachineState *machine)
 
         uint64_t elf_entry;
         int success = load_elf(kernel_filename, NULL, translate_phys_addr, cpu,
-                               &elf_entry, NULL, NULL, NULL, TARGET_BIG_ENDIAN,
+                               &elf_entry, NULL, NULL, NULL,
+                               TARGET_BIG_ENDIAN ? ELFDATA2MSB : ELFDATA2LSB,
                                EM_XTENSA, 0, 0);
         if (success > 0) {
             entry_point = elf_entry;
@@ -415,8 +419,7 @@ static void xtfpga_init(const XtfpgaBoardDesc *board, MachineState *machine)
             }
         }
         if (entry_point != env->pc) {
-            uint8_t boot[] = {
-#if TARGET_BIG_ENDIAN
+            uint8_t boot_be[] = {
                 0x60, 0x00, 0x08,       /* j    1f */
                 0x00,                   /* .literal_position */
                 0x00, 0x00, 0x00, 0x00, /* .literal entry_pc */
@@ -425,7 +428,8 @@ static void xtfpga_init(const XtfpgaBoardDesc *board, MachineState *machine)
                 0x10, 0xff, 0xfe,       /* l32r a0, entry_pc */
                 0x12, 0xff, 0xfe,       /* l32r a2, entry_a2 */
                 0x0a, 0x00, 0x00,       /* jx   a0 */
-#else
+            };
+            uint8_t boot_le[] = {
                 0x06, 0x02, 0x00,       /* j    1f */
                 0x00,                   /* .literal_position */
                 0x00, 0x00, 0x00, 0x00, /* .literal entry_pc */
@@ -434,14 +438,16 @@ static void xtfpga_init(const XtfpgaBoardDesc *board, MachineState *machine)
                 0x01, 0xfe, 0xff,       /* l32r a0, entry_pc */
                 0x21, 0xfe, 0xff,       /* l32r a2, entry_a2 */
                 0xa0, 0x00, 0x00,       /* jx   a0 */
-#endif
             };
+            const size_t boot_sz = TARGET_BIG_ENDIAN ? sizeof(boot_be)
+                                                     : sizeof(boot_le);
+            uint8_t *boot = TARGET_BIG_ENDIAN ? boot_be : boot_le;
             uint32_t entry_pc = tswap32(entry_point);
             uint32_t entry_a2 = tswap32(tagptr);
 
             memcpy(boot + 4, &entry_pc, sizeof(entry_pc));
             memcpy(boot + 8, &entry_a2, sizeof(entry_a2));
-            cpu_physical_memory_write(env->pc, boot, sizeof(boot));
+            cpu_physical_memory_write(env->pc, boot, boot_sz);
         }
     } else {
         if (flash) {
@@ -581,7 +587,7 @@ static void xtfpga_kc705_nommu_init(MachineState *machine)
     xtfpga_init(&kc705_board, machine);
 }
 
-static void xtfpga_lx60_class_init(ObjectClass *oc, void *data)
+static void xtfpga_lx60_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
 
@@ -598,7 +604,7 @@ static const TypeInfo xtfpga_lx60_type = {
     .class_init = xtfpga_lx60_class_init,
 };
 
-static void xtfpga_lx60_nommu_class_init(ObjectClass *oc, void *data)
+static void xtfpga_lx60_nommu_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
 
@@ -615,7 +621,7 @@ static const TypeInfo xtfpga_lx60_nommu_type = {
     .class_init = xtfpga_lx60_nommu_class_init,
 };
 
-static void xtfpga_lx200_class_init(ObjectClass *oc, void *data)
+static void xtfpga_lx200_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
 
@@ -632,7 +638,7 @@ static const TypeInfo xtfpga_lx200_type = {
     .class_init = xtfpga_lx200_class_init,
 };
 
-static void xtfpga_lx200_nommu_class_init(ObjectClass *oc, void *data)
+static void xtfpga_lx200_nommu_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
 
@@ -649,7 +655,7 @@ static const TypeInfo xtfpga_lx200_nommu_type = {
     .class_init = xtfpga_lx200_nommu_class_init,
 };
 
-static void xtfpga_ml605_class_init(ObjectClass *oc, void *data)
+static void xtfpga_ml605_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
 
@@ -666,7 +672,7 @@ static const TypeInfo xtfpga_ml605_type = {
     .class_init = xtfpga_ml605_class_init,
 };
 
-static void xtfpga_ml605_nommu_class_init(ObjectClass *oc, void *data)
+static void xtfpga_ml605_nommu_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
 
@@ -683,7 +689,7 @@ static const TypeInfo xtfpga_ml605_nommu_type = {
     .class_init = xtfpga_ml605_nommu_class_init,
 };
 
-static void xtfpga_kc705_class_init(ObjectClass *oc, void *data)
+static void xtfpga_kc705_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
 
@@ -700,7 +706,7 @@ static const TypeInfo xtfpga_kc705_type = {
     .class_init = xtfpga_kc705_class_init,
 };
 
-static void xtfpga_kc705_nommu_class_init(ObjectClass *oc, void *data)
+static void xtfpga_kc705_nommu_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
 

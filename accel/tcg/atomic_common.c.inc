@@ -14,9 +14,20 @@
  */
 
 static void atomic_trace_rmw_post(CPUArchState *env, uint64_t addr,
+                                  uint64_t read_value_low,
+                                  uint64_t read_value_high,
+                                  uint64_t write_value_low,
+                                  uint64_t write_value_high,
                                   MemOpIdx oi)
 {
-    qemu_plugin_vcpu_mem_cb(env_cpu(env), addr, oi, QEMU_PLUGIN_MEM_RW);
+    if (cpu_plugin_mem_cbs_enabled(env_cpu(env))) {
+        qemu_plugin_vcpu_mem_cb(env_cpu(env), addr,
+                                read_value_low, read_value_high,
+                                oi, QEMU_PLUGIN_MEM_R);
+        qemu_plugin_vcpu_mem_cb(env_cpu(env), addr,
+                                write_value_low, write_value_high,
+                                oi, QEMU_PLUGIN_MEM_W);
+    }
 }
 
 /*
@@ -110,6 +121,15 @@ GEN_ATOMIC_HELPERS(smax_fetch)
 GEN_ATOMIC_HELPERS(umax_fetch)
 
 GEN_ATOMIC_HELPERS(xchg)
+
+#if HAVE_CMPXCHG128
+ATOMIC_HELPER(xchgo_be, Int128)
+ATOMIC_HELPER(xchgo_le, Int128)
+ATOMIC_HELPER(fetch_ando_be, Int128)
+ATOMIC_HELPER(fetch_ando_le, Int128)
+ATOMIC_HELPER(fetch_oro_be, Int128)
+ATOMIC_HELPER(fetch_oro_le, Int128)
+#endif
 
 #undef ATOMIC_HELPER
 #undef GEN_ATOMIC_HELPERS

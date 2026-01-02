@@ -36,8 +36,9 @@
 #include "qemu/help_option.h"
 #include "qemu/module.h"
 #include "qemu/plugin.h"
-#include "exec/exec-all.h"
 #include "user/guest-base.h"
+#include "user/page-protection.h"
+#include "accel/accel-ops.h"
 #include "tcg/startup.h"
 #include "qemu/timer.h"
 #include "qemu/envlist.h"
@@ -60,6 +61,7 @@ uintptr_t qemu_host_page_size;
 intptr_t qemu_host_page_mask;
 
 static bool opt_one_insn_per_tb;
+static unsigned long opt_tb_size;
 uintptr_t guest_base;
 bool have_guest_base;
 /*
@@ -88,6 +90,7 @@ bool have_guest_base;
 #endif
 
 unsigned long reserved_va;
+unsigned long guest_addr_max;
 
 const char *interp_prefix = CONFIG_QEMU_INTERP_PREFIX;
 const char *qemu_uname_release;
@@ -169,9 +172,13 @@ static void usage(void)
            "                  (use '-d help' for a list of log items)\n"
            "-D logfile        write logs to 'logfile' (default stderr)\n"
            "-one-insn-per-tb  run with one guest instruction per emulated TB\n"
+           "-tb-size size     TCG translation block cache size\n"
            "-strace           log system calls\n"
            "-trace            [[enable=]<pattern>][,events=<file>][,file=<file>]\n"
            "                  specify tracing options\n"
+#ifdef CONFIG_PLUGIN
+           "-plugin           [file=]<file>[,<argname>=<argvalue>]\n"
+#endif
            "\n"
            "Environment variables:\n"
            "QEMU_STRACE       Print system calls and arguments similar to the\n"
@@ -207,11 +214,6 @@ bool qemu_cpu_is_self(CPUState *cpu)
     return thread_cpu == cpu;
 }
 
-void qemu_cpu_kick(CPUState *cpu)
-{
-    cpu_exit(cpu);
-}
-
 /* Assumes contents are already zeroed.  */
 static void init_task_state(TaskState *ts)
 {
@@ -221,6 +223,8 @@ static void init_task_state(TaskState *ts)
         .ss_flags = TARGET_SS_DISABLE,
     };
 }
+
+static QemuPluginList plugins = QTAILQ_HEAD_INITIALIZER(plugins);
 
 void gemu_log(const char *fmt, ...)
 {
@@ -304,6 +308,7 @@ int main(int argc, char **argv)
     cpu_model = NULL;
 
     qemu_add_opts(&qemu_trace_opts);
+    qemu_plugin_add_opts();
 
     optind = 1;
     for (;;) {
@@ -357,14 +362,6 @@ int main(int argc, char **argv)
             }
         } else if (!strcmp(r, "L")) {
             interp_prefix = argv[optind++];
-        } else if (!strcmp(r, "p")) {
-            unsigned size, want = qemu_real_host_page_size();
-
-            r = argv[optind++];
-            if (qemu_strtoui(r, NULL, 10, &size) || size != want) {
-                warn_report("Deprecated page size option cannot "
-                            "change host page size (%u)", want);
-            }
         } else if (!strcmp(r, "g")) {
             gdbstub = g_strdup(argv[optind++]);
         } else if (!strcmp(r, "r")) {
@@ -387,10 +384,20 @@ int main(int argc, char **argv)
             seed_optarg = optarg;
         } else if (!strcmp(r, "one-insn-per-tb")) {
             opt_one_insn_per_tb = true;
+        } else if (!strcmp(r, "tb-size")) {
+            r = argv[optind++];
+            if (qemu_strtoul(r, NULL, 0, &opt_tb_size)) {
+                usage();
+            }
         } else if (!strcmp(r, "strace")) {
             do_strace = 1;
         } else if (!strcmp(r, "trace")) {
             trace_opt_parse(optarg);
+#ifdef CONFIG_PLUGIN
+        } else if (!strcmp(r, "plugin")) {
+            r = argv[optind++];
+            qemu_plugin_opt_parse(r, &plugins);
+#endif
         } else if (!strcmp(r, "0")) {
             argv0 = argv[optind++];
         } else {
@@ -425,6 +432,7 @@ int main(int argc, char **argv)
         exit(1);
     }
     trace_init_file();
+    qemu_plugin_load_list(&plugins, &error_fatal);
 
     /* Zero out regs */
     memset(regs, 0, sizeof(struct target_pt_regs));
@@ -452,7 +460,9 @@ int main(int argc, char **argv)
         accel_init_interfaces(ac);
         object_property_set_bool(OBJECT(accel), "one-insn-per-tb",
                                  opt_one_insn_per_tb, &error_abort);
-        ac->init_machine(NULL);
+        object_property_set_int(OBJECT(accel), "tb-size",
+                                opt_tb_size, &error_abort);
+        ac->init_machine(accel, NULL);
     }
 
     /*
@@ -490,6 +500,13 @@ int main(int argc, char **argv)
     } else if (HOST_LONG_BITS == 64 && TARGET_VIRT_ADDR_SPACE_BITS <= 32) {
         /* MAX_RESERVED_VA + 1 is a large power of 2, so is aligned. */
         reserved_va = max_reserved_va;
+    }
+    if (reserved_va != 0) {
+        guest_addr_max = reserved_va;
+    } else if (MIN(TARGET_VIRT_ADDR_SPACE_BITS, TARGET_ABI_BITS) <= 32) {
+        guest_addr_max = UINT32_MAX;
+    } else {
+        guest_addr_max = ~0ul;
     }
 
     if (getenv("QEMU_STRACE")) {
@@ -601,6 +618,7 @@ int main(int argc, char **argv)
     init_task_state(ts);
     ts->info = info;
     ts->bprm = &bprm;
+    ts->ts_tid = qemu_get_thread_id();
     cpu->opaque = ts;
 
     target_set_brk(info->brk);
@@ -617,8 +635,7 @@ int main(int argc, char **argv)
     target_cpu_init(env, regs);
 
     if (gdbstub) {
-        gdbserver_start(gdbstub);
-        gdb_handlesig(cpu, 0, NULL, NULL, 0);
+        gdbserver_start(gdbstub, &error_fatal);
     }
     cpu_loop(env);
     /* never exits */

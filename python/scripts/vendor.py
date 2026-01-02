@@ -41,8 +41,8 @@ def main() -> int:
     parser.parse_args()
 
     packages = {
-        "meson==1.2.3":
-        "4533a43c34548edd1f63a276a42690fce15bde9409bcf20c4b8fa3d7e4d7cac1",
+        "meson==1.10.0":
+        "4b27aafce281e652dcb437b28007457411245d975c48b5db3a797d3e93ae1585",
     }
 
     vendor_dir = Path(__file__, "..", "..", "wheels").resolve()

@@ -18,6 +18,7 @@
 #include "qemu/osdep.h"
 #include "block/block.h"
 #include "qemu/main-loop.h"
+#include "qemu/lockcnt.h"
 #include "qemu/queue.h"
 #include "qemu/sockets.h"
 #include "qapi/error.h"
@@ -120,7 +121,7 @@ void aio_set_fd_handler(AioContext *ctx,
 
         QLIST_INSERT_HEAD_RCU(&ctx->aio_handlers, node, node);
         event = event_notifier_get_handle(&ctx->notifier);
-        qemu_socket_select(fd, event, bitmask, NULL);
+        qemu_socket_select_nofail(fd, event, bitmask);
     }
     if (old_node) {
         aio_remove_fd_handler(ctx, old_node);
@@ -418,15 +419,12 @@ bool aio_poll(AioContext *ctx, bool blocking)
     return progress;
 }
 
-void aio_context_setup(AioContext *ctx)
+bool aio_context_setup(AioContext *ctx, Error **errp)
 {
+    return true;
 }
 
 void aio_context_destroy(AioContext *ctx)
-{
-}
-
-void aio_context_use_g_source(AioContext *ctx)
 {
 }
 

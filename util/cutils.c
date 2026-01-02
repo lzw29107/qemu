@@ -44,126 +44,7 @@
 #endif
 
 #ifdef G_OS_WIN32
-#include "pathcch2.h"
-#include <Windows.h>
-
-static BOOL is_prefixed_volume(const WCHAR* string)
-{
-    const WCHAR* guid;
-    INT i = 0;
-
-    if (wcsnicmp(string, L"\\\\?\\Volume", 10)) return FALSE;
-
-    guid = string + 10;
-
-    while (i <= 37)
-    {
-        switch (i)
-        {
-        case 0:
-            if (guid[i] != '{') return FALSE;
-            break;
-        case 9:
-        case 14:
-        case 19:
-        case 24:
-            if (guid[i] != '-') return FALSE;
-            break;
-        case 37:
-            if (guid[i] != '}') return FALSE;
-            break;
-        default:
-            if (!isxdigit(guid[i])) return FALSE;
-            break;
-        }
-        i++;
-    }
-
-    return TRUE;
-}
-
-static BOOL is_prefixed_unc(const WCHAR* string)
-{
-    return !wcsnicmp(string, L"\\\\?\\UNC\\", 8);
-}
-
-static BOOL is_drive_spec(const WCHAR* str)
-{
-    return isalpha(str[0]) && str[1] == ':';
-}
-
-static BOOL is_prefixed_disk(const WCHAR* string)
-{
-    return !wcsncmp(string, L"\\\\?\\", 4) && is_drive_spec(string + 4);
-}
-/* Find the last character of the root in a path, if there is one, without any segments */
-static const WCHAR* get_root_end(const WCHAR* path)
-{
-    /* Find path root */
-    if (is_prefixed_volume(path))
-        return path[48] == '\\' ? path + 48 : path + 47;
-    else if (is_prefixed_unc(path))
-        return path + 7;
-    else if (is_prefixed_disk(path))
-        return path[6] == '\\' ? path + 6 : path + 5;
-    /* \\ */
-    else if (path[0] == '\\' && path[1] == '\\')
-        return path + 1;
-    /* \ */
-    else if (path[0] == '\\')
-        return path;
-    /* X:\ */
-    else if (is_drive_spec(path))
-        return path[2] == '\\' ? path + 2 : path + 1;
-    else
-        return NULL;
-}
-
-/* Get the next character beyond end of the segment.
-   Return TRUE if the last segment ends with a backslash */
-static BOOL get_next_segment(const WCHAR* next, const WCHAR** next_segment)
-{
-    while (*next && *next != '\\') next++;
-    if (*next == '\\')
-    {
-        *next_segment = next + 1;
-        return TRUE;
-    }
-    else
-    {
-        *next_segment = next;
-        return FALSE;
-    }
-}
-
-HRESULT WINAPI PathCchSkipRoot2(const WCHAR* path, const WCHAR** root_end)
-{
-
-    if (!path || !path[0] || !root_end
-        || (!wcsnicmp(path, L"\\\\?", 3) && !is_prefixed_volume(path) && !is_prefixed_unc(path)
-            && !is_prefixed_disk(path)))
-        return E_INVALIDARG;
-
-    *root_end = get_root_end(path);
-    if (*root_end)
-    {
-        (*root_end)++;
-        if (is_prefixed_unc(path))
-        {
-            get_next_segment(*root_end, root_end);
-            get_next_segment(*root_end, root_end);
-        }
-        else if (path[0] == '\\' && path[1] == '\\' && path[2] != '?')
-        {
-            /* Skip share server */
-            get_next_segment(*root_end, root_end);
-            /* If mount point is empty, don't skip over mount point */
-            if (**root_end != '\\') get_next_segment(*root_end, root_end);
-        }
-    }
-
-    return *root_end ? S_OK : E_INVALIDARG;
-}
+#include <pathcch.h>
 #include <wchar.h>
 #endif
 
@@ -1263,11 +1144,6 @@ void qemu_init_exec_dir(const char *argv0)
 #endif
 }
 
-const char *qemu_get_exec_dir(void)
-{
-    return exec_dir;
-}
-
 char *get_relocated_path(const char *dir)
 {
     size_t prefix_len = strlen(CONFIG_PREFIX);
@@ -1288,7 +1164,7 @@ char *get_relocated_path(const char *dir)
         mbsrtowcs(wdir, &src, size, &(mbstate_t){0});
 
         PCWSTR wdir_skipped_root;
-        if (PathCchSkipRoot2(wdir, &wdir_skipped_root) == S_OK) {
+        if (PathCchSkipRoot(wdir, &wdir_skipped_root) == S_OK) {
             size = wcsrtombs(NULL, &wdir_skipped_root, 0, &(mbstate_t){0});
             char *cursor = result->str + result->len;
             g_string_set_size(result, result->len + size);

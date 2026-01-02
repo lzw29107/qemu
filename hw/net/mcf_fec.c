@@ -8,16 +8,16 @@
 
 #include "qemu/osdep.h"
 #include "qemu/log.h"
-#include "hw/irq.h"
+#include "hw/core/irq.h"
 #include "net/net.h"
 #include "qemu/module.h"
 #include "hw/m68k/mcf.h"
 #include "hw/m68k/mcf_fec.h"
 #include "hw/net/mii.h"
-#include "hw/qdev-properties.h"
-#include "hw/sysbus.h"
-/* For crc32 */
-#include <zlib.h>
+#include "hw/core/qdev-properties.h"
+#include "hw/core/sysbus.h"
+#include "exec/cpu-common.h"
+#include <zlib.h> /* for crc32 */
 
 //#define DEBUG_FEC 1
 
@@ -661,19 +661,18 @@ static void mcf_fec_instance_init(Object *obj)
     }
 }
 
-static Property mcf_fec_properties[] = {
+static const Property mcf_fec_properties[] = {
     DEFINE_NIC_PROPERTIES(mcf_fec_state, conf),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
-static void mcf_fec_class_init(ObjectClass *oc, void *data)
+static void mcf_fec_class_init(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
 
     set_bit(DEVICE_CATEGORY_NETWORK, dc->categories);
     dc->realize = mcf_fec_realize;
     dc->desc = "MCF Fast Ethernet Controller network device";
-    dc->reset = mcf_fec_reset;
+    device_class_set_legacy_reset(dc, mcf_fec_reset);
     device_class_set_props(dc, mcf_fec_properties);
 }
 

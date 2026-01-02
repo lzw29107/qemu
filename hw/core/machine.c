@@ -11,36 +11,74 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/units.h"
 #include "qemu/accel.h"
-#include "sysemu/replay.h"
-#include "hw/boards.h"
-#include "hw/loader.h"
+#include "system/replay.h"
+#include "hw/core/boards.h"
+#include "hw/core/loader.h"
+#include "qemu/error-report.h"
 #include "qapi/error.h"
 #include "qapi/qapi-visit-machine.h"
+#include "qapi/qapi-commands-machine.h"
 #include "qemu/madvise.h"
 #include "qom/object_interfaces.h"
-#include "sysemu/cpus.h"
-#include "sysemu/sysemu.h"
-#include "sysemu/reset.h"
-#include "sysemu/runstate.h"
-#include "sysemu/xen.h"
-#include "sysemu/qtest.h"
+#include "system/cpus.h"
+#include "system/system.h"
+#include "system/reset.h"
+#include "system/runstate.h"
+#include "system/xen.h"
+#include "system/qtest.h"
 #include "hw/pci/pci_bridge.h"
 #include "hw/mem/nvdimm.h"
 #include "migration/global_state.h"
-#include "exec/confidential-guest-support.h"
+#include "system/confidential-guest-support.h"
 #include "hw/virtio/virtio-pci.h"
 #include "hw/virtio/virtio-net.h"
 #include "hw/virtio/virtio-iommu.h"
-#include "audio/audio.h"
+#include "hw/acpi/generic_event_device.h"
+#include "qemu/audio.h"
+
+GlobalProperty hw_compat_10_1[] = {
+    { TYPE_ACPI_GED, "x-has-hest-addr", "false" },
+    { TYPE_VIRTIO_NET, "host_tunnel", "off" },
+    { TYPE_VIRTIO_NET, "host_tunnel_csum", "off" },
+    { TYPE_VIRTIO_NET, "guest_tunnel", "off" },
+    { TYPE_VIRTIO_NET, "guest_tunnel_csum", "off" },
+};
+const size_t hw_compat_10_1_len = G_N_ELEMENTS(hw_compat_10_1);
+
+GlobalProperty hw_compat_10_0[] = {
+    { "scsi-hd", "dpofua", "off" },
+    { "vfio-pci", "x-migration-load-config-after-iter", "off" },
+    { "ramfb", "use-legacy-x86-rom", "true"},
+    { "vfio-pci-nohotplug", "use-legacy-x86-rom", "true" },
+};
+const size_t hw_compat_10_0_len = G_N_ELEMENTS(hw_compat_10_0);
+
+GlobalProperty hw_compat_9_2[] = {
+    { "arm-cpu", "backcompat-pauth-default-use-qarma5", "true"},
+    { "virtio-balloon-pci", "vectors", "0" },
+    { "virtio-balloon-pci-transitional", "vectors", "0" },
+    { "virtio-balloon-pci-non-transitional", "vectors", "0" },
+    { "virtio-mem-pci", "vectors", "0" },
+    { "migration", "multifd-clean-tls-termination", "false" },
+    { "migration", "send-switchover-start", "off"},
+    { "vfio-pci", "x-migration-multifd-transfer", "off" },
+};
+const size_t hw_compat_9_2_len = G_N_ELEMENTS(hw_compat_9_2);
+
+GlobalProperty hw_compat_9_1[] = {
+    { TYPE_PCI_DEVICE, "x-pcie-ext-tag", "false" },
+};
+const size_t hw_compat_9_1_len = G_N_ELEMENTS(hw_compat_9_1);
 
 GlobalProperty hw_compat_9_0[] = {
-    {"arm-cpu", "backcompat-cntfrq", "true" },
+    { "arm-cpu", "backcompat-cntfrq", "true" },
     { "scsi-hd", "migrate-emulated-scsi-request", "false" },
     { "scsi-cd", "migrate-emulated-scsi-request", "false" },
-    {"vfio-pci", "skip-vsc-check", "false" },
+    { "vfio-pci", "skip-vsc-check", "false" },
     { "virtio-pci", "x-pcie-pm-no-soft-reset", "off" },
-    {"sd-card", "spec_version", "2" },
+    { "sd-card", "spec_version", "2" },
 };
 const size_t hw_compat_9_0_len = G_N_ELEMENTS(hw_compat_9_0);
 
@@ -260,51 +298,6 @@ GlobalProperty hw_compat_2_6[] = {
 };
 const size_t hw_compat_2_6_len = G_N_ELEMENTS(hw_compat_2_6);
 
-GlobalProperty hw_compat_2_5[] = {
-    { "isa-fdc", "fallback", "144" },
-    { "pvscsi", "x-old-pci-configuration", "on" },
-    { "pvscsi", "x-disable-pcie", "on" },
-    { "vmxnet3", "x-old-msi-offsets", "on" },
-    { "vmxnet3", "x-disable-pcie", "on" },
-};
-const size_t hw_compat_2_5_len = G_N_ELEMENTS(hw_compat_2_5);
-
-GlobalProperty hw_compat_2_4[] = {
-    { "e1000", "extra_mac_registers", "off" },
-    { "virtio-pci", "x-disable-pcie", "on" },
-    { "virtio-pci", "migrate-extra", "off" },
-    { "fw_cfg_mem", "dma_enabled", "off" },
-    { "fw_cfg_io", "dma_enabled", "off" }
-};
-const size_t hw_compat_2_4_len = G_N_ELEMENTS(hw_compat_2_4);
-
-GlobalProperty hw_compat_2_3[] = {
-    { "virtio-blk-pci", "any_layout", "off" },
-    { "virtio-balloon-pci", "any_layout", "off" },
-    { "virtio-serial-pci", "any_layout", "off" },
-    { "virtio-9p-pci", "any_layout", "off" },
-    { "virtio-rng-pci", "any_layout", "off" },
-    { TYPE_PCI_DEVICE, "x-pcie-lnksta-dllla", "off" },
-    { "migration", "send-configuration", "off" },
-    { "migration", "send-section-footer", "off" },
-    { "migration", "store-global-state", "off" },
-};
-const size_t hw_compat_2_3_len = G_N_ELEMENTS(hw_compat_2_3);
-
-GlobalProperty hw_compat_2_2[] = {};
-const size_t hw_compat_2_2_len = G_N_ELEMENTS(hw_compat_2_2);
-
-GlobalProperty hw_compat_2_1[] = {
-    { "intel-hda", "old_msi_addr", "on" },
-    { "VGA", "qemu-extended-regs", "off" },
-    { "secondary-vga", "qemu-extended-regs", "off" },
-    { "virtio-scsi-pci", "any_layout", "off" },
-    { "usb-mouse", "usb_version", "1" },
-    { "usb-kbd", "usb_version", "1" },
-    { "virtio-pci", "virtio-pci-bus-master-bug-migration", "on" },
-};
-const size_t hw_compat_2_1_len = G_N_ELEMENTS(hw_compat_2_1);
-
 MachineState *current_machine;
 
 static char *machine_get_kernel(Object *obj, Error **errp)
@@ -320,6 +313,21 @@ static void machine_set_kernel(Object *obj, const char *value, Error **errp)
 
     g_free(ms->kernel_filename);
     ms->kernel_filename = g_strdup(value);
+}
+
+static char *machine_get_shim(Object *obj, Error **errp)
+{
+    MachineState *ms = MACHINE(obj);
+
+    return g_strdup(ms->shim_filename);
+}
+
+static void machine_set_shim(Object *obj, const char *value, Error **errp)
+{
+    MachineState *ms = MACHINE(obj);
+
+    g_free(ms->shim_filename);
+    ms->shim_filename = g_strdup(value);
 }
 
 static char *machine_get_initrd(Object *obj, Error **errp)
@@ -457,6 +465,22 @@ static void machine_set_mem_merge(Object *obj, bool value, Error **errp)
     ms->mem_merge = value;
 }
 
+#ifdef CONFIG_POSIX
+static bool machine_get_aux_ram_share(Object *obj, Error **errp)
+{
+    MachineState *ms = MACHINE(obj);
+
+    return ms->aux_ram_share;
+}
+
+static void machine_set_aux_ram_share(Object *obj, bool value, Error **errp)
+{
+    MachineState *ms = MACHINE(obj);
+
+    ms->aux_ram_share = value;
+}
+#endif
+
 static bool machine_get_usb(Object *obj, Error **errp)
 {
     MachineState *ms = MACHINE(obj);
@@ -566,6 +590,20 @@ static void machine_set_nvdimm(Object *obj, bool value, Error **errp)
     ms->nvdimms_state->is_enabled = value;
 }
 
+static bool machine_get_spcr(Object *obj, Error **errp)
+{
+    MachineState *ms = MACHINE(obj);
+
+    return ms->acpi_spcr_enabled;
+}
+
+static void machine_set_spcr(Object *obj, bool value, Error **errp)
+{
+    MachineState *ms = MACHINE(obj);
+
+    ms->acpi_spcr_enabled = value;
+}
+
 static bool machine_get_hmat(Object *obj, Error **errp)
 {
     MachineState *ms = MACHINE(obj);
@@ -614,15 +652,20 @@ static void machine_set_mem(Object *obj, Visitor *v, const char *name,
         mem->size = mc->default_ram_size;
     }
     mem->size = QEMU_ALIGN_UP(mem->size, 8192);
-    if (mc->fixup_ram_size) {
-        mem->size = mc->fixup_ram_size(mem->size);
-    }
     if ((ram_addr_t)mem->size != mem->size) {
-        error_setg(errp, "ram size too large");
+        error_setg(errp, "ram size %llu exceeds permitted maximum %llu",
+                   (unsigned long long)mem->size,
+                   (unsigned long long)RAM_ADDR_MAX);
         goto out_free;
     }
 
     if (mem->has_max_size) {
+        if ((ram_addr_t)mem->max_size != mem->max_size) {
+            error_setg(errp, "ram size %llu exceeds permitted maximum %llu",
+                       (unsigned long long)mem->max_size,
+                       (unsigned long long)RAM_ADDR_MAX);
+            goto out_free;
+        }
         if (mem->max_size < mem->size) {
             error_setg(errp, "invalid value of maxmem: "
                        "maximum memory size (0x%" PRIx64 ") must be at least "
@@ -721,7 +764,7 @@ static void machine_set_audiodev(Object *obj, const char *value,
 {
     MachineState *ms = MACHINE(obj);
 
-    if (!audio_state_by_name(value, errp)) {
+    if (!audio_be_by_name(value, errp)) {
         return;
     }
 
@@ -929,6 +972,40 @@ static void machine_set_smp(Object *obj, Visitor *v, const char *name,
     machine_parse_smp_config(ms, config, errp);
 }
 
+static void machine_get_smp_cache(Object *obj, Visitor *v, const char *name,
+                                  void *opaque, Error **errp)
+{
+    MachineState *ms = MACHINE(obj);
+    SmpCache *cache = &ms->smp_cache;
+    SmpCachePropertiesList *head = NULL;
+    SmpCachePropertiesList **tail = &head;
+
+    for (int i = 0; i < CACHE_LEVEL_AND_TYPE__MAX; i++) {
+        SmpCacheProperties *node = g_new(SmpCacheProperties, 1);
+
+        node->cache = cache->props[i].cache;
+        node->topology = cache->props[i].topology;
+        QAPI_LIST_APPEND(tail, node);
+    }
+
+    visit_type_SmpCachePropertiesList(v, name, &head, errp);
+    qapi_free_SmpCachePropertiesList(head);
+}
+
+static void machine_set_smp_cache(Object *obj, Visitor *v, const char *name,
+                                  void *opaque, Error **errp)
+{
+    MachineState *ms = MACHINE(obj);
+    SmpCachePropertiesList *caches;
+
+    if (!visit_type_SmpCachePropertiesList(v, name, &caches, errp)) {
+        return;
+    }
+
+    machine_parse_smp_cache(ms, caches, errp);
+    qapi_free_SmpCachePropertiesList(caches);
+}
+
 static void machine_get_boot(Object *obj, Visitor *v, const char *name,
                             void *opaque, Error **errp)
 {
@@ -998,7 +1075,40 @@ void machine_add_audiodev_property(MachineClass *mc)
                                           "Audiodev to use for default machine devices");
 }
 
-static void machine_class_init(ObjectClass *oc, void *data)
+static bool create_default_memdev(MachineState *ms, const char *path,
+                                  Error **errp)
+{
+    Object *obj;
+    MachineClass *mc = MACHINE_GET_CLASS(ms);
+    bool r = false;
+
+    obj = object_new(path ? TYPE_MEMORY_BACKEND_FILE : TYPE_MEMORY_BACKEND_RAM);
+    if (path) {
+        if (!object_property_set_str(obj, "mem-path", path, errp)) {
+            goto out;
+        }
+    }
+    if (!object_property_set_int(obj, "size", ms->ram_size, errp)) {
+        goto out;
+    }
+    object_property_add_child(object_get_objects_root(), mc->default_ram_id,
+                              obj);
+    /* Ensure backend's memory region name is equal to mc->default_ram_id */
+    if (!object_property_set_bool(obj, "x-use-canonical-path-for-ramblock-id",
+                             false, errp)) {
+        goto out;
+    }
+    if (!user_creatable_complete(USER_CREATABLE(obj), errp)) {
+        goto out;
+    }
+    r = object_property_set_link(OBJECT(ms), "memory-backend", obj, errp);
+
+out:
+    object_unref(obj);
+    return r;
+}
+
+static void machine_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
 
@@ -1009,18 +1119,28 @@ static void machine_class_init(ObjectClass *oc, void *data)
      * SMBIOS 3.1.0 7.18.5 Memory Device — Extended Size
      * use max possible value that could be encoded into
      * 'Extended Size' field (2047Tb).
+     *
+     * Unfortunately (current) Windows Server 2025 and earlier do not handle
+     * 4Tb+ DIMM size.
      */
-    mc->smbios_memory_device_size = 2047 * TiB;
+    mc->smbios_memory_device_size = 2 * TiB;
 
     /* numa node memory size aligned on 8MB by default.
      * On Linux, each node's border has to be 8MB aligned
      */
     mc->numa_mem_align_shift = 23;
 
+    mc->create_default_memdev = create_default_memdev;
+
     object_class_property_add_str(oc, "kernel",
         machine_get_kernel, machine_set_kernel);
     object_class_property_set_description(oc, "kernel",
         "Linux kernel image file");
+
+    object_class_property_add_str(oc, "shim",
+        machine_get_shim, machine_set_shim);
+    object_class_property_set_description(oc, "shim",
+        "shim.efi file");
 
     object_class_property_add_str(oc, "initrd",
         machine_get_initrd, machine_set_initrd);
@@ -1054,6 +1174,11 @@ static void machine_class_init(ObjectClass *oc, void *data)
     object_class_property_set_description(oc, "smp",
         "CPU topology");
 
+    object_class_property_add(oc, "smp-cache", "SmpCachePropertiesWrapper",
+        machine_get_smp_cache, machine_set_smp_cache, NULL, NULL);
+    object_class_property_set_description(oc, "smp-cache",
+        "Cache properties list for SMP machine");
+
     object_class_property_add(oc, "phandle-start", "int",
         machine_get_phandle_start, machine_set_phandle_start,
         NULL, NULL);
@@ -1074,6 +1199,14 @@ static void machine_class_init(ObjectClass *oc, void *data)
         machine_get_mem_merge, machine_set_mem_merge);
     object_class_property_set_description(oc, "mem-merge",
         "Enable/disable memory merge support");
+
+#ifdef CONFIG_POSIX
+    object_class_property_add_bool(oc, "aux-ram-share",
+                                   machine_get_aux_ram_share,
+                                   machine_set_aux_ram_share);
+    object_class_property_set_description(oc, "aux-ram-share",
+        "Use anonymous shared memory for auxiliary guest RAMs");
+#endif
 
     object_class_property_add_bool(oc, "usb",
         machine_get_usb, machine_set_usb);
@@ -1123,7 +1256,7 @@ static void machine_class_init(ObjectClass *oc, void *data)
         "Memory size configuration");
 }
 
-static void machine_class_base_init(ObjectClass *oc, void *data)
+static void machine_class_base_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
     mc->max_cpus = mc->max_cpus ?: 1;
@@ -1143,9 +1276,6 @@ static void machine_initfn(Object *obj)
 {
     MachineState *ms = MACHINE(obj);
     MachineClass *mc = MACHINE_GET_CLASS(obj);
-
-    container_get(obj, "/peripheral");
-    container_get(obj, "/peripheral-anon");
 
     ms->dump_guest_core = true;
     ms->mem_merge = (QEMU_MADV_MERGEABLE != QEMU_MADV_INVALID);
@@ -1180,6 +1310,14 @@ static void machine_initfn(Object *obj)
                                         "Table (HMAT)");
     }
 
+    /* SPCR */
+    ms->acpi_spcr_enabled = true;
+    object_property_add_bool(obj, "spcr", machine_get_spcr, machine_set_spcr);
+    object_property_set_description(obj, "spcr",
+                                   "Set on/off to enable/disable "
+                                   "ACPI Serial Port Console Redirection "
+                                   "Table (spcr)");
+
     /* default to mc->default_cpus */
     ms->smp.cpus = mc->default_cpus;
     ms->smp.max_cpus = mc->default_cpus;
@@ -1191,6 +1329,11 @@ static void machine_initfn(Object *obj)
     ms->smp.modules = 1;
     ms->smp.cores = 1;
     ms->smp.threads = 1;
+
+    for (int i = 0; i < CACHE_LEVEL_AND_TYPE__MAX; i++) {
+        ms->smp_cache.props[i].cache = (CacheLevelAndType)i;
+        ms->smp_cache.props[i].topology = CPU_TOPOLOGY_LEVEL_DEFAULT;
+    }
 
     machine_copy_boot_config(ms, &(BootConfiguration){ 0 });
 }
@@ -1410,38 +1553,6 @@ MemoryRegion *machine_consume_memdev(MachineState *machine,
     return ret;
 }
 
-static bool create_default_memdev(MachineState *ms, const char *path, Error **errp)
-{
-    Object *obj;
-    MachineClass *mc = MACHINE_GET_CLASS(ms);
-    bool r = false;
-
-    obj = object_new(path ? TYPE_MEMORY_BACKEND_FILE : TYPE_MEMORY_BACKEND_RAM);
-    if (path) {
-        if (!object_property_set_str(obj, "mem-path", path, errp)) {
-            goto out;
-        }
-    }
-    if (!object_property_set_int(obj, "size", ms->ram_size, errp)) {
-        goto out;
-    }
-    object_property_add_child(object_get_objects_root(), mc->default_ram_id,
-                              obj);
-    /* Ensure backend's memory region name is equal to mc->default_ram_id */
-    if (!object_property_set_bool(obj, "x-use-canonical-path-for-ramblock-id",
-                             false, errp)) {
-        goto out;
-    }
-    if (!user_creatable_complete(USER_CREATABLE(obj), errp)) {
-        goto out;
-    }
-    r = object_property_set_link(OBJECT(ms), "memory-backend", obj, errp);
-
-out:
-    object_unref(obj);
-    return r;
-}
-
 const char *machine_class_default_cpu_type(MachineClass *mc)
 {
     if (mc->valid_cpu_types && !mc->valid_cpu_types[1]) {
@@ -1449,6 +1560,16 @@ const char *machine_class_default_cpu_type(MachineClass *mc)
         return mc->valid_cpu_types[0];
     }
     return mc->default_cpu_type;
+}
+
+const char *machine_default_cpu_type(const MachineState *ms)
+{
+    MachineClass *mc = MACHINE_GET_CLASS(ms);
+
+    if (mc->get_default_cpu_type) {
+        return mc->get_default_cpu_type(ms);
+    }
+    return machine_class_default_cpu_type(mc);
 }
 
 static bool is_cpu_type_supported(const MachineState *machine, Error **errp)
@@ -1465,6 +1586,8 @@ static bool is_cpu_type_supported(const MachineState *machine, Error **errp)
      */
     if (mc->valid_cpu_types) {
         assert(mc->valid_cpu_types[0] != NULL);
+        assert(!mc->get_valid_cpu_types);
+
         for (i = 0; mc->valid_cpu_types[i]; i++) {
             if (object_class_dynamic_cast(oc, mc->valid_cpu_types[i])) {
                 break;
@@ -1491,6 +1614,32 @@ static bool is_cpu_type_supported(const MachineState *machine, Error **errp)
                 error_append_hint(errp, "\n");
             }
 
+            return false;
+        }
+    } else if (mc->get_valid_cpu_types) {
+        GPtrArray *vct = mc->get_valid_cpu_types(machine);
+        bool valid = false;
+
+        for (i = 0; i < vct->len; i++) {
+            if (object_class_dynamic_cast(oc, vct->pdata[i])) {
+                valid = true;
+                break;
+            }
+        }
+
+        if (!valid) {
+            g_autofree char *requested = cpu_model_from_type(machine->cpu_type);
+
+            error_setg(errp, "Invalid CPU model: %s", requested);
+            error_append_hint(errp, "The valid models are: ");
+            for (i = 0; i < vct->len; i++) {
+                g_autofree char *model = cpu_model_from_type(vct->pdata[i]);
+                error_append_hint(errp, "%s%s",
+                                  model, i + 1 == vct->len ? "\n" : ", ");
+            }
+        }
+        g_ptr_array_free(vct, true);
+        if (!valid) {
             return false;
         }
     }
@@ -1545,7 +1694,9 @@ void machine_run_board_init(MachineState *machine, const char *mem_path, Error *
                 machine_class->default_ram_id);
             return;
         }
-        if (!create_default_memdev(current_machine, mem_path, errp)) {
+
+        if (!machine_class->create_default_memdev(current_machine, mem_path,
+                                                  errp)) {
             return;
         }
     }
@@ -1610,6 +1761,22 @@ void qemu_remove_machine_init_done_notifier(Notifier *notify)
     notifier_remove(notify);
 }
 
+static void handle_machine_dumpdtb(MachineState *ms)
+{
+    if (!ms->dumpdtb) {
+        return;
+    }
+#ifdef CONFIG_FDT
+    qmp_dumpdtb(ms->dumpdtb, &error_fatal);
+    exit(0);
+#else
+    error_report("This machine doesn't have an FDT");
+    error_printf("(this machine type definitely doesn't use FDT, and "
+                 "this QEMU doesn't have FDT support compiled in)\n");
+    exit(1);
+#endif
+}
+
 void qdev_machine_creation_done(void)
 {
     cpu_synchronize_all_post_init();
@@ -1638,6 +1805,12 @@ void qdev_machine_creation_done(void)
     qemu_register_resettable(OBJECT(sysbus_get_default()));
 
     notifier_list_notify(&machine_init_done_notifiers, NULL);
+
+    /*
+     * If the user used -machine dumpdtb=file.dtb to request that we
+     * dump the DTB to a file, do it now, and exit.
+     */
+    handle_machine_dumpdtb(current_machine);
 
     if (rom_check_and_register_reset() != 0) {
         exit(1);

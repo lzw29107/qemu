@@ -14,9 +14,9 @@
 #include <sys/ioctl.h>
 #include <linux/vfio.h>
 #include "qapi/error.h"
-#include "exec/ramlist.h"
+#include "system/ramlist.h"
 #include "exec/cpu-common.h"
-#include "exec/memory.h"
+#include "system/memory.h"
 #include "trace.h"
 #include "qemu/error-report.h"
 #include "standard-headers/linux/pci_regs.h"

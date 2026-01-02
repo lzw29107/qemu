@@ -29,10 +29,10 @@
 #include "qemu/error-report.h"
 #include "qemu/log.h"
 #include "qapi/error.h"
-#include "sysemu/blockdev.h"
+#include "system/blockdev.h"
 #include "migration/vmstate.h"
-#include "hw/qdev-properties.h"
-#include "hw/qdev-properties-system.h"
+#include "hw/core/qdev-properties.h"
+#include "hw/core/qdev-properties-system.h"
 #include "hw/nvram/xlnx-efuse.h"
 
 #ifndef XLNX_BBRAM_ERR_DEBUG
@@ -496,7 +496,7 @@ static void bbram_prop_release_drive(Object *obj, const char *name,
 }
 
 static const PropertyInfo bbram_prop_drive = {
-    .name  = "str",
+    .type  = "str",
     .description = "Node name or ID of a block device to use as BBRAM backend",
     .realized_set_allowed = true,
     .get = bbram_prop_get_drive,
@@ -514,13 +514,12 @@ static const VMStateDescription vmstate_bbram_ctrl = {
     }
 };
 
-static Property bbram_ctrl_props[] = {
+static const Property bbram_ctrl_props[] = {
     DEFINE_PROP("drive", XlnxBBRam, blk, bbram_prop_drive, BlockBackend *),
     DEFINE_PROP_UINT32("crc-zpads", XlnxBBRam, crc_zpads, 1),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
-static void bbram_ctrl_class_init(ObjectClass *klass, void *data)
+static void bbram_ctrl_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     ResettableClass *rc = RESETTABLE_CLASS(klass);

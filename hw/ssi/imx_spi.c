@@ -9,7 +9,7 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/irq.h"
+#include "hw/core/irq.h"
 #include "hw/ssi/imx_spi.h"
 #include "migration/vmstate.h"
 #include "qemu/log.h"
@@ -475,13 +475,13 @@ static void imx_spi_realize(DeviceState *dev, Error **errp)
     fifo32_create(&s->rx_fifo, ECSPI_FIFO_SIZE);
 }
 
-static void imx_spi_class_init(ObjectClass *klass, void *data)
+static void imx_spi_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = imx_spi_realize;
     dc->vmsd = &vmstate_imx_spi;
-    dc->reset = imx_spi_reset;
+    device_class_set_legacy_reset(dc, imx_spi_reset);
     dc->desc = "i.MX SPI Controller";
 }
 

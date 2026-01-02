@@ -24,7 +24,7 @@
 #ifndef SDHCI_INTERNAL_H
 #define SDHCI_INTERNAL_H
 
-#include "hw/registerfields.h"
+#include "hw/core/registerfields.h"
 
 /* R/W SDMA System Address register 0x0 */
 #define SDHC_SYSAD                     0x00
@@ -322,6 +322,6 @@ void sdhci_initfn(SDHCIState *s);
 void sdhci_uninitfn(SDHCIState *s);
 void sdhci_common_realize(SDHCIState *s, Error **errp);
 void sdhci_common_unrealize(SDHCIState *s);
-void sdhci_common_class_init(ObjectClass *klass, void *data);
+void sdhci_common_class_init(ObjectClass *klass, const void *data);
 
 #endif

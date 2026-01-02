@@ -191,16 +191,6 @@ bool qemu_clock_use_for_deadline(QEMUClockType type);
 int64_t qemu_clock_deadline_ns_all(QEMUClockType type, int attr_mask);
 
 /**
- * qemu_clock_get_main_loop_timerlist:
- * @type: the clock type
- *
- * Return the default timer list associated with a clock.
- *
- * Returns: the default timer list
- */
-QEMUTimerList *qemu_clock_get_main_loop_timerlist(QEMUClockType type);
-
-/**
  * qemu_clock_nofify:
  * @type: the clock type
  *
@@ -325,17 +315,6 @@ bool timerlist_expired(QEMUTimerList *timer_list);
  * timer expires -1 if none
  */
 int64_t timerlist_deadline_ns(QEMUTimerList *timer_list);
-
-/**
- * timerlist_get_clock:
- * @timer_list: the timer list to operate on
- *
- * Determine the clock type associated with a timer list.
- *
- * Returns: the clock type associated with the
- * timer list.
- */
-QEMUClockType timerlist_get_clock(QEMUTimerList *timer_list);
 
 /**
  * timerlist_run_timers:
@@ -528,6 +507,8 @@ static inline void timer_init_ms(QEMUTimer *ts, QEMUClockType type,
  * with an AioContext---each of them runs its timer callbacks in its own
  * AioContext thread.
  *
+ * The timer returned must be freed using timer_free().
+ *
  * Returns: a pointer to the timer
  */
 static inline QEMUTimer *timer_new_full(QEMUTimerListGroup *timer_list_group,
@@ -551,6 +532,8 @@ static inline QEMUTimer *timer_new_full(QEMUTimerListGroup *timer_list_group,
  * and associate it with the default timer list for the clock type @type.
  * See timer_new_full for details.
  *
+ * The timer returned must be freed using timer_free().
+ *
  * Returns: a pointer to the timer
  */
 static inline QEMUTimer *timer_new(QEMUClockType type, int scale,
@@ -568,6 +551,8 @@ static inline QEMUTimer *timer_new(QEMUClockType type, int scale,
  * Create a new timer with nanosecond scale on the default timer list
  * associated with the clock.
  * See timer_new_full for details.
+ *
+ * The timer returned must be freed using timer_free().
  *
  * Returns: a pointer to the newly created timer
  */
@@ -587,6 +572,8 @@ static inline QEMUTimer *timer_new_ns(QEMUClockType type, QEMUTimerCB *cb,
  * associated with the clock.
  * See timer_new_full for details.
  *
+ * The timer returned must be freed using timer_free().
+ *
  * Returns: a pointer to the newly created timer
  */
 static inline QEMUTimer *timer_new_us(QEMUClockType type, QEMUTimerCB *cb,
@@ -604,6 +591,8 @@ static inline QEMUTimer *timer_new_us(QEMUClockType type, QEMUTimerCB *cb,
  * Create a new timer with millisecond scale on the default timer list
  * associated with the clock.
  * See timer_new_full for details.
+ *
+ * The timer returned must be freed using timer_free().
  *
  * Returns: a pointer to the newly created timer
  */
@@ -710,7 +699,7 @@ void timer_mod_anticipate(QEMUTimer *ts, int64_t expire_time);
  *
  * Returns: true if the timer is pending
  */
-bool timer_pending(QEMUTimer *ts);
+bool timer_pending(const QEMUTimer *ts);
 
 /**
  * timer_expired:
@@ -721,7 +710,7 @@ bool timer_pending(QEMUTimer *ts);
  *
  * Returns: true if the timer has expired
  */
-bool timer_expired(QEMUTimer *timer_head, int64_t current_time);
+bool timer_expired(const QEMUTimer *timer_head, int64_t current_time);
 
 /**
  * timer_expire_time_ns:
@@ -731,7 +720,7 @@ bool timer_expired(QEMUTimer *timer_head, int64_t current_time);
  *
  * Returns: the expiry time in nanoseconds
  */
-uint64_t timer_expire_time_ns(QEMUTimer *ts);
+uint64_t timer_expire_time_ns(const QEMUTimer *ts);
 
 /**
  * timer_get:
@@ -797,11 +786,12 @@ static inline int64_t qemu_soonest_timeout(int64_t timeout1, int64_t timeout2)
 }
 
 /**
- * initclocks:
+ * qemu_init_clocks:
+ * @notify_cb: optional call-back for timer expiry
  *
  * Initialise the clock & timer infrastructure
  */
-void init_clocks(QEMUTimerListNotifyCB *notify_cb);
+void qemu_init_clocks(QEMUTimerListNotifyCB *notify_cb);
 
 static inline int64_t get_max_clock_jump(void)
 {
@@ -861,12 +851,11 @@ static inline int64_t get_clock(void)
 /*******************************************/
 /* host CPU ticks (if available) */
 
-#if defined(_ARCH_PPC)
+#if defined(_ARCH_PPC64)
 
 static inline int64_t cpu_get_host_ticks(void)
 {
     int64_t retval;
-#ifdef _ARCH_PPC64
     /* This reads timebase in one 64bit go and includes Cell workaround from:
        http://ozlabs.org/pipermail/linuxppc-dev/2006-October/027052.html
     */
@@ -874,16 +863,6 @@ static inline int64_t cpu_get_host_ticks(void)
                           "cmpwi   %0,0\n\t"
                           "beq-    $-8"
                           : "=r" (retval));
-#else
-    /* http://ozlabs.org/pipermail/linuxppc-dev/1999-October/003889.html */
-    unsigned long junk;
-    __asm__ __volatile__ ("mfspr   %1,269\n\t"  /* mftbu */
-                          "mfspr   %L0,268\n\t" /* mftb */
-                          "mfspr   %0,269\n\t"  /* mftbu */
-                          "cmpw    %0,%1\n\t"
-                          "bne     $-16"
-                          : "=r" (retval), "=r" (junk));
-#endif
     return retval;
 }
 

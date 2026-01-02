@@ -43,16 +43,17 @@ static bool trans_flw(DisasContext *ctx, arg_flw *a)
 {
     TCGv_i64 dest;
     TCGv addr;
-    MemOp memop = MO_TEUL;
+    MemOp memop = MO_UL;
 
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVF);
 
-    if (ctx->cfg_ptr->ext_zama16b && (ctx->cur_insn_len != 2)) {
+    memop |= mo_endian(ctx);
+    if (ctx->cfg_ptr->ext_zama16b) {
         memop |= MO_ATOM_WITHIN16;
     }
 
-    decode_save_opc(ctx);
+    decode_save_opc(ctx, 0);
     addr = get_address(ctx, a->rs1, a->imm);
     dest = cpu_fpr[a->rd];
     tcg_gen_qemu_ld_i64(dest, addr, ctx->mem_idx, memop);
@@ -65,16 +66,17 @@ static bool trans_flw(DisasContext *ctx, arg_flw *a)
 static bool trans_fsw(DisasContext *ctx, arg_fsw *a)
 {
     TCGv addr;
-    MemOp memop = MO_TEUL;
+    MemOp memop = MO_UL;
 
     REQUIRE_FPU;
     REQUIRE_EXT(ctx, RVF);
 
-    if (ctx->cfg_ptr->ext_zama16b && (ctx->cur_insn_len != 2)) {
+    memop |= mo_endian(ctx);
+    if (ctx->cfg_ptr->ext_zama16b) {
         memop |= MO_ATOM_WITHIN16;
     }
 
-    decode_save_opc(ctx);
+    decode_save_opc(ctx, 0);
     addr = get_address(ctx, a->rs1, a->imm);
     tcg_gen_qemu_st_i64(cpu_fpr[a->rs2], addr, ctx->mem_idx, memop);
     return true;

@@ -33,7 +33,7 @@
 #include "qapi/error.h"
 #include "qapi/qapi-commands-char.h"
 #include "qapi/qmp/qerror.h"
-#include "sysemu/replay.h"
+#include "system/replay.h"
 #include "qemu/help_option.h"
 #include "qemu/module.h"
 #include "qemu/option.h"
@@ -48,18 +48,18 @@
 
 Object *get_chardevs_root(void)
 {
-    return container_get(object_get_root(), "/chardevs");
+    return object_get_container("chardevs");
 }
 
 static void chr_be_event(Chardev *s, QEMUChrEvent event)
 {
-    CharBackend *be = s->be;
+    CharFrontend *fe = s->fe;
 
-    if (!be || !be->chr_event) {
+    if (!fe || !fe->chr_event) {
         return;
     }
 
-    be->chr_event(be->opaque, event);
+    fe->chr_event(fe->opaque, event);
 }
 
 void qemu_chr_be_event(Chardev *s, QEMUChrEvent event)
@@ -197,21 +197,21 @@ int qemu_chr_write(Chardev *s, const uint8_t *buf, int len, bool write_all)
 
 int qemu_chr_be_can_write(Chardev *s)
 {
-    CharBackend *be = s->be;
+    CharFrontend *fe = s->fe;
 
-    if (!be || !be->chr_can_read) {
+    if (!fe || !fe->chr_can_read) {
         return 0;
     }
 
-    return be->chr_can_read(be->opaque);
+    return fe->chr_can_read(fe->opaque);
 }
 
 void qemu_chr_be_write_impl(Chardev *s, const uint8_t *buf, int len)
 {
-    CharBackend *be = s->be;
+    CharFrontend *fe = s->fe;
 
-    if (be && be->chr_read) {
-        be->chr_read(be->opaque, buf, len);
+    if (fe && fe->chr_read) {
+        fe->chr_read(fe->opaque, buf, len);
     }
 }
 
@@ -295,7 +295,7 @@ static int null_chr_write(Chardev *chr, const uint8_t *buf, int len)
     return len;
 }
 
-static void char_class_init(ObjectClass *oc, void *data)
+static void char_class_init(ObjectClass *oc, const void *data)
 {
     ChardevClass *cc = CHARDEV_CLASS(oc);
 
@@ -307,8 +307,8 @@ static void char_finalize(Object *obj)
 {
     Chardev *chr = CHARDEV(obj);
 
-    if (chr->be) {
-        chr->be->chr = NULL;
+    if (chr->fe) {
+        chr->fe->chr = NULL;
     }
     g_free(chr->filename);
     g_free(chr->label);
@@ -333,9 +333,9 @@ static bool qemu_chr_is_busy(Chardev *s)
 {
     if (CHARDEV_IS_MUX(s)) {
         MuxChardev *d = MUX_CHARDEV(s);
-        return d->mux_cnt >= 0;
+        return d->mux_bitset != 0;
     } else {
-        return s->be != NULL;
+        return s->fe != NULL;
     }
 }
 
@@ -425,6 +425,11 @@ QemuOpts *qemu_chr_parse_compat(const char *label, const char *filename,
     }
     if (strstart(filename, "pipe:", &p)) {
         qemu_opt_set(opts, "backend", "pipe", &error_abort);
+        qemu_opt_set(opts, "path", p, &error_abort);
+        return opts;
+    }
+    if (strstart(filename, "pty:", &p)) {
+        qemu_opt_set(opts, "backend", "pty", &error_abort);
         qemu_opt_set(opts, "path", p, &error_abort);
         return opts;
     }
@@ -615,11 +620,24 @@ ChardevBackend *qemu_chr_parse_opts(QemuOpts *opts, Error **errp)
     return backend;
 }
 
-Chardev *qemu_chr_new_from_opts(QemuOpts *opts, GMainContext *context,
-                                Error **errp)
+static void qemu_chardev_set_replay(Chardev *chr, Error **errp)
+{
+    if (replay_mode != REPLAY_MODE_NONE) {
+        if (CHARDEV_GET_CLASS(chr)->chr_ioctl) {
+            error_setg(errp, "Replay: ioctl is not supported "
+                             "for serial devices yet");
+            return;
+        }
+        qemu_chr_set_feature(chr, QEMU_CHAR_FEATURE_REPLAY);
+        replay_register_char_driver(chr);
+    }
+}
+
+static Chardev *do_qemu_chr_new_from_opts(QemuOpts *opts, GMainContext *context,
+                                          bool replay, Error **errp)
 {
     const ChardevClass *cc;
-    Chardev *chr = NULL;
+    Chardev *base = NULL, *chr = NULL;
     ChardevBackend *backend = NULL;
     const char *name = qemu_opt_get(opts, "backend");
     const char *id = qemu_opts_id(opts);
@@ -657,11 +675,11 @@ Chardev *qemu_chr_new_from_opts(QemuOpts *opts, GMainContext *context,
     chr = qemu_chardev_new(bid ? bid : id,
                            object_class_get_name(OBJECT_CLASS(cc)),
                            backend, context, errp);
-
     if (chr == NULL) {
         goto out;
     }
 
+    base = chr;
     if (bid) {
         Chardev *mux;
         qapi_free_ChardevBackend(backend);
@@ -681,11 +699,25 @@ Chardev *qemu_chr_new_from_opts(QemuOpts *opts, GMainContext *context,
 out:
     qapi_free_ChardevBackend(backend);
     g_free(bid);
+
+    if (replay && base) {
+        /* RR should be set on the base device, not the mux */
+        qemu_chardev_set_replay(base, errp);
+    }
+
     return chr;
 }
 
-Chardev *qemu_chr_new_noreplay(const char *label, const char *filename,
-                               bool permit_mux_mon, GMainContext *context)
+Chardev *qemu_chr_new_from_opts(QemuOpts *opts, GMainContext *context,
+                                Error **errp)
+{
+    /* XXX: should this really not record/replay? */
+    return do_qemu_chr_new_from_opts(opts, context, false, errp);
+}
+
+static Chardev *qemu_chr_new_from_name(const char *label, const char *filename,
+                                       bool permit_mux_mon,
+                                       GMainContext *context, bool replay)
 {
     const char *p;
     Chardev *chr;
@@ -693,14 +725,22 @@ Chardev *qemu_chr_new_noreplay(const char *label, const char *filename,
     Error *err = NULL;
 
     if (strstart(filename, "chardev:", &p)) {
-        return qemu_chr_find(p);
+        chr = qemu_chr_find(p);
+        if (replay && chr) {
+            qemu_chardev_set_replay(chr, &err);
+            if (err) {
+                error_report_err(err);
+                return NULL;
+            }
+        }
+        return chr;
     }
 
     opts = qemu_chr_parse_compat(label, filename, permit_mux_mon);
     if (!opts)
         return NULL;
 
-    chr = qemu_chr_new_from_opts(opts, context, &err);
+    chr = do_qemu_chr_new_from_opts(opts, context, replay, &err);
     if (!chr) {
         error_report_err(err);
         goto out;
@@ -722,24 +762,20 @@ out:
     return chr;
 }
 
+Chardev *qemu_chr_new_noreplay(const char *label, const char *filename,
+                               bool permit_mux_mon, GMainContext *context)
+{
+    return qemu_chr_new_from_name(label, filename, permit_mux_mon, context,
+                                  false);
+}
+
 static Chardev *qemu_chr_new_permit_mux_mon(const char *label,
                                           const char *filename,
                                           bool permit_mux_mon,
                                           GMainContext *context)
 {
-    Chardev *chr;
-    chr = qemu_chr_new_noreplay(label, filename, permit_mux_mon, context);
-    if (chr) {
-        if (replay_mode != REPLAY_MODE_NONE) {
-            qemu_chr_set_feature(chr, QEMU_CHAR_FEATURE_REPLAY);
-        }
-        if (qemu_chr_replay(chr) && CHARDEV_GET_CLASS(chr)->chr_ioctl) {
-            error_report("Replay: ioctl is not supported "
-                         "for serial devices yet");
-        }
-        replay_register_char_driver(chr);
-    }
-    return chr;
+    return qemu_chr_new_from_name(label, filename, permit_mux_mon, context,
+                                  true);
 }
 
 Chardev *qemu_chr_new(const char *label, const char *filename,
@@ -762,7 +798,7 @@ static int qmp_query_chardev_foreach(Object *obj, void *data)
 
     value->label = g_strdup(chr->label);
     value->filename = g_strdup(chr->filename);
-    value->frontend_open = chr->be && chr->be->fe_is_open;
+    value->frontend_open = chr->fe && chr->fe->fe_is_open;
 
     QAPI_LIST_PREPEND(*list, value);
 
@@ -857,7 +893,7 @@ QemuOptsList qemu_chardev_opts = {
             .name = "nodelay",
             .type = QEMU_OPT_BOOL,
         },{
-            .name = "reconnect",
+            .name = "reconnect-ms",
             .type = QEMU_OPT_NUMBER,
         },{
             .name = "telnet",
@@ -904,7 +940,26 @@ QemuOptsList qemu_chardev_opts = {
         },{
             .name = "chardev",
             .type = QEMU_OPT_STRING,
+        },
+        /*
+         * Multiplexer options. Follows QAPI array syntax.
+         * See MAX_HUB macro to obtain array capacity.
+         */
+        {
+            .name = "chardevs.0",
+            .type = QEMU_OPT_STRING,
         },{
+            .name = "chardevs.1",
+            .type = QEMU_OPT_STRING,
+        },{
+            .name = "chardevs.2",
+            .type = QEMU_OPT_STRING,
+        },{
+            .name = "chardevs.3",
+            .type = QEMU_OPT_STRING,
+        },
+
+        {
             .name = "append",
             .type = QEMU_OPT_BOOL,
         },{
@@ -1054,7 +1109,7 @@ err:
 ChardevReturn *qmp_chardev_change(const char *id, ChardevBackend *backend,
                                   Error **errp)
 {
-    CharBackend *be;
+    CharFrontend *fe;
     const ChardevClass *cc, *cc_new;
     Chardev *chr, *chr_new;
     bool closed_sent = false;
@@ -1067,8 +1122,8 @@ ChardevReturn *qmp_chardev_change(const char *id, ChardevBackend *backend,
         return NULL;
     }
 
-    if (CHARDEV_IS_MUX(chr)) {
-        error_setg(errp, "Mux device hotswap not supported yet");
+    if (CHARDEV_IS_MUX(chr) || CHARDEV_IS_HUB(chr)) {
+        error_setg(errp, "For mux or hub device hotswap is not supported yet");
         return NULL;
     }
 
@@ -1078,14 +1133,14 @@ ChardevReturn *qmp_chardev_change(const char *id, ChardevBackend *backend,
         return NULL;
     }
 
-    be = chr->be;
-    if (!be) {
+    fe = chr->fe;
+    if (!fe) {
         /* easy case */
         object_unparent(OBJECT(chr));
         return qmp_chardev_add(id, backend, errp);
     }
 
-    if (!be->chr_be_change) {
+    if (!fe->chr_be_change) {
         error_setg(errp, "Chardev user does not support chardev hotswap");
         return NULL;
     }
@@ -1113,13 +1168,13 @@ ChardevReturn *qmp_chardev_change(const char *id, ChardevBackend *backend,
         closed_sent = true;
     }
 
-    chr->be = NULL;
-    qemu_chr_fe_init(be, chr_new, &error_abort);
+    chr->fe = NULL;
+    qemu_chr_fe_init(fe, chr_new, &error_abort);
 
-    if (be->chr_be_change(be->opaque) < 0) {
+    if (fe->chr_be_change(fe->opaque) < 0) {
         error_setg(errp, "Chardev '%s' change failed", chr_new->label);
-        chr_new->be = NULL;
-        qemu_chr_fe_init(be, chr, &error_abort);
+        chr_new->fe = NULL;
+        qemu_chr_fe_init(fe, chr, &error_abort);
         if (closed_sent) {
             qemu_chr_be_event(chr, CHR_EVENT_OPENED);
         }

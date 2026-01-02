@@ -19,15 +19,15 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/irq.h"
+#include "hw/core/irq.h"
 #include "qapi/error.h"
 #include "qemu/module.h"
 #include "qemu/timer.h"
-#include "hw/usb.h"
+#include "hw/usb/usb.h"
 #include "migration/vmstate.h"
-#include "hw/sysbus.h"
-#include "hw/qdev-dma.h"
-#include "hw/qdev-properties.h"
+#include "hw/core/sysbus.h"
+#include "hw/core/qdev-dma.h"
+#include "hw/core/qdev-properties.h"
 #include "trace.h"
 #include "hcd-ohci.h"
 
@@ -57,15 +57,14 @@ static void ohci_sysbus_reset(DeviceState *dev)
     ohci_hard_reset(ohci);
 }
 
-static Property ohci_sysbus_properties[] = {
+static const Property ohci_sysbus_properties[] = {
     DEFINE_PROP_STRING("masterbus", OHCISysBusState, masterbus),
     DEFINE_PROP_UINT32("num-ports", OHCISysBusState, num_ports, 3),
     DEFINE_PROP_UINT32("firstport", OHCISysBusState, firstport, 0),
     DEFINE_PROP_DMAADDR("dma-offset", OHCISysBusState, dma_offset, 0),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
-static void ohci_sysbus_class_init(ObjectClass *klass, void *data)
+static void ohci_sysbus_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
@@ -73,7 +72,7 @@ static void ohci_sysbus_class_init(ObjectClass *klass, void *data)
     set_bit(DEVICE_CATEGORY_USB, dc->categories);
     dc->desc = "OHCI USB Controller";
     device_class_set_props(dc, ohci_sysbus_properties);
-    dc->reset = ohci_sysbus_reset;
+    device_class_set_legacy_reset(dc, ohci_sysbus_reset);
 }
 
 static const TypeInfo ohci_sysbus_types[] = {

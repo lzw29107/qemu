@@ -19,7 +19,7 @@
 
 #include "qemu/osdep.h"
 #include "hw/intc/bcm2836_control.h"
-#include "hw/irq.h"
+#include "hw/core/irq.h"
 #include "migration/vmstate.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
@@ -384,11 +384,11 @@ static const VMStateDescription vmstate_bcm2836_control = {
     }
 };
 
-static void bcm2836_control_class_init(ObjectClass *klass, void *data)
+static void bcm2836_control_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->reset = bcm2836_control_reset;
+    device_class_set_legacy_reset(dc, bcm2836_control_reset);
     dc->vmsd = &vmstate_bcm2836_control;
 }
 

@@ -14,7 +14,7 @@
 #include "qemu/error-report.h"
 #include "hw/core/cpu.h"
 #include "qapi/error.h"
-#include "exec/ramblock.h"
+#include "system/ramblock.h"
 #include "exec/target_page.h"
 #include "qemu/rcu_queue.h"
 #include "qemu/main-loop.h"
@@ -24,11 +24,12 @@
 #include "dirtyrate.h"
 #include "monitor/hmp.h"
 #include "monitor/monitor.h"
-#include "qapi/qmp/qdict.h"
-#include "sysemu/kvm.h"
-#include "sysemu/runstate.h"
-#include "exec/memory.h"
+#include "qobject/qdict.h"
+#include "system/kvm.h"
+#include "system/runstate.h"
+#include "system/memory.h"
 #include "qemu/xxhash.h"
+#include "migration.h"
 
 /*
  * total_dirty_pages is procted by BQL and is used
@@ -149,12 +150,12 @@ int64_t vcpu_calculate_dirtyrate(int64_t calc_time_ms,
                                  unsigned int flag,
                                  bool one_shot)
 {
-    DirtyPageRecord *records;
+    DirtyPageRecord *records = NULL;
     int64_t init_time_ms;
     int64_t duration;
     int64_t dirtyrate;
     int i = 0;
-    unsigned int gen_id;
+    unsigned int gen_id = 0;
 
 retry:
     init_time_ms = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
@@ -228,8 +229,7 @@ static int time_unit_to_power(TimeUnit time_unit)
     case TIME_UNIT_MILLISECOND:
         return -3;
     default:
-        assert(false); /* unreachable */
-        return 0;
+        g_assert_not_reached();
     }
 }
 
@@ -437,6 +437,7 @@ static void get_ramblock_dirty_info(RAMBlock *block,
                                     struct DirtyRateConfig *config)
 {
     uint64_t sample_pages_per_gigabytes = config->sample_pages_per_gigabytes;
+    gsize len;
 
     /* Right shift 30 bits to calc ramblock size in GB */
     info->sample_pages_count = (qemu_ram_get_used_length(block) *
@@ -445,7 +446,9 @@ static void get_ramblock_dirty_info(RAMBlock *block,
     info->ramblock_pages = qemu_ram_get_used_length(block) >>
                            qemu_target_page_bits();
     info->ramblock_addr = qemu_ram_get_host_addr(block);
-    strcpy(info->idstr, qemu_ram_get_idstr(block));
+    len = g_strlcpy(info->idstr, qemu_ram_get_idstr(block),
+                    sizeof(info->idstr));
+    g_assert(len < sizeof(info->idstr));
 }
 
 static void free_ramblock_dirty_info(struct RamblockDirtyInfo *infos, int count)
@@ -840,8 +843,9 @@ void qmp_calc_dirty_rate(int64_t calc_time,
 
     init_dirtyrate_stat(config);
 
-    qemu_thread_create(&thread, "get_dirtyrate", get_dirtyrate_thread,
-                       (void *)&config, QEMU_THREAD_DETACHED);
+    qemu_thread_create(&thread, MIGRATION_THREAD_DIRTY_RATE,
+                       get_dirtyrate_thread, (void *)&config,
+                       QEMU_THREAD_DETACHED);
 }
 
 

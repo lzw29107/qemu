@@ -21,9 +21,10 @@
 #include "qemu/main-loop.h"
 #include "cpu.h"
 #include "trace.h"
+#include "accel/tcg/cpu-ldst.h"
 #include "exec/log.h"
-#include "sysemu/runstate.h"
-
+#include "system/runstate.h"
+#include "qemu/plugin.h"
 
 static const char * const excp_names[0x80] = {
     [TT_TFAULT] = "Instruction Access Fault",
@@ -65,6 +66,7 @@ static const char *excp_name_str(int32_t exception_index)
     return excp_names[exception_index];
 }
 
+#if !defined(CONFIG_USER_ONLY)
 void cpu_check_irqs(CPUSPARCState *env)
 {
     CPUState *cs;
@@ -96,6 +98,7 @@ void cpu_check_irqs(CPUSPARCState *env)
         cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD);
     }
 }
+#endif
 
 void sparc_cpu_do_interrupt(CPUState *cs)
 {
@@ -116,22 +119,9 @@ void sparc_cpu_do_interrupt(CPUState *cs)
 
         qemu_log("%6d: %s (v=%02x)\n", count, name, intno);
         log_cpu_state(cs, 0);
-#if 0
-        {
-            int i;
-            uint8_t *ptr;
-
-            qemu_log("       code=");
-            ptr = (uint8_t *)env->pc;
-            for (i = 0; i < 16; i++) {
-                qemu_log(" %02x", ldub(ptr + i));
-            }
-            qemu_log("\n");
-        }
-#endif
         count++;
     }
-#if !defined(CONFIG_USER_ONLY)
+#ifndef CONFIG_USER_ONLY
     if (env->psret == 0) {
         if (cs->exception_index == 0x80 &&
             env->def.features & CPU_FEATURE_TA0_SHUTDOWN) {
@@ -142,6 +132,29 @@ void sparc_cpu_do_interrupt(CPUState *cs)
                       cs->exception_index, excp_name_str(cs->exception_index));
         }
         return;
+    }
+    if (intno == TT_FP_EXCP) {
+        /*
+         * The sparc32 fpu has three states related to exception handling.
+         * The FPop that signals an exception transitions from fp_execute
+         * to fp_exception_pending.  A subsequent FPop transitions from
+         * fp_exception_pending to fp_exception, which forces the trap.
+         *
+         * If the queue is not empty, this trap is due to execution of an
+         * illegal FPop while in fp_exception state.  Here we are to
+         * re-enter fp_exception_pending state without queuing the insn.
+         *
+         * We do not model the fp_exception_pending state, but instead
+         * skip directly to fp_exception state.  We advance pc/npc to
+         * mimic delayed trap delivery as if by the subsequent insn.
+         */
+        if (!env->fsr_qne) {
+            env->fsr_qne = FSR_QNE;
+            env->fq.s.addr = env->pc;
+            env->fq.s.insn = cpu_ldl_code(env, env->pc);
+        }
+        env->pc = env->npc;
+        env->npc = env->npc + 4;
     }
 #endif
     env->psret = 0;
@@ -162,4 +175,10 @@ void sparc_cpu_do_interrupt(CPUState *cs)
         env->qemu_irq_ack(env, intno);
     }
 #endif
+
+    if (intno == TT_EXTINT) {
+        qemu_plugin_vcpu_interrupt_cb(cs, env->regwptr[9]);
+    } else {
+        qemu_plugin_vcpu_exception_cb(cs, env->regwptr[9]);
+    }
 }

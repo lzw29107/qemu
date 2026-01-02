@@ -20,7 +20,8 @@
 
 #include "qemu/osdep.h"
 #include "cpu.h"
-#include "exec/exec-all.h"
+#include "exec/translation-block.h"
+#include "exec/target_page.h"
 #include "tcg/tcg-op.h"
 #include "qemu/log.h"
 #include "qemu/qemu-print.h"
@@ -42,9 +43,6 @@
 #include "qregs.h.inc"
 #undef DEFO32
 #undef DEFO64
-
-static TCGv_i32 cpu_halted;
-static TCGv_i32 cpu_exception_index;
 
 static char cpu_reg_names[2 * 8 * 3 + 5 * 4];
 static TCGv cpu_dregs[8];
@@ -76,14 +74,6 @@ void m68k_tcg_init(void)
 #include "qregs.h.inc"
 #undef DEFO32
 #undef DEFO64
-
-    cpu_halted = tcg_global_mem_new_i32(tcg_env,
-                                        -offsetof(M68kCPU, env) +
-                                        offsetof(CPUState, halted), "HALTED");
-    cpu_exception_index = tcg_global_mem_new_i32(tcg_env,
-                                                 -offsetof(M68kCPU, env) +
-                                                 offsetof(CPUState, exception_index),
-                                                 "EXCEPTION");
 
     p = cpu_reg_names;
     for (i = 0; i < 8; i++) {
@@ -720,7 +710,9 @@ static TCGv gen_lea_mode(CPUM68KState *env, DisasContext *s,
         }
         /* fallthru */
     case 2: /* Indirect register */
-        return get_areg(s, reg0);
+        tmp = tcg_temp_new();
+        tcg_gen_mov_i32(tmp, get_areg(s, reg0));
+        return tmp;
     case 4: /* Indirect predecrememnt.  */
         if (opsize == OS_UNSIZED) {
             return NULL_QREG;
@@ -747,20 +739,23 @@ static TCGv gen_lea_mode(CPUM68KState *env, DisasContext *s,
         switch (reg0) {
         case 0: /* Absolute short.  */
             offset = (int16_t)read_im16(env, s);
-            return tcg_constant_i32(offset);
+            break;
         case 1: /* Absolute long.  */
             offset = read_im32(env, s);
-            return tcg_constant_i32(offset);
+            break;
         case 2: /* pc displacement  */
             offset = s->pc;
             offset += (int16_t)read_im16(env, s);
-            return tcg_constant_i32(offset);
+            break;
         case 3: /* pc index+displacement.  */
             return gen_lea_indexed(env, s, NULL_QREG);
         case 4: /* Immediate.  */
         default:
             return NULL_QREG;
         }
+        tmp = tcg_temp_new();
+        tcg_gen_movi_i32(tmp, offset);
+        return tmp;
     }
     /* Should never happen.  */
     return NULL_QREG;
@@ -4506,7 +4501,8 @@ DISAS_INSN(halt)
         gen_exception(s, s->pc, EXCP_SEMIHOSTING);
         return;
     }
-    tcg_gen_movi_i32(cpu_halted, 1);
+    tcg_gen_st_i32(tcg_constant_i32(1), tcg_env,
+                   offsetof(CPUState, halted) - offsetof(M68kCPU, env));
     gen_exception(s, s->pc, EXCP_HLT);
 }
 
@@ -4522,7 +4518,8 @@ DISAS_INSN(stop)
     ext = read_im16(env, s);
 
     gen_set_sr_im(s, ext, 0);
-    tcg_gen_movi_i32(cpu_halted, 1);
+    tcg_gen_st_i32(tcg_constant_i32(1), tcg_env,
+                   offsetof(CPUState, halted) - offsetof(M68kCPU, env));
     gen_exception(s, s->pc, EXCP_HLT);
 }
 
@@ -6112,8 +6109,8 @@ static const TranslatorOps m68k_tr_ops = {
     .tb_stop            = m68k_tr_tb_stop,
 };
 
-void gen_intermediate_code(CPUState *cpu, TranslationBlock *tb, int *max_insns,
-                           vaddr pc, void *host_pc)
+void m68k_translate_code(CPUState *cpu, TranslationBlock *tb,
+                         int *max_insns, vaddr pc, void *host_pc)
 {
     DisasContext dc;
     translator_loop(cpu, tb, max_insns, pc, host_pc, &m68k_tr_ops, &dc.base);

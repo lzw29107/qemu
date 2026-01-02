@@ -20,14 +20,14 @@
 #include "qemu/module.h"
 #include "qapi/error.h"
 #include "trace.h"
-#include "hw/sysbus.h"
+#include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
-#include "hw/registerfields.h"
+#include "hw/core/registerfields.h"
 #include "chardev/char-fe.h"
 #include "chardev/char-serial.h"
 #include "hw/char/cmsdk-apb-uart.h"
-#include "hw/irq.h"
-#include "hw/qdev-properties-system.h"
+#include "hw/core/irq.h"
+#include "hw/core/qdev-properties-system.h"
 
 REG32(DATA, 0)
 REG32(STATE, 4)
@@ -377,19 +377,18 @@ static const VMStateDescription cmsdk_apb_uart_vmstate = {
     }
 };
 
-static Property cmsdk_apb_uart_properties[] = {
+static const Property cmsdk_apb_uart_properties[] = {
     DEFINE_PROP_CHR("chardev", CMSDKAPBUART, chr),
     DEFINE_PROP_UINT32("pclk-frq", CMSDKAPBUART, pclk_frq, 0),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
-static void cmsdk_apb_uart_class_init(ObjectClass *klass, void *data)
+static void cmsdk_apb_uart_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = cmsdk_apb_uart_realize;
     dc->vmsd = &cmsdk_apb_uart_vmstate;
-    dc->reset = cmsdk_apb_uart_reset;
+    device_class_set_legacy_reset(dc, cmsdk_apb_uart_reset);
     device_class_set_props(dc, cmsdk_apb_uart_properties);
 }
 

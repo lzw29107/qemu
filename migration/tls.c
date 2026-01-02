@@ -90,6 +90,10 @@ void migration_tls_channel_process_incoming(MigrationState *s,
 
     trace_migration_tls_incoming_handshake_start();
     qio_channel_set_name(QIO_CHANNEL(tioc), "migration-tls-incoming");
+    if (migrate_postcopy_ram() || migrate_return_path()) {
+        qio_channel_set_feature(QIO_CHANNEL(tioc),
+                                QIO_CHANNEL_FEATURE_CONCURRENT_IO);
+    }
     qio_channel_tls_handshake(tioc,
                               migration_tls_incoming_handshake,
                               NULL,
@@ -126,7 +130,7 @@ QIOChannelTLS *migration_tls_client_create(QIOChannel *ioc,
     }
 
     const char *tls_hostname = migrate_tls_hostname();
-    if (tls_hostname && *tls_hostname) {
+    if (tls_hostname) {
         hostname = tls_hostname;
     }
 
@@ -149,11 +153,21 @@ void migration_tls_channel_connect(MigrationState *s,
     s->hostname = g_strdup(hostname);
     trace_migration_tls_outgoing_handshake_start(hostname);
     qio_channel_set_name(QIO_CHANNEL(tioc), "migration-tls-outgoing");
+
+    if (migrate_postcopy_ram() || migrate_return_path()) {
+        qio_channel_set_feature(QIO_CHANNEL(tioc),
+                                QIO_CHANNEL_FEATURE_CONCURRENT_IO);
+    }
     qio_channel_tls_handshake(tioc,
                               migration_tls_outgoing_handshake,
                               s,
                               NULL,
                               NULL);
+}
+
+void migration_tls_channel_end(QIOChannel *ioc, Error **errp)
+{
+    qio_channel_tls_bye(QIO_CHANNEL_TLS(ioc), errp);
 }
 
 bool migrate_channel_requires_tls_upgrade(QIOChannel *ioc)

@@ -19,13 +19,13 @@
 #include "qemu/osdep.h"
 #include "qemu/timer.h"
 #include "qemu/log.h"
-#include "hw/irq.h"
-#include "hw/registerfields.h"
+#include "hw/core/irq.h"
+#include "hw/core/registerfields.h"
 #include "hw/misc/sifive_e_aon.h"
 #include "qapi/visitor.h"
 #include "qapi/error.h"
-#include "sysemu/watchdog.h"
-#include "hw/qdev-properties.h"
+#include "system/watchdog.h"
+#include "hw/core/qdev-properties.h"
 
 REG32(AON_WDT_WDOGCFG, 0x0)
     FIELD(AON_WDT_WDOGCFG, SCALE, 0, 4)
@@ -289,17 +289,16 @@ static void sifive_e_aon_init(Object *obj)
     sysbus_init_irq(sbd, &r->wdog_irq);
 }
 
-static Property sifive_e_aon_properties[] = {
+static const Property sifive_e_aon_properties[] = {
     DEFINE_PROP_UINT64("wdogclk-frequency", SiFiveEAONState, wdogclk_freq,
                        SIFIVE_E_LFCLK_DEFAULT_FREQ),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
-static void sifive_e_aon_class_init(ObjectClass *oc, void *data)
+static void sifive_e_aon_class_init(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
 
-    dc->reset = sifive_e_aon_reset;
+    device_class_set_legacy_reset(dc, sifive_e_aon_reset);
     device_class_set_props(dc, sifive_e_aon_properties);
 }
 

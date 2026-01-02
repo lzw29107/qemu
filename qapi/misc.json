@@ -3,7 +3,9 @@
 #
 
 ##
-# = Miscellanea
+# ***********
+# Miscellanea
+# ***********
 ##
 
 { 'include': 'common.json' }
@@ -21,12 +23,12 @@
 #     "@dbus-display" or the name of a character device (e.g. from
 #     -chardev id=XXXX)
 #
-# @fdname: file descriptor name previously passed via 'getfd' command
+# @fdname: file descriptor name previously passed via `getfd` command
 #
 # @skipauth: whether to skip authentication.  Only applies to "vnc"
 #     and "spice" protocols
 #
-# @tls: whether to perform TLS. Only applies to the "spice" protocol
+# @tls: whether to perform TLS.  Only applies to the "spice" protocol
 #
 # Since: 0.14
 #
@@ -55,8 +57,6 @@
 # @query-name:
 #
 # Return the name information of a guest.
-#
-# Returns: @NameInfo of the guest
 #
 # Since: 0.14
 #
@@ -101,13 +101,13 @@
 ##
 # @query-iothreads:
 #
-# Returns a list of information about each iothread.
+# Return a list of information about each iothread.
 #
 # .. note:: This list excludes the QEMU main loop thread, which is not
-#    declared using the ``-object iothread`` command-line option.  It is
-#    always the main thread of the process.
+#    declared using the ``-object iothread`` command-line option.  It
+#    is always the main thread of the process.
 #
-# Returns: a list of @IOThreadInfo for each iothread
+# Returns: a list of info for each iothread
 #
 # Since: 2.0
 #
@@ -141,8 +141,8 @@
 #    guest remains paused once migration finishes, as if the ``-S``
 #    option was passed on the command line.
 #
-#    In the "suspended" state, it will completely stop the VM and cause
-#    a transition to the "paused" state.  (Since 9.0)
+#    In the "suspended" state, it will completely stop the VM and
+#    cause a transition to the "paused" state.  (Since 9.0)
 #
 # .. qmp-example::
 #
@@ -158,15 +158,15 @@
 #
 # Since: 0.14
 #
-# .. note:: This command will succeed if the guest is currently running.
-#    It will also succeed if the guest is in the "inmigrate" state; in
-#    this case, the effect of the command is to make sure the guest
-#    starts once migration finishes, removing the effect of the ``-S``
-#    command line option if it was passed.
+# .. note:: This command will succeed if the guest is currently
+#    running.  It will also succeed if the guest is in the "inmigrate"
+#    state; in this case, the effect of the command is to make sure
+#    the guest starts once migration finishes, removing the effect of
+#    the ``-S`` command line option if it was passed.
 #
 #    If the VM was previously suspended, and not been reset or woken,
-#    this command will transition back to the "suspended" state.  (Since
-#    9.0)
+#    this command will transition back to the "suspended" state.
+#    (Since 9.0)
 #
 # .. qmp-example::
 #
@@ -222,13 +222,13 @@
 # .. note:: This command only exists as a stop-gap.  Its use is highly
 #    discouraged.  The semantics of this command are not guaranteed:
 #    this means that command names, arguments and responses can change
-#    or be removed at ANY time.  Applications that rely on long term
-#    stability guarantees should NOT use this command.
+#    or be removed at **any** time.  Applications that rely on long
+#    term stability guarantees should **not** use this command.
 #
 #    Known limitations:
 #
-#    * This command is stateless, this means that commands that
-#      depend on state information (such as getfd) might not work.
+#    * This command is stateless, this means that commands that depend
+#      on state information (such as `getfd`) might not work.
 #
 #    * Commands that prompt the user for data don't currently work.
 #
@@ -255,7 +255,7 @@
 # .. note:: If @fdname already exists, the file descriptor assigned to
 #    it will be closed and replaced by the received file descriptor.
 #
-#    The 'closefd' command can be used to explicitly close the file
+#    The `closefd` command can be used to explicitly close the file
 #    descriptor when it is no longer needed.
 #
 # .. qmp-example::
@@ -282,7 +282,7 @@
 # .. note:: If @fdname already exists, the file descriptor assigned to
 #    it will be closed and replaced by the received file descriptor.
 #
-#    The 'closefd' command can be used to explicitly close the file
+#    The `closefd` command can be used to explicitly close the file
 #    descriptor when it is no longer needed.
 #
 # .. qmp-example::
@@ -332,16 +332,14 @@
 #
 # @opaque: A free-form string that can be used to describe the fd.
 #
-# Returns:
-#     @AddfdInfo
-#
 # Errors:
 #     - If file descriptor was not received, GenericError
 #     - If @fdset-id is a negative value, GenericError
 #
 # .. note:: The list of fd sets is shared by all monitor connections.
 #
-# .. note:: If @fdset-id is not specified, a new fd set will be created.
+# .. note:: If @fdset-id is not specified, a new fd set will be
+#    created.
 #
 # Since: 1.2
 #
@@ -414,8 +412,6 @@
 #
 # Return information describing all fd sets.
 #
-# Returns: A list of @FdsetInfo
-#
 # Since: 1.2
 #
 # .. note:: The list of fd sets is shared by all monitor connections.
@@ -479,7 +475,7 @@
 #
 # @name: parameter name
 #
-# @type: parameter @CommandLineParameterType
+# @type: parameter `CommandLineParameterType`
 #
 # @help: human readable text string, not suitable for parsing.
 #
@@ -501,7 +497,7 @@
 #
 # @option: option name
 #
-# @parameters: an array of @CommandLineParameterInfo
+# @parameters: an array of `CommandLineParameterInfo`
 #
 # Since: 1.5
 ##
@@ -515,8 +511,7 @@
 #
 # @option: option name
 #
-# Returns: list of @CommandLineOptionInfo for all options (or for the
-#     given @option).
+# Returns: list of objects for all options (or for the given @option).
 #
 # Errors:
 #     - if the given @option doesn't exist

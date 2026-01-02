@@ -32,9 +32,9 @@
 #include "qemu/sockets.h"
 #include "qemu/lockable.h"
 #include "io/channel-socket.h"
-#include "sysemu/runstate.h"
-#include "sysemu/tpm_backend.h"
-#include "sysemu/tpm_util.h"
+#include "system/runstate.h"
+#include "system/tpm_backend.h"
+#include "system/tpm_util.h"
 #include "tpm_int.h"
 #include "tpm_ioctl.h"
 #include "migration/blocker.h"
@@ -69,10 +69,10 @@ struct TPMEmulator {
     TPMBackend parent;
 
     TPMEmulatorOptions *options;
-    CharBackend ctrl_chr;
+    CharFrontend ctrl_chr;
     QIOChannel *data_ioc;
     TPMVersion tpm_version;
-    ptm_cap caps; /* capabilities of the TPM */
+    uint32_t caps; /* capabilities of the TPM */
     uint8_t cur_locty_number; /* last set locality */
     Error *migration_blocker;
 
@@ -123,15 +123,17 @@ static const char *tpm_emulator_strerror(uint32_t tpm_result)
 }
 
 static int tpm_emulator_ctrlcmd(TPMEmulator *tpm, unsigned long cmd, void *msg,
-                                size_t msg_len_in, size_t msg_len_out)
+                                size_t msg_len_in, size_t msg_len_out_err,
+                                size_t msg_len_out_total)
 {
-    CharBackend *dev = &tpm->ctrl_chr;
+    CharFrontend *dev = &tpm->ctrl_chr;
     uint32_t cmd_no = cpu_to_be32(cmd);
     ssize_t n = sizeof(uint32_t) + msg_len_in;
-    uint8_t *buf = NULL;
+    ptm_res res;
 
     WITH_QEMU_LOCK_GUARD(&tpm->mutex) {
-        buf = g_alloca(n);
+        g_autofree uint8_t *buf = g_malloc(n);
+
         memcpy(buf, &cmd_no, sizeof(cmd_no));
         memcpy(buf + sizeof(cmd_no), msg, msg_len_in);
 
@@ -140,8 +142,25 @@ static int tpm_emulator_ctrlcmd(TPMEmulator *tpm, unsigned long cmd, void *msg,
             return -1;
         }
 
-        if (msg_len_out != 0) {
-            n = qemu_chr_fe_read_all(dev, msg, msg_len_out);
+        if (msg_len_out_total > 0) {
+            assert(msg_len_out_total >= msg_len_out_err);
+
+            n = qemu_chr_fe_read_all(dev, (uint8_t *)msg, msg_len_out_err);
+            if (n <= 0) {
+                return -1;
+            }
+            if (msg_len_out_err == msg_len_out_total) {
+                return 0;
+            }
+            /* result error code is always in the first 4 bytes */
+            assert(sizeof(res) <= msg_len_out_err);
+            memcpy(&res, msg, sizeof(res));
+            if (res) {
+                return 0;
+            }
+
+            n = qemu_chr_fe_read_all(dev, (uint8_t *)msg + msg_len_out_err,
+                                     msg_len_out_total - msg_len_out_err);
             if (n <= 0) {
                 return -1;
             }
@@ -204,7 +223,8 @@ static int tpm_emulator_set_locality(TPMEmulator *tpm_emu, uint8_t locty_number,
     memset(&loc, 0, sizeof(loc));
     loc.u.req.loc = locty_number;
     if (tpm_emulator_ctrlcmd(tpm_emu, CMD_SET_LOCALITY, &loc,
-                             sizeof(loc), sizeof(loc)) < 0) {
+                             sizeof(loc), sizeof(loc.u.resp.tpm_result),
+                             sizeof(loc)) < 0) {
         error_setg(errp, "tpm-emulator: could not set locality : %s",
                    strerror(errno));
         return -1;
@@ -239,13 +259,16 @@ static void tpm_emulator_handle_request(TPMBackend *tb, TPMBackendCmd *cmd,
 
 static int tpm_emulator_probe_caps(TPMEmulator *tpm_emu)
 {
-    if (tpm_emulator_ctrlcmd(tpm_emu, CMD_GET_CAPABILITY,
-                             &tpm_emu->caps, 0, sizeof(tpm_emu->caps)) < 0) {
+    ptm_cap_n cap_n;
+
+    if (tpm_emulator_ctrlcmd(tpm_emu, CMD_GET_CAPABILITY, &cap_n, 0,
+                             sizeof(cap_n.u.resp.tpm_result),
+                             sizeof(cap_n)) < 0) {
         error_report("tpm-emulator: probing failed : %s", strerror(errno));
         return -1;
     }
 
-    tpm_emu->caps = be64_to_cpu(tpm_emu->caps);
+    tpm_emu->caps = be32_to_cpu(cap_n.u.resp.caps);
 
     trace_tpm_emulator_probe_caps(tpm_emu->caps);
 
@@ -254,7 +277,7 @@ static int tpm_emulator_probe_caps(TPMEmulator *tpm_emu)
 
 static int tpm_emulator_check_caps(TPMEmulator *tpm_emu)
 {
-    ptm_cap caps = 0;
+    uint32_t caps = 0;
     const char *tpm = NULL;
 
     /* check for min. required capabilities */
@@ -285,21 +308,22 @@ static int tpm_emulator_check_caps(TPMEmulator *tpm_emu)
     return 0;
 }
 
-static int tpm_emulator_stop_tpm(TPMBackend *tb)
+static int tpm_emulator_stop_tpm(TPMBackend *tb, Error **errp)
 {
     TPMEmulator *tpm_emu = TPM_EMULATOR(tb);
     ptm_res res;
 
-    if (tpm_emulator_ctrlcmd(tpm_emu, CMD_STOP, &res, 0, sizeof(res)) < 0) {
-        error_report("tpm-emulator: Could not stop TPM: %s",
-                     strerror(errno));
+    if (tpm_emulator_ctrlcmd(tpm_emu, CMD_STOP, &res, 0,
+                             sizeof(ptm_res), sizeof(res)) < 0) {
+        error_setg(errp, "tpm-emulator: Could not stop TPM: %s",
+                   strerror(errno));
         return -1;
     }
 
     res = be32_to_cpu(res);
     if (res) {
-        error_report("tpm-emulator: TPM result for CMD_STOP: 0x%x %s", res,
-                     tpm_emulator_strerror(res));
+        error_setg(errp, "tpm-emulator: TPM result for CMD_STOP: 0x%x %s", res,
+                   tpm_emulator_strerror(res));
         return -1;
     }
 
@@ -317,8 +341,9 @@ static int tpm_emulator_lock_storage(TPMEmulator *tpm_emu)
 
     /* give failing side 300 * 10ms time to release lock */
     pls.u.req.retries = cpu_to_be32(300);
-    if (tpm_emulator_ctrlcmd(tpm_emu, CMD_LOCK_STORAGE, &pls,
-                             sizeof(pls.u.req), sizeof(pls.u.resp)) < 0) {
+    if (tpm_emulator_ctrlcmd(tpm_emu, CMD_LOCK_STORAGE, &pls, sizeof(pls.u.req),
+                             sizeof(pls.u.resp.tpm_result),
+                             sizeof(pls.u.resp)) < 0) {
         error_report("tpm-emulator: Could not lock storage within 3 seconds: "
                      "%s", strerror(errno));
         return -1;
@@ -337,29 +362,32 @@ static int tpm_emulator_lock_storage(TPMEmulator *tpm_emu)
 
 static int tpm_emulator_set_buffer_size(TPMBackend *tb,
                                         size_t wanted_size,
-                                        size_t *actual_size)
+                                        size_t *actual_size,
+                                        Error **errp)
 {
     TPMEmulator *tpm_emu = TPM_EMULATOR(tb);
     ptm_setbuffersize psbs;
 
-    if (tpm_emulator_stop_tpm(tb) < 0) {
+    if (tpm_emulator_stop_tpm(tb, errp) < 0) {
         return -1;
     }
 
     psbs.u.req.buffersize = cpu_to_be32(wanted_size);
 
     if (tpm_emulator_ctrlcmd(tpm_emu, CMD_SET_BUFFERSIZE, &psbs,
-                             sizeof(psbs.u.req), sizeof(psbs.u.resp)) < 0) {
-        error_report("tpm-emulator: Could not set buffer size: %s",
-                     strerror(errno));
+                             sizeof(psbs.u.req), sizeof(psbs.u.resp.tpm_result),
+                             sizeof(psbs.u.resp)) < 0) {
+        error_setg(errp, "tpm-emulator: Could not set buffer size: %s",
+                   strerror(errno));
         return -1;
     }
 
     psbs.u.resp.tpm_result = be32_to_cpu(psbs.u.resp.tpm_result);
     if (psbs.u.resp.tpm_result != 0) {
-        error_report("tpm-emulator: TPM result for set buffer size : 0x%x %s",
-                     psbs.u.resp.tpm_result,
-                     tpm_emulator_strerror(psbs.u.resp.tpm_result));
+        error_setg(errp,
+                   "tpm-emulator: TPM result for set buffer size : 0x%x %s",
+                   psbs.u.resp.tpm_result,
+                   tpm_emulator_strerror(psbs.u.resp.tpm_result));
         return -1;
     }
 
@@ -376,7 +404,7 @@ static int tpm_emulator_set_buffer_size(TPMBackend *tb,
 }
 
 static int tpm_emulator_startup_tpm_resume(TPMBackend *tb, size_t buffersize,
-                                     bool is_resume)
+                                           bool is_resume, Error **errp)
 {
     TPMEmulator *tpm_emu = TPM_EMULATOR(tb);
     ptm_init init = {
@@ -387,7 +415,7 @@ static int tpm_emulator_startup_tpm_resume(TPMBackend *tb, size_t buffersize,
     trace_tpm_emulator_startup_tpm_resume(is_resume, buffersize);
 
     if (buffersize != 0 &&
-        tpm_emulator_set_buffer_size(tb, buffersize, NULL) < 0) {
+        tpm_emulator_set_buffer_size(tb, buffersize, NULL, errp) < 0) {
         goto err_exit;
     }
 
@@ -396,16 +424,17 @@ static int tpm_emulator_startup_tpm_resume(TPMBackend *tb, size_t buffersize,
     }
 
     if (tpm_emulator_ctrlcmd(tpm_emu, CMD_INIT, &init, sizeof(init),
+                             sizeof(init.u.resp.tpm_result),
                              sizeof(init)) < 0) {
-        error_report("tpm-emulator: could not send INIT: %s",
-                     strerror(errno));
+        error_setg(errp, "tpm-emulator: could not send INIT: %s",
+                   strerror(errno));
         goto err_exit;
     }
 
     res = be32_to_cpu(init.u.resp.tpm_result);
     if (res) {
-        error_report("tpm-emulator: TPM result for CMD_INIT: 0x%x %s", res,
-                     tpm_emulator_strerror(res));
+        error_setg(errp, "tpm-emulator: TPM result for CMD_INIT: 0x%x %s", res,
+                   tpm_emulator_strerror(res));
         goto err_exit;
     }
     return 0;
@@ -414,18 +443,31 @@ err_exit:
     return -1;
 }
 
-static int tpm_emulator_startup_tpm(TPMBackend *tb, size_t buffersize)
+static int do_tpm_emulator_startup_tpm(TPMBackend *tb, size_t buffersize,
+                                       Error **errp)
 {
     /* TPM startup will be done from post_load hook */
     if (runstate_check(RUN_STATE_INMIGRATE)) {
         if (buffersize != 0) {
-            return tpm_emulator_set_buffer_size(tb, buffersize, NULL);
+            return tpm_emulator_set_buffer_size(tb, buffersize, NULL, errp);
         }
 
         return 0;
     }
 
-    return tpm_emulator_startup_tpm_resume(tb, buffersize, false);
+    return tpm_emulator_startup_tpm_resume(tb, buffersize, false, errp);
+}
+
+static int tpm_emulator_startup_tpm(TPMBackend *tb, size_t buffersize)
+{
+    Error *local_err = NULL;
+    int ret = do_tpm_emulator_startup_tpm(tb, buffersize, &local_err);
+
+    if (ret < 0) {
+        error_report_err(local_err);
+    }
+
+    return ret;
 }
 
 static bool tpm_emulator_get_tpm_established_flag(TPMBackend *tb)
@@ -437,8 +479,9 @@ static bool tpm_emulator_get_tpm_established_flag(TPMBackend *tb)
         return tpm_emu->established_flag;
     }
 
-    if (tpm_emulator_ctrlcmd(tpm_emu, CMD_GET_TPMESTABLISHED, &est,
-                             0, sizeof(est)) < 0) {
+    if (tpm_emulator_ctrlcmd(tpm_emu, CMD_GET_TPMESTABLISHED, &est, 0,
+                             sizeof(est) /* always returns resp.bit */,
+                             sizeof(est)) < 0) {
         error_report("tpm-emulator: Could not get the TPM established flag: %s",
                      strerror(errno));
         return false;
@@ -466,6 +509,7 @@ static int tpm_emulator_reset_tpm_established_flag(TPMBackend *tb,
     reset_est.u.req.loc = tpm_emu->cur_locty_number;
     if (tpm_emulator_ctrlcmd(tpm_emu, CMD_RESET_TPMESTABLISHED,
                              &reset_est, sizeof(reset_est),
+                             sizeof(reset_est.u.resp.tpm_result),
                              sizeof(reset_est)) < 0) {
         error_report("tpm-emulator: Could not reset the establishment bit: %s",
                      strerror(errno));
@@ -497,7 +541,7 @@ static void tpm_emulator_cancel_cmd(TPMBackend *tb)
 
     /* FIXME: make the function non-blocking, or it may block a VCPU */
     if (tpm_emulator_ctrlcmd(tpm_emu, CMD_CANCEL_TPM_CMD, &res, 0,
-                             sizeof(res)) < 0) {
+                             sizeof(ptm_res), sizeof(res)) < 0) {
         error_report("tpm-emulator: Could not cancel command: %s",
                      strerror(errno));
     } else if (res != 0) {
@@ -517,7 +561,7 @@ static size_t tpm_emulator_get_buffer_size(TPMBackend *tb)
 {
     size_t actual_size;
 
-    if (tpm_emulator_set_buffer_size(tb, 0, &actual_size) < 0) {
+    if (tpm_emulator_set_buffer_size(tb, 0, &actual_size, NULL) < 0) {
         return 4096;
     }
 
@@ -527,8 +571,8 @@ static size_t tpm_emulator_get_buffer_size(TPMBackend *tb)
 static int tpm_emulator_block_migration(TPMEmulator *tpm_emu)
 {
     Error *err = NULL;
-    ptm_cap caps = PTM_CAP_GET_STATEBLOB | PTM_CAP_SET_STATEBLOB |
-                   PTM_CAP_STOP;
+    uint32_t caps = PTM_CAP_GET_STATEBLOB | PTM_CAP_SET_STATEBLOB |
+                    PTM_CAP_STOP;
 
     if (!TPM_EMULATOR_IMPLEMENTS_ALL_CAPS(tpm_emu, caps)) {
         error_setg(&tpm_emu->migration_blocker,
@@ -557,7 +601,7 @@ static int tpm_emulator_prepare_data_fd(TPMEmulator *tpm_emu)
     qemu_chr_fe_set_msgfds(&tpm_emu->ctrl_chr, fds + 1, 1);
 
     if (tpm_emulator_ctrlcmd(tpm_emu, CMD_SET_DATAFD, &res, 0,
-                             sizeof(res)) < 0 || res != 0) {
+                             sizeof(ptm_res), sizeof(res)) < 0 || res != 0) {
         error_report("tpm-emulator: Failed to send CMD_SET_DATAFD: %s",
                      strerror(errno));
         goto err_exit;
@@ -704,6 +748,8 @@ static int tpm_emulator_get_state_blob(TPMEmulator *tpm_emu,
 
     if (tpm_emulator_ctrlcmd(tpm_emu, CMD_GET_STATEBLOB,
                              &pgs, sizeof(pgs.u.req),
+                             /* always returns up to resp.data */
+                             offsetof(ptm_getstate, u.resp.data),
                              offsetof(ptm_getstate, u.resp.data)) < 0) {
         error_report("tpm-emulator: could not get state blob type %d : %s",
                      type, strerror(errno));
@@ -788,7 +834,8 @@ static int tpm_emulator_get_state_blobs(TPMEmulator *tpm_emu)
 static int tpm_emulator_set_state_blob(TPMEmulator *tpm_emu,
                                        uint32_t type,
                                        TPMSizedBuffer *tsb,
-                                       uint32_t flags)
+                                       uint32_t flags,
+                                       Error **errp)
 {
     ssize_t n;
     ptm_setstate pss;
@@ -806,18 +853,19 @@ static int tpm_emulator_set_state_blob(TPMEmulator *tpm_emu,
 
     /* write the header only */
     if (tpm_emulator_ctrlcmd(tpm_emu, CMD_SET_STATEBLOB, &pss,
-                             offsetof(ptm_setstate, u.req.data), 0) < 0) {
-        error_report("tpm-emulator: could not set state blob type %d : %s",
-                     type, strerror(errno));
+                             offsetof(ptm_setstate, u.req.data), 0, 0) < 0) {
+        error_setg_errno(errp, errno,
+                         "tpm-emulator: could not set state blob type %d",
+                         type);
         return -1;
     }
 
     /* now the body */
     n = qemu_chr_fe_write_all(&tpm_emu->ctrl_chr, tsb->buffer, tsb->size);
     if (n != tsb->size) {
-        error_report("tpm-emulator: Writing the stateblob (type %d) "
-                     "failed; could not write %u bytes, but only %zd",
-                     type, tsb->size, n);
+        error_setg(errp, "tpm-emulator: Writing the stateblob (type %d) "
+                   "failed; could not write %u bytes, but only %zd",
+                   type, tsb->size, n);
         return -1;
     }
 
@@ -825,17 +873,17 @@ static int tpm_emulator_set_state_blob(TPMEmulator *tpm_emu,
     n = qemu_chr_fe_read_all(&tpm_emu->ctrl_chr,
                              (uint8_t *)&pss, sizeof(pss.u.resp));
     if (n != sizeof(pss.u.resp)) {
-        error_report("tpm-emulator: Reading response from writing stateblob "
-                     "(type %d) failed; expected %zu bytes, got %zd", type,
-                     sizeof(pss.u.resp), n);
+        error_setg(errp, "tpm-emulator: Reading response from writing "
+                   "stateblob (type %d) failed; expected %zu bytes, "
+                   "got %zd", type, sizeof(pss.u.resp), n);
         return -1;
     }
 
     tpm_result = be32_to_cpu(pss.u.resp.tpm_result);
     if (tpm_result != 0) {
-        error_report("tpm-emulator: Setting the stateblob (type %d) failed "
-                     "with a TPM error 0x%x %s", type, tpm_result,
-                     tpm_emulator_strerror(tpm_result));
+        error_setg(errp, "tpm-emulator: Setting the stateblob (type %d) "
+                   "failed with a TPM error 0x%x %s", type, tpm_result,
+                   tpm_emulator_strerror(tpm_result));
         return -1;
     }
 
@@ -849,27 +897,27 @@ static int tpm_emulator_set_state_blob(TPMEmulator *tpm_emu,
  *
  * Returns a negative errno code in case of error.
  */
-static int tpm_emulator_set_state_blobs(TPMBackend *tb)
+static int tpm_emulator_set_state_blobs(TPMBackend *tb, Error **errp)
 {
     TPMEmulator *tpm_emu = TPM_EMULATOR(tb);
     TPMBlobBuffers *state_blobs = &tpm_emu->state_blobs;
 
     trace_tpm_emulator_set_state_blobs();
 
-    if (tpm_emulator_stop_tpm(tb) < 0) {
+    if (tpm_emulator_stop_tpm(tb, errp) < 0) {
         trace_tpm_emulator_set_state_blobs_error("Could not stop TPM");
         return -EIO;
     }
 
     if (tpm_emulator_set_state_blob(tpm_emu, PTM_BLOB_TYPE_PERMANENT,
                                     &state_blobs->permanent,
-                                    state_blobs->permanent_flags) < 0 ||
+                                    state_blobs->permanent_flags, errp) < 0 ||
         tpm_emulator_set_state_blob(tpm_emu, PTM_BLOB_TYPE_VOLATILE,
                                     &state_blobs->volatil,
-                                    state_blobs->volatil_flags) < 0 ||
+                                    state_blobs->volatil_flags, errp) < 0 ||
         tpm_emulator_set_state_blob(tpm_emu, PTM_BLOB_TYPE_SAVESTATE,
                                     &state_blobs->savestate,
-                                    state_blobs->savestate_flags) < 0) {
+                                    state_blobs->savestate_flags, errp) < 0) {
         return -EIO;
     }
 
@@ -914,31 +962,29 @@ static void tpm_emulator_vm_state_change(void *opaque, bool running,
 
 /*
  * Load the TPM state blobs into the TPM.
- *
- * Returns negative errno codes in case of error.
  */
-static int tpm_emulator_post_load(void *opaque, int version_id)
+static bool tpm_emulator_post_load(void *opaque, int version_id, Error **errp)
 {
     TPMBackend *tb = opaque;
     int ret;
 
-    ret = tpm_emulator_set_state_blobs(tb);
+    ret = tpm_emulator_set_state_blobs(tb, errp);
     if (ret < 0) {
-        return ret;
+        return false;
     }
 
-    if (tpm_emulator_startup_tpm_resume(tb, 0, true) < 0) {
-        return -EIO;
+    if (tpm_emulator_startup_tpm_resume(tb, 0, true, errp) < 0) {
+        return false;
     }
 
-    return 0;
+    return true;
 }
 
 static const VMStateDescription vmstate_tpm_emulator = {
     .name = "tpm-emulator",
     .version_id = 0,
     .pre_save = tpm_emulator_pre_save,
-    .post_load = tpm_emulator_post_load,
+    .post_load_errp = tpm_emulator_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32(state_blobs.permanent_flags, TPMEmulator),
         VMSTATE_UINT32(state_blobs.permanent.size, TPMEmulator),
@@ -990,7 +1036,8 @@ static void tpm_emulator_shutdown(TPMEmulator *tpm_emu)
         return;
     }
 
-    if (tpm_emulator_ctrlcmd(tpm_emu, CMD_SHUTDOWN, &res, 0, sizeof(res)) < 0) {
+    if (tpm_emulator_ctrlcmd(tpm_emu, CMD_SHUTDOWN, &res, 0,
+                             sizeof(ptm_res), sizeof(res)) < 0) {
         error_report("tpm-emulator: Could not cleanly shutdown the TPM: %s",
                      strerror(errno));
     } else if (res != 0) {
@@ -1024,7 +1071,7 @@ static void tpm_emulator_inst_finalize(Object *obj)
     vmstate_unregister(NULL, &vmstate_tpm_emulator, obj);
 }
 
-static void tpm_emulator_class_init(ObjectClass *klass, void *data)
+static void tpm_emulator_class_init(ObjectClass *klass, const void *data)
 {
     TPMBackendClass *tbc = TPM_BACKEND_CLASS(klass);
 

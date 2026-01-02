@@ -25,11 +25,11 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/irq.h"
-#include "hw/qdev-properties.h"
-#include "hw/qdev-properties-system.h"
+#include "hw/core/irq.h"
+#include "hw/core/qdev-properties.h"
+#include "hw/core/qdev-properties-system.h"
 #include "hw/char/grlib_uart.h"
-#include "hw/sysbus.h"
+#include "hw/core/sysbus.h"
 #include "qemu/module.h"
 #include "chardev/char-fe.h"
 
@@ -84,7 +84,7 @@ struct UART {
     MemoryRegion iomem;
     qemu_irq irq;
 
-    CharBackend chr;
+    CharFrontend chr;
 
     /* registers */
     uint32_t status;
@@ -277,17 +277,16 @@ static void grlib_apbuart_reset(DeviceState *d)
     uart->current = 0;
 }
 
-static Property grlib_apbuart_properties[] = {
+static const Property grlib_apbuart_properties[] = {
     DEFINE_PROP_CHR("chrdev", UART, chr),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
-static void grlib_apbuart_class_init(ObjectClass *klass, void *data)
+static void grlib_apbuart_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = grlib_apbuart_realize;
-    dc->reset = grlib_apbuart_reset;
+    device_class_set_legacy_reset(dc, grlib_apbuart_reset);
     device_class_set_props(dc, grlib_apbuart_properties);
 }
 

@@ -1,16 +1,19 @@
 #ifndef QEMU_HW_SCSI_H
 #define QEMU_HW_SCSI_H
 
-#include "block/aio.h"
+#include "qemu/aiocb.h"
+#include "qemu/aio.h"
 #include "hw/block/block.h"
-#include "hw/qdev-core.h"
+#include "hw/core/qdev.h"
 #include "scsi/utils.h"
 #include "qemu/notify.h"
 #include "qom/object.h"
 
 #define MAX_SCSI_DEVS 255
 
-typedef struct SCSIBus SCSIBus;
+#define TYPE_SCSI_BUS "SCSI"
+OBJECT_DECLARE_SIMPLE_TYPE(SCSIBus, SCSI_BUS)
+
 typedef struct SCSIBusInfo SCSIBusInfo;
 typedef struct SCSIDevice SCSIDevice;
 typedef struct SCSIRequest SCSIRequest;
@@ -24,6 +27,7 @@ struct SCSIRequest {
     SCSIBus           *bus;
     SCSIDevice        *dev;
     const SCSIReqOps  *ops;
+    AioContext        *ctx;
     uint32_t          refcount;
     uint32_t          tag;
     uint32_t          lun;
@@ -48,6 +52,8 @@ struct SCSIRequest {
     bool              dma_started;
     BlockAIOCB        *aiocb;
     QEMUSGList        *sg;
+
+    /* Protected by SCSIDevice->requests_lock */
     QTAILQ_ENTRY(SCSIRequest) next;
 };
 
@@ -76,10 +82,7 @@ struct SCSIDevice
     uint8_t sense[SCSI_SENSE_BUF_SIZE];
     uint32_t sense_len;
 
-    /*
-     * The requests list is only accessed from the AioContext that executes
-     * requests or from the main loop when IOThread processing is stopped.
-     */
+    QemuMutex requests_lock; /* protects the requests list */
     QTAILQ_HEAD(, SCSIRequest) requests;
 
     uint32_t channel;
@@ -150,9 +153,6 @@ struct SCSIBusInfo {
     void (*drained_begin)(SCSIBus *bus);
     void (*drained_end)(SCSIBus *bus);
 };
-
-#define TYPE_SCSI_BUS "SCSI"
-OBJECT_DECLARE_SIMPLE_TYPE(SCSIBus, SCSI_BUS)
 
 struct SCSIBus {
     BusState qbus;

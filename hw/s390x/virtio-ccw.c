@@ -12,8 +12,8 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "exec/address-spaces.h"
-#include "sysemu/kvm.h"
+#include "system/address-spaces.h"
+#include "system/kvm.h"
 #include "net/net.h"
 #include "hw/virtio/virtio.h"
 #include "migration/qemu-file-types.h"
@@ -32,7 +32,8 @@
 #include "trace.h"
 #include "hw/s390x/css-bridge.h"
 #include "hw/s390x/s390-virtio-ccw.h"
-#include "sysemu/replay.h"
+#include "exec/cpu-common.h"
+#include "system/replay.h"
 
 #define NR_CLASSIC_INDICATOR_BITS 64
 
@@ -913,14 +914,15 @@ static void virtio_ccw_notify(DeviceState *d, uint16_t vector)
     }
 }
 
-static void virtio_ccw_reset(DeviceState *d)
+static void virtio_ccw_reset_hold(Object *obj, ResetType type)
 {
-    VirtioCcwDevice *dev = VIRTIO_CCW_DEVICE(d);
+    VirtioCcwDevice *dev = VIRTIO_CCW_DEVICE(obj);
     VirtIOCCWDeviceClass *vdc = VIRTIO_CCW_DEVICE_GET_CLASS(dev);
 
     virtio_ccw_reset_virtio(dev);
-    if (vdc->parent_reset) {
-        vdc->parent_reset(d);
+
+    if (vdc->parent_phases.hold) {
+        vdc->parent_phases.hold(obj, type);
     }
 }
 
@@ -1129,13 +1131,26 @@ static int virtio_ccw_load_queue(DeviceState *d, int n, QEMUFile *f)
 static void virtio_ccw_save_config(DeviceState *d, QEMUFile *f)
 {
     VirtioCcwDevice *dev = VIRTIO_CCW_DEVICE(d);
-    vmstate_save_state(f, &vmstate_virtio_ccw_dev, dev, NULL);
+    Error *local_err = NULL;
+    int ret;
+
+    ret = vmstate_save_state(f, &vmstate_virtio_ccw_dev, dev, NULL, &local_err);
+    if (ret < 0) {
+        error_report_err(local_err);
+    }
 }
 
 static int virtio_ccw_load_config(DeviceState *d, QEMUFile *f)
 {
     VirtioCcwDevice *dev = VIRTIO_CCW_DEVICE(d);
-    return vmstate_load_state(f, &vmstate_virtio_ccw_dev, dev, 1);
+    Error *local_err = NULL;
+    int ret;
+
+    ret = vmstate_load_state(f, &vmstate_virtio_ccw_dev, dev, 1, &local_err);
+    if (ret < 0) {
+        error_report_err(local_err);
+    }
+    return ret;
 }
 
 static void virtio_ccw_pre_plugged(DeviceState *d, Error **errp)
@@ -1156,7 +1171,6 @@ static void virtio_ccw_device_plugged(DeviceState *d, Error **errp)
     CcwDevice *ccw_dev = CCW_DEVICE(d);
     SubchDev *sch = ccw_dev->sch;
     int n = virtio_get_num_queues(vdev);
-    S390FLICState *flic = s390_get_flic();
 
     if (!virtio_has_feature(vdev->host_features, VIRTIO_F_VERSION_1)) {
         dev->max_rev = 0;
@@ -1183,10 +1197,10 @@ static void virtio_ccw_device_plugged(DeviceState *d, Error **errp)
                    VIRTIO_QUEUE_MAX);
         return;
     }
-    if (virtio_get_num_queues(vdev) > flic->adapter_routes_max_batch) {
+    if (virtio_get_num_queues(vdev) > ADAPTER_ROUTES_MAX_GSI) {
         error_setg(errp, "The number of virtqueues %d "
                    "exceeds flic adapter route limit %d", n,
-                   flic->adapter_routes_max_batch);
+                   ADAPTER_ROUTES_MAX_GSI);
         return;
     }
 
@@ -1228,16 +1242,18 @@ static void virtio_ccw_busdev_unplug(HotplugHandler *hotplug_dev,
     virtio_ccw_stop_ioeventfd(_dev);
 }
 
-static void virtio_ccw_device_class_init(ObjectClass *klass, void *data)
+static void virtio_ccw_device_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     CCWDeviceClass *k = CCW_DEVICE_CLASS(dc);
     VirtIOCCWDeviceClass *vdc = VIRTIO_CCW_DEVICE_CLASS(klass);
+    ResettableClass *rc = RESETTABLE_CLASS(klass);
 
     k->unplug = virtio_ccw_busdev_unplug;
     dc->realize = virtio_ccw_busdev_realize;
     dc->unrealize = virtio_ccw_busdev_unrealize;
-    device_class_set_parent_reset(dc, virtio_ccw_reset, &vdc->parent_reset);
+    resettable_class_set_parent_phases(rc, NULL, virtio_ccw_reset_hold, NULL,
+                                       &vdc->parent_phases);
 }
 
 static const TypeInfo virtio_ccw_device_info = {
@@ -1260,7 +1276,7 @@ static void virtio_ccw_bus_new(VirtioBusState *bus, size_t bus_size,
     qbus_init(bus, bus_size, TYPE_VIRTIO_CCW_BUS, qdev, virtio_bus_name);
 }
 
-static void virtio_ccw_bus_class_init(ObjectClass *klass, void *data)
+static void virtio_ccw_bus_class_init(ObjectClass *klass, const void *data)
 {
     VirtioBusClass *k = VIRTIO_BUS_CLASS(klass);
     BusClass *bus_class = BUS_CLASS(klass);

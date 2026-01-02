@@ -47,6 +47,7 @@ tests = {
   'test-logging': [],
   'test-qapi-util': [],
   'test-interval-tree': [],
+  'test-fifo': [],
 }
 
 if have_system or have_tools
@@ -109,21 +110,16 @@ if have_block
   if pam.found()
     tests += {'test-authz-pam': [authz]}
   endif
-  if xts == 'private'
-    tests += {'test-crypto-xts': [crypto, io]}
-  endif
   if host_os != 'windows'
     tests += {
       'test-image-locking': [testblock],
-      'test-nested-aio-poll': [testblock],
+      'test-nested-aio-poll': [],
     }
   endif
   if config_host_data.get('CONFIG_REPLICATION')
     tests += {'test-replication': [testblock]}
   endif
-  if nettle.found() or gcrypt.found()
-    tests += {'test-crypto-pbkdf': [io]}
-  endif
+  tests += {'test-crypto-pbkdf': [io]}
 endif
 
 if have_system

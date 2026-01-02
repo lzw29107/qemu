@@ -10,15 +10,17 @@
 #include "qemu/osdep.h"
 #include "qemu/error-report.h"
 #include "qemu/main-loop.h"
+#include "exec/target_page.h"
 #include "qapi/error.h"
 #include "migration/vmstate.h"
-#include "hw/qdev-properties.h"
-#include "hw/qdev-properties-system.h"
+#include "hw/core/qdev-properties.h"
+#include "hw/core/qdev-properties-system.h"
 #include "hw/hyperv/hyperv.h"
 #include "hw/hyperv/vmbus.h"
 #include "hw/hyperv/vmbus-bridge.h"
-#include "hw/sysbus.h"
-#include "cpu.h"
+#include "hw/core/sysbus.h"
+#include "exec/cpu-common.h"
+#include "exec/target_page.h"
 #include "trace.h"
 
 enum {
@@ -1874,7 +1876,7 @@ static void send_create_gpadl(VMBus *vmbus)
         }
     }
 
-    assert(false);
+    g_assert_not_reached();
 }
 
 static bool complete_create_gpadl(VMBus *vmbus)
@@ -1889,8 +1891,7 @@ static bool complete_create_gpadl(VMBus *vmbus)
         }
     }
 
-    assert(false);
-    return false;
+    g_assert_not_reached();
 }
 
 static void handle_gpadl_teardown(VMBus *vmbus,
@@ -1931,7 +1932,7 @@ static void send_teardown_gpadl(VMBus *vmbus)
         }
     }
 
-    assert(false);
+    g_assert_not_reached();
 }
 
 static bool complete_teardown_gpadl(VMBus *vmbus)
@@ -1946,8 +1947,7 @@ static bool complete_teardown_gpadl(VMBus *vmbus)
         }
     }
 
-    assert(false);
-    return false;
+    g_assert_not_reached();
 }
 
 static void handle_open_channel(VMBus *vmbus, vmbus_message_open_channel *msg,
@@ -1996,7 +1996,7 @@ static void send_open_channel(VMBus *vmbus)
         }
     }
 
-    assert(false);
+    g_assert_not_reached();
 }
 
 static bool complete_open_channel(VMBus *vmbus)
@@ -2020,8 +2020,7 @@ static bool complete_open_channel(VMBus *vmbus)
         }
     }
 
-    assert(false);
-    return false;
+    g_assert_not_reached();
 }
 
 static void vdev_reset_on_close(VMBusDevice *vdev)
@@ -2076,7 +2075,6 @@ static void send_unload(VMBus *vmbus)
     qemu_mutex_unlock(&vmbus->rx_queue_lock);
 
     post_msg(vmbus, &msg, sizeof(msg));
-    return;
 }
 
 static bool complete_unload(VMBus *vmbus)
@@ -2349,20 +2347,19 @@ static void vmbus_dev_unrealize(DeviceState *dev)
     free_channels(vdev);
 }
 
-static Property vmbus_dev_props[] = {
+static const Property vmbus_dev_props[] = {
     DEFINE_PROP_UUID("instanceid", VMBusDevice, instanceid),
-    DEFINE_PROP_END_OF_LIST()
 };
 
 
-static void vmbus_dev_class_init(ObjectClass *klass, void *data)
+static void vmbus_dev_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *kdev = DEVICE_CLASS(klass);
     device_class_set_props(kdev, vmbus_dev_props);
     kdev->bus_type = TYPE_VMBUS;
     kdev->realize = vmbus_dev_realize;
     kdev->unrealize = vmbus_dev_unrealize;
-    kdev->reset = vmbus_dev_reset;
+    device_class_set_legacy_reset(kdev, vmbus_dev_reset);
 }
 
 static void vmbus_dev_instance_init(Object *obj)
@@ -2473,7 +2470,7 @@ static char *vmbus_get_fw_dev_path(DeviceState *dev)
     return g_strdup_printf("%s@%s", qdev_fw_name(dev), uuid);
 }
 
-static void vmbus_class_init(ObjectClass *klass, void *data)
+static void vmbus_class_init(ObjectClass *klass, const void *data)
 {
     BusClass *k = BUS_CLASS(klass);
     ResettableClass *rc = RESETTABLE_CLASS(klass);
@@ -2656,12 +2653,11 @@ static const VMStateDescription vmstate_vmbus_bridge = {
     },
 };
 
-static Property vmbus_bridge_props[] = {
+static const Property vmbus_bridge_props[] = {
     DEFINE_PROP_UINT8("irq", VMBusBridge, irq, 7),
-    DEFINE_PROP_END_OF_LIST()
 };
 
-static void vmbus_bridge_class_init(ObjectClass *klass, void *data)
+static void vmbus_bridge_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *k = DEVICE_CLASS(klass);
     SysBusDeviceClass *sk = SYS_BUS_DEVICE_CLASS(klass);

@@ -2,9 +2,10 @@
 #define QEMU_H
 
 #include "cpu.h"
-#include "exec/cpu_ldst.h"
+#include "accel/tcg/cpu-ldst.h"
 
 #include "user/abitypes.h"
+#include "user/page-protection.h"
 
 #include "syscall_defs.h"
 #include "target_syscall.h"
@@ -44,7 +45,6 @@ struct image_info {
         abi_ulong       file_string;
         uint32_t        elf_flags;
         int             personality;
-        abi_ulong       alignment;
         bool            exec_stack;
 
         /* Generic semihosting knows about these pointers. */
@@ -114,16 +114,19 @@ struct TaskState {
     uint32_t v86flags;
     uint32_t v86mask;
 #endif
+#if defined(TARGET_I386)
+    /* Last syscall number. */
+    target_ulong orig_ax;
+#endif
     abi_ulong child_tidptr;
 #ifdef TARGET_M68K
     abi_ulong tp_value;
 #endif
-#if defined(TARGET_ARM) || defined(TARGET_M68K) || defined(TARGET_RISCV)
-    /* Extra fields for semihosted binaries.  */
-    abi_ulong heap_base;
-    abi_ulong heap_limit;
+#if defined(TARGET_AARCH64)
+    vaddr gcs_base;
+    abi_ulong gcs_size;
+    abi_ulong gcs_el0_locked;
 #endif
-    abi_ulong stack_base;
     int used; /* non zero if used */
     struct image_info *info;
     struct linux_binprm *bprm;
@@ -156,6 +159,11 @@ struct TaskState {
 
     /* This thread's sigaltstack, if it has one */
     struct target_sigaltstack sigaltstack_used;
+
+    /* This thread's SYSCALL_USER_DISPATCH state, len=~0 means disabled */
+    vaddr sys_dispatch;
+    vaddr sys_dispatch_selector;
+    abi_ulong sys_dispatch_len;
 
     /* Start time of task after system boot in clock ticks */
     uint64_t start_boottime;
@@ -313,6 +321,15 @@ static inline bool access_ok(CPUState *cpu, int type,
 int copy_from_user(void *hptr, abi_ulong gaddr, ssize_t len);
 int copy_to_user(abi_ulong gaddr, void *hptr, ssize_t len);
 
+/*
+ * copy_struct_from_user() copies a target struct to a host struct, in
+ * a way that guarantees backwards-compatibility for struct syscall
+ * arguments.
+ *
+ * Similar to kernels uaccess.h:copy_struct_from_user()
+ */
+int copy_struct_from_user(void *dst, size_t ksize, abi_ptr src, size_t usize);
+
 /* Functions for accessing guest memory.  The tget and tput functions
    read/write single values, byteswapping as necessary.  The lock_user function
    gets a pointer to a contiguous area of guest memory, but does not perform
@@ -348,5 +365,10 @@ void *lock_user_string(abi_ulong guest_addr);
     (host_ptr = lock_user(type, guest_addr, sizeof(*host_ptr), copy))
 #define unlock_user_struct(host_ptr, guest_addr, copy)		\
     unlock_user(host_ptr, guest_addr, (copy) ? sizeof(*host_ptr) : 0)
+
+/* Clone cpu state */
+CPUArchState *cpu_copy(CPUArchState *env);
+
+void init_main_thread(CPUState *cs, struct image_info *info);
 
 #endif /* QEMU_H */
