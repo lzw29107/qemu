@@ -16,10 +16,11 @@
 #include "qemu/osdep.h"
 #include "exec/cpu-common.h"
 #include "monitor/hmp.h"
+#include "monitor/hmp-completion.h"
 #include "monitor/monitor.h"
 #include "qapi/error.h"
 #include "qapi/qapi-commands-run-state.h"
-#include "qapi/qmp/qdict.h"
+#include "qobject/qdict.h"
 #include "qemu/accel.h"
 
 void hmp_info_status(Monitor *mon, const QDict *qdict)

@@ -11,17 +11,19 @@
  */
 
 #include "qemu/osdep.h"
-#include "sysemu/hostmem.h"
-#include "hw/boards.h"
+#include "system/hostmem.h"
+#include "system/ramblock.h"
+#include "hw/core/boards.h"
 #include "qapi/error.h"
 #include "qapi/qapi-builtin-visit.h"
 #include "qapi/visitor.h"
 #include "qemu/config-file.h"
+#include "qom/compat-properties.h"
 #include "qom/object_interfaces.h"
 #include "qemu/mmap-alloc.h"
 #include "qemu/madvise.h"
 #include "qemu/cutils.h"
-#include "hw/qdev-core.h"
+#include "hw/core/qdev.h"
 
 #ifdef CONFIG_NUMA
 #include <numaif.h>
@@ -178,7 +180,7 @@ static void host_memory_backend_set_merge(Object *obj, bool value, Error **errp)
         return;
     }
 
-    if (!host_memory_backend_mr_inited(backend) &&
+    if (host_memory_backend_mr_inited(backend) &&
         value != backend->merge) {
         void *ptr = memory_region_get_ram_ptr(&backend->mr);
         uint64_t sz = memory_region_size(&backend->mr);
@@ -501,7 +503,7 @@ host_memory_backend_set_use_canonical_path(Object *obj, bool value,
 }
 
 static void
-host_memory_backend_class_init(ObjectClass *oc, void *data)
+host_memory_backend_class_init(ObjectClass *oc, const void *data)
 {
     UserCreatableClass *ucc = USER_CREATABLE_CLASS(oc);
 
@@ -586,7 +588,7 @@ static const TypeInfo host_memory_backend_info = {
     .instance_size = sizeof(HostMemoryBackend),
     .instance_init = host_memory_backend_init,
     .instance_post_init = host_memory_backend_post_init,
-    .interfaces = (InterfaceInfo[]) {
+    .interfaces = (const InterfaceInfo[]) {
         { TYPE_USER_CREATABLE },
         { }
     }

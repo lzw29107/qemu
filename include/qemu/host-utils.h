@@ -30,7 +30,6 @@
 #ifndef HOST_UTILS_H
 #define HOST_UTILS_H
 
-#include "qemu/bswap.h"
 #include "qemu/int128.h"
 
 #ifdef CONFIG_INT128
@@ -313,6 +312,15 @@ static inline int ctpop8(uint8_t val)
     return __builtin_popcount(val);
 }
 
+/*
+ * parity8 - return the parity (1 = odd) of an 8-bit value.
+ * @val: The value to search
+ */
+static inline int parity8(uint8_t val)
+{
+    return __builtin_parity(val);
+}
+
 /**
  * ctpop16 - count the population of one bits in a 16-bit value.
  * @val: The value to search
@@ -371,7 +379,7 @@ static inline uint16_t revbit16(uint16_t x)
     return __builtin_bitreverse16(x);
 #else
     /* Assign the correct byte position.  */
-    x = bswap16(x);
+    x = __builtin_bswap16(x);
     /* Assign the correct nibble position.  */
     x = ((x & 0xf0f0) >> 4)
       | ((x & 0x0f0f) << 4);
@@ -394,7 +402,7 @@ static inline uint32_t revbit32(uint32_t x)
     return __builtin_bitreverse32(x);
 #else
     /* Assign the correct byte position.  */
-    x = bswap32(x);
+    x = __builtin_bswap32(x);
     /* Assign the correct nibble position.  */
     x = ((x & 0xf0f0f0f0u) >> 4)
       | ((x & 0x0f0f0f0fu) << 4);
@@ -417,7 +425,7 @@ static inline uint64_t revbit64(uint64_t x)
     return __builtin_bitreverse64(x);
 #else
     /* Assign the correct byte position.  */
-    x = bswap64(x);
+    x = __builtin_bswap64(x);
     /* Assign the correct nibble position.  */
     x = ((x & 0xf0f0f0f0f0f0f0f0ull) >> 4)
       | ((x & 0x0f0f0f0f0f0f0f0full) << 4);
@@ -598,6 +606,66 @@ static inline bool umul64_overflow(uint64_t x, uint64_t y, uint64_t *ret)
     return __builtin_mul_overflow(x, y, ret);
 }
 
+/**
+ * sadd32_saturate - addition with saturation
+ * @x, @y: addends
+ *
+ * Computes @x + @y, and saturates rathern than truncating the result.
+ */
+static inline int32_t sadd32_saturate(int32_t x, int32_t y)
+{
+    int32_t ret;
+    if (sadd32_overflow(x, y, &ret)) {
+        ret = y < 0 ? INT32_MIN : INT32_MAX;
+    }
+    return ret;
+}
+
+/**
+ * sadd64_saturate - addition with saturation
+ * @x, @y: addends
+ *
+ * Computes @x + @y, and saturates rathern than truncating the result.
+ */
+static inline int64_t sadd64_saturate(int64_t x, int64_t y)
+{
+    int64_t ret;
+    if (sadd64_overflow(x, y, &ret)) {
+        ret = y < 0 ? INT64_MIN : INT64_MAX;
+    }
+    return ret;
+}
+
+/**
+ * ssub32_saturate - subtraction with saturation
+ * @x, @y: addends
+ *
+ * Computes @x + @y, and saturates rathern than truncating the result.
+ */
+static inline bool ssub32_saturate(int32_t x, int32_t y)
+{
+    int32_t ret;
+    if (ssub32_overflow(x, y, &ret)) {
+        ret = x < 0 ? INT32_MAX : INT32_MIN;
+    }
+    return ret;
+}
+
+/**
+ * ssub64_saturate - subtraction with saturation
+ * @x, @y: addends
+ *
+ * Computes @x + @y, and saturates rathern than truncating the result.
+ */
+static inline bool ssub64_saturate(int64_t x, int64_t y)
+{
+    int64_t ret;
+    if (ssub64_overflow(x, y, &ret)) {
+        ret = x < 0 ? INT64_MAX : INT64_MIN;
+    }
+    return ret;
+}
+
 /*
  * Unsigned 128x64 multiplication.
  * Returns true if the result got truncated to 128 bits.
@@ -668,7 +736,7 @@ static inline uint64_t uadd64_carry(uint64_t x, uint64_t y, bool *pcarry)
  */
 static inline uint64_t usub64_borrow(uint64_t x, uint64_t y, bool *pborrow)
 {
-#if __has_builtin(__builtin_subcll) && !defined(BUILTIN_SUBCLL_BROKEN)
+#if __has_builtin(__builtin_subcll)
     unsigned long long b = *pborrow;
     x = __builtin_subcll(x, y, b, &b);
     *pborrow = b & 1;

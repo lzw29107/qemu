@@ -115,7 +115,7 @@ enum {
 int get_physical_address(CPUMIPSState *env, hwaddr *physical,
                          int *prot, target_ulong real_address,
                          MMUAccessType access_type, int mmu_idx);
-hwaddr mips_cpu_get_phys_page_debug(CPUState *cpu, vaddr addr);
+hwaddr mips_cpu_get_phys_addr_debug(CPUState *cpu, vaddr addr);
 
 typedef struct r4k_tlb_t r4k_tlb_t;
 struct r4k_tlb_t {
@@ -162,8 +162,6 @@ void cpu_mips_store_cause(CPUMIPSState *env, target_ulong val);
 
 extern const VMStateDescription vmstate_mips_cpu;
 
-#endif /* !CONFIG_USER_ONLY */
-
 static inline bool cpu_mips_hw_interrupts_enabled(CPUMIPSState *env)
 {
     return (env->CP0_Status & (1 << CP0St_IE)) &&
@@ -206,6 +204,8 @@ static inline bool cpu_mips_hw_interrupts_pending(CPUMIPSState *env)
     return r;
 }
 
+#endif /* !CONFIG_USER_ONLY */
+
 void msa_reset(CPUMIPSState *env);
 
 /* cp0_timer.c */
@@ -225,6 +225,16 @@ static inline void mips_env_set_pc(CPUMIPSState *env, target_ulong value)
     }
 }
 
+static inline bool mips_env_is_bigendian(CPUMIPSState *env)
+{
+    return extract32(env->CP0_Config0, CP0C0_BE, 1);
+}
+
+static inline MemOp mo_endian_env(CPUMIPSState *env)
+{
+    return mips_env_is_bigendian(env) ? MO_BE : MO_LE;
+}
+
 static inline void restore_pamask(CPUMIPSState *env)
 {
     if (env->hflags & MIPS_HFLAG_ELPA) {
@@ -236,10 +246,11 @@ static inline void restore_pamask(CPUMIPSState *env)
 
 static inline int mips_vpe_active(CPUMIPSState *env)
 {
+    MIPSCPU *cpu = env_archcpu(env);
     int active = 1;
 
     /* Check that the VPE is enabled.  */
-    if (!(env->mvp->CP0_MVPControl & (1 << CP0MVPCo_EVP))) {
+    if (!(cpu->mvp->CP0_MVPControl & (1 << CP0MVPCo_EVP))) {
         active = 0;
     }
     /* Check that the VPE is activated.  */
@@ -269,7 +280,7 @@ static inline int mips_vpe_active(CPUMIPSState *env)
 
 static inline int mips_vp_active(CPUMIPSState *env)
 {
-    CPUState *other_cs = first_cpu;
+    CPUState *cs;
 
     /* Check if the VP disabled other VPs (which means the VP is enabled) */
     if ((env->CP0_VPControl >> CP0VPCtl_DIS) & 1) {
@@ -277,10 +288,11 @@ static inline int mips_vp_active(CPUMIPSState *env)
     }
 
     /* Check if the virtual processor is disabled due to a DVP */
-    CPU_FOREACH(other_cs) {
-        MIPSCPU *other_cpu = MIPS_CPU(other_cs);
-        if ((&other_cpu->env != env) &&
-            ((other_cpu->env.CP0_VPControl >> CP0VPCtl_DIS) & 1)) {
+    CPU_FOREACH(cs) {
+        CPUMIPSState *other_env = cpu_env(cs);
+
+        if ((other_env != env) &&
+            ((other_env->CP0_VPControl >> CP0VPCtl_DIS) & 1)) {
             return 0;
         }
     }

@@ -27,15 +27,15 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/sysbus.h"
+#include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
 #include "chardev/char-fe.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 
 #include "hw/char/digic-uart.h"
-#include "hw/qdev-properties.h"
-#include "hw/qdev-properties-system.h"
+#include "hw/core/qdev-properties.h"
+#include "hw/core/qdev-properties-system.h"
 
 enum {
     ST_RX_RDY = (1 << 0),
@@ -172,17 +172,16 @@ static const VMStateDescription vmstate_digic_uart = {
     }
 };
 
-static Property digic_uart_properties[] = {
+static const Property digic_uart_properties[] = {
     DEFINE_PROP_CHR("chardev", DigicUartState, chr),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
-static void digic_uart_class_init(ObjectClass *klass, void *data)
+static void digic_uart_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = digic_uart_realize;
-    dc->reset = digic_uart_reset;
+    device_class_set_legacy_reset(dc, digic_uart_reset);
     dc->vmsd = &vmstate_digic_uart;
     device_class_set_props(dc, digic_uart_properties);
 }

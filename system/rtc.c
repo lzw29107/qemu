@@ -28,10 +28,11 @@
 #include "qemu/error-report.h"
 #include "qemu/option.h"
 #include "qemu/timer.h"
+#include "qom/compat-properties.h"
 #include "qom/object.h"
-#include "sysemu/replay.h"
-#include "sysemu/sysemu.h"
-#include "sysemu/rtc.h"
+#include "system/replay.h"
+#include "system/system.h"
+#include "system/rtc.h"
 #include "hw/rtc/mc146818rtc.h"
 
 static enum {
@@ -62,7 +63,7 @@ static time_t qemu_ref_timedate(QEMUClockType clock)
         }
         break;
     default:
-        assert(0);
+        g_assert_not_reached();
     }
     return value;
 }

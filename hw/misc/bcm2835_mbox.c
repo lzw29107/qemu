@@ -12,7 +12,7 @@
 
 #include "qemu/osdep.h"
 #include "qapi/error.h"
-#include "hw/irq.h"
+#include "hw/core/irq.h"
 #include "hw/misc/bcm2835_mbox.h"
 #include "migration/vmstate.h"
 #include "qemu/log.h"
@@ -314,12 +314,12 @@ static void bcm2835_mbox_realize(DeviceState *dev, Error **errp)
     bcm2835_mbox_reset(dev);
 }
 
-static void bcm2835_mbox_class_init(ObjectClass *klass, void *data)
+static void bcm2835_mbox_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = bcm2835_mbox_realize;
-    dc->reset = bcm2835_mbox_reset;
+    device_class_set_legacy_reset(dc, bcm2835_mbox_reset);
     dc->vmsd = &vmstate_bcm2835_mbox;
 }
 

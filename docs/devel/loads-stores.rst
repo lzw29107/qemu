@@ -52,12 +52,12 @@ files which are built per-target.
 
 There are also functions which take the size as an argument:
 
-load: ``ldn{endian}_p(ptr, sz)``
+load: ``ldn_{endian}_p(ptr, sz)``
 
 which performs an unsigned load of ``sz`` bytes from ``ptr``
 as an ``{endian}`` order value and returns it in a uint64_t.
 
-store: ``stn{endian}_p(ptr, sz, val)``
+store: ``stn_{endian}_p(ptr, sz, val)``
 
 which stores ``val`` to ``ptr`` as an ``{endian}`` order value
 of size ``sz`` bytes.
@@ -67,8 +67,8 @@ Regexes for git grep:
  - ``\<ld[us]\?[bwlq]\(_[hbl]e\)\?_p\>``
  - ``\<st[bwlq]\(_[hbl]e\)\?_p\>``
  - ``\<st24\(_[hbl]e\)\?_p\>``
- - ``\<ldn_\([hbl]e\)\?_p\>``
- - ``\<stn_\([hbl]e\)\?_p\>``
+ - ``\<ldn\(_[hbl]e\)\?_p\>``
+ - ``\<stn\(_[hbl]e\)\?_p\>``
 
 ``cpu_{ld,st}*_mmu``
 ~~~~~~~~~~~~~~~~~~~~
@@ -95,7 +95,7 @@ guest CPU state in case of a guest CPU exception.  This is passed
 to ``cpu_restore_state()``.  Therefore the value should either be 0,
 to indicate that the guest CPU state is already synchronized, or
 the result of ``GETPC()`` from the top level ``HELPER(foo)``
-function, which is a return address into the generated code [#gpc]_.
+function, which is a return address into the generated code\ [#gpc]_.
 
 .. [#gpc] Note that ``GETPC()`` should be used with great care: calling
           it in other functions that are *not* the top level
@@ -235,16 +235,13 @@ Regexes for git grep:
  - ``\<cpu_ld[us]\?[bwlq]\(_[bl]e\)\?_data\>``
  - ``\<cpu_st[bwlq]\(_[bl]e\)\?_data\+\>``
 
-``cpu_ld*_code``
-~~~~~~~~~~~~~~~~
+``cpu_ld*_code_mmu``
+~~~~~~~~~~~~~~~~~~~~
 
-These functions perform a read for instruction execution.  The ``mmuidx``
-parameter is taken from the current mode of the guest CPU, as determined
-by ``cpu_mmu_index(env, true)``.  The ``retaddr`` parameter is 0, and
-thus does not unwind guest CPU state, because CPU state is always
-synchronized while translating instructions.  Any guest CPU exception
-that is raised will indicate an instruction execution fault rather than
-a data read fault.
+These functions work like the ``cpu_{ld,st}*_mmu`` functions
+except that they perform a read for instruction execution.
+Any guest CPU exception that is raised will indicate an instruction
+execution fault rather than a data read fault.
 
 In general these functions should not be used directly during translation.
 There are wrapper functions that are to be used which also take care of
@@ -252,7 +249,7 @@ plugins for tracing.
 
 Function names follow the pattern:
 
-load: ``cpu_ld{sign}{size}_code(env, ptr)``
+load: ``cpu_ld{sign}{size}_code_mmu(env, addr, oi, retaddr)``
 
 ``sign``
  - (empty) : for 32 or 64 bit sizes
@@ -266,12 +263,12 @@ load: ``cpu_ld{sign}{size}_code(env, ptr)``
  - ``q`` : 64 bits
 
 Regexes for git grep:
- - ``\<cpu_ld[us]\?[bwlq]_code\>``
+ - ``\<cpu_ld[us]\?[bwlq]_code_mmu\>``
 
 ``translator_ld*``
 ~~~~~~~~~~~~~~~~~~
 
-These functions are a wrapper for ``cpu_ld*_code`` which also perform
+These functions are a wrapper for ``cpu_ld*_code_mmu`` which also perform
 any actions required by any tracing plugins.  They are only to be
 called during the translator callback ``translate_insn``.
 
@@ -460,10 +457,8 @@ For new code they are better avoided:
 
 ``cpu_physical_memory_write``
 
-``cpu_physical_memory_rw``
-
 Regexes for git grep:
- - ``\<cpu_physical_memory_\(read\|write\|rw\)\>``
+ - ``\<cpu_physical_memory_\(read\|write\)\>``
 
 ``cpu_memory_rw_debug``
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -474,7 +469,7 @@ This function is intended for use by the GDB stub and similar code.
 It takes a virtual address, converts it to a physical address via
 an MMU lookup using the current settings of the specified CPU,
 and then performs the access (using ``address_space_rw`` for
-reads or ``cpu_physical_memory_write_rom`` for writes).
+reads or ``address_space_write_rom`` for writes).
 This means that if the access is a write to a ROM then this
 function will modify the contents (whereas a normal guest CPU access
 would ignore the write attempt).

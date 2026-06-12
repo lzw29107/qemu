@@ -40,6 +40,9 @@ static bool require_rvf(DisasContext *s)
 
     switch (s->sew) {
     case MO_16:
+        if (s->altfmt) {
+            return s->cfg_ptr->ext_zvfbfa;
+        }
         return s->cfg_ptr->ext_zvfh;
     case MO_32:
         return s->cfg_ptr->ext_zve32f;
@@ -58,6 +61,9 @@ static bool require_rvfmin(DisasContext *s)
 
     switch (s->sew) {
     case MO_16:
+        if (s->altfmt) {
+            return s->cfg_ptr->ext_zvfbfa;
+        }
         return s->cfg_ptr->ext_zvfhmin;
     case MO_32:
         return s->cfg_ptr->ext_zve32f;
@@ -74,6 +80,9 @@ static bool require_scale_rvf(DisasContext *s)
 
     switch (s->sew) {
     case MO_8:
+        if (s->altfmt) {
+            return s->cfg_ptr->ext_zvfbfa;
+        }
         return s->cfg_ptr->ext_zvfh;
     case MO_16:
         return s->cfg_ptr->ext_zve32f;
@@ -100,10 +109,33 @@ static bool require_scale_rvfmin(DisasContext *s)
     }
 }
 
-/* Destination vector register group cannot overlap source mask register. */
-static bool require_vm(int vm, int vd)
+/*
+ * Source and destination vector register groups cannot overlap source mask
+ * register:
+ *
+ * A vector register cannot be used to provide source operands with more than
+ * one EEW for a single instruction. A mask register source is considered to
+ * have EEW=1 for this constraint. An encoding that would result in the same
+ * vector register being read with two or more different EEWs, including when
+ * the vector register appears at different positions within two or more vector
+ * register groups, is reserved.
+ * (Section 5.2)
+ *
+ * A destination vector register group can overlap a source vector
+ * register group only if one of the following holds:
+ *  1. The destination EEW equals the source EEW.
+ *  2. The destination EEW is smaller than the source EEW and the overlap
+ *     is in the lowest-numbered part of the source register group.
+ *  3. The destination EEW is greater than the source EEW, the source EMUL
+ *     is at least 1, and the overlap is in the highest-numbered part of
+ *     the destination register group.
+ * For the purpose of determining register group overlap constraints, mask
+ * elements have EEW=1.
+ * (Section 5.2)
+ */
+static bool require_vm(int vm, int v)
 {
-    return (vm != 0 || vd != 0);
+    return (vm != 0 || v != 0);
 }
 
 static bool require_nf(int vd, int nf, int lmul)
@@ -179,7 +211,7 @@ static bool do_vsetvl(DisasContext *s, int rd, int rs1, TCGv s2)
         s1 = get_gpr(s, rs1, EXT_ZERO);
     }
 
-    gen_helper_vsetvl(dst, tcg_env, s1, s2);
+    gen_helper_vsetvl(dst, tcg_env, s1, s2, tcg_constant_tl((int) (rd == 0 && rs1 == 0)));
     gen_set_gpr(s, rd, dst);
     finalize_rvv_inst(s);
 
@@ -199,7 +231,7 @@ static bool do_vsetivli(DisasContext *s, int rd, TCGv s1, TCGv s2)
 
     dst = dest_gpr(s, rd);
 
-    gen_helper_vsetvl(dst, tcg_env, s1, s2);
+    gen_helper_vsetvl(dst, tcg_env, s1, s2, tcg_constant_tl(0));
     gen_set_gpr(s, rd, dst);
     finalize_rvv_inst(s);
     gen_update_pc(s, s->cur_insn_len);
@@ -356,11 +388,41 @@ static bool vext_check_ld_index(DisasContext *s, int vd, int vs2,
     return ret;
 }
 
+/*
+ * Check whether a vector register is used to provide source operands with
+ * more than one EEW for the vector instruction.
+ * Returns true if the instruction has valid encoding
+ * Returns false if encoding violates the mismatched input EEWs constraint
+ */
+static bool vext_check_input_eew(DisasContext *s, int vs1, uint8_t eew_vs1,
+                                 int vs2, uint8_t eew_vs2, int vm)
+{
+    bool is_valid = true;
+    int8_t emul_vs1 = eew_vs1 - s->sew + s->lmul;
+    int8_t emul_vs2 = eew_vs2 - s->sew + s->lmul;
+
+    /* When vm is 0, vs1 & vs2(EEW!=1) group can't overlap v0 (EEW=1) */
+    if ((vs1 != -1 && !require_vm(vm, vs1)) ||
+        (vs2 != -1 && !require_vm(vm, vs2))) {
+        is_valid = false;
+    }
+
+    /* When eew_vs1 != eew_vs2, check whether vs1 and vs2 are overlapped */
+    if ((vs1 != -1 && vs2 != -1) && (eew_vs1 != eew_vs2) &&
+        is_overlapped(vs1, 1 << MAX(emul_vs1, 0),
+                      vs2, 1 << MAX(emul_vs2, 0))) {
+        is_valid = false;
+    }
+
+    return is_valid;
+}
+
 static bool vext_check_ss(DisasContext *s, int vd, int vs, int vm)
 {
     return require_vm(vm, vd) &&
            require_align(vd, s->lmul) &&
-           require_align(vs, s->lmul);
+           require_align(vs, s->lmul) &&
+           vext_check_input_eew(s, vs, s->sew, -1, s->sew, vm);
 }
 
 /*
@@ -379,6 +441,7 @@ static bool vext_check_ss(DisasContext *s, int vd, int vs, int vm)
 static bool vext_check_sss(DisasContext *s, int vd, int vs1, int vs2, int vm)
 {
     return vext_check_ss(s, vd, vs2, vm) &&
+           vext_check_input_eew(s, vs1, s->sew, vs2, s->sew, vm) &&
            require_align(vs1, s->lmul);
 }
 
@@ -474,6 +537,7 @@ static bool vext_narrow_check_common(DisasContext *s, int vd, int vs2,
 static bool vext_check_ds(DisasContext *s, int vd, int vs, int vm)
 {
     return vext_wide_check_common(s, vd, vm) &&
+           vext_check_input_eew(s, vs, s->sew, -1, 0, vm) &&
            require_align(vs, s->lmul) &&
            require_noover(vd, s->lmul + 1, vs, s->lmul);
 }
@@ -481,6 +545,7 @@ static bool vext_check_ds(DisasContext *s, int vd, int vs, int vm)
 static bool vext_check_dd(DisasContext *s, int vd, int vs, int vm)
 {
     return vext_wide_check_common(s, vd, vm) &&
+           vext_check_input_eew(s, vs, s->sew + 1, -1, 0, vm) &&
            require_align(vs, s->lmul + 1);
 }
 
@@ -499,6 +564,7 @@ static bool vext_check_dd(DisasContext *s, int vd, int vs, int vm)
 static bool vext_check_dss(DisasContext *s, int vd, int vs1, int vs2, int vm)
 {
     return vext_check_ds(s, vd, vs2, vm) &&
+           vext_check_input_eew(s, vs1, s->sew, vs2, s->sew, vm) &&
            require_align(vs1, s->lmul) &&
            require_noover(vd, s->lmul + 1, vs1, s->lmul);
 }
@@ -521,12 +587,14 @@ static bool vext_check_dss(DisasContext *s, int vd, int vs1, int vs2, int vm)
 static bool vext_check_dds(DisasContext *s, int vd, int vs1, int vs2, int vm)
 {
     return vext_check_ds(s, vd, vs1, vm) &&
+           vext_check_input_eew(s, vs1, s->sew, vs2, s->sew + 1, vm) &&
            require_align(vs2, s->lmul + 1);
 }
 
 static bool vext_check_sd(DisasContext *s, int vd, int vs, int vm)
 {
-    bool ret = vext_narrow_check_common(s, vd, vs, vm);
+    bool ret = vext_narrow_check_common(s, vd, vs, vm) &&
+               vext_check_input_eew(s, vs, s->sew + 1, -1, 0, vm);
     if (vd != vs) {
         ret &= require_noover(vd, s->lmul, vs, s->lmul + 1);
     }
@@ -549,6 +617,7 @@ static bool vext_check_sd(DisasContext *s, int vd, int vs, int vm)
 static bool vext_check_sds(DisasContext *s, int vd, int vs1, int vs2, int vm)
 {
     return vext_check_sd(s, vd, vs2, vm) &&
+           vext_check_input_eew(s, vs1, s->sew, vs2, s->sew + 1, vm) &&
            require_align(vs1, s->lmul);
 }
 
@@ -584,7 +653,9 @@ static bool vext_check_slide(DisasContext *s, int vd, int vs2,
 {
     bool ret = require_align(vs2, s->lmul) &&
                require_align(vd, s->lmul) &&
-               require_vm(vm, vd);
+               require_vm(vm, vd) &&
+               vext_check_input_eew(s, -1, 0, vs2, s->sew, vm);
+
     if (is_over) {
         ret &= (vd != vs2);
     }
@@ -770,6 +841,7 @@ static bool ld_us_mask_op(DisasContext *s, arg_vlm_v *a, uint8_t eew)
     /* Mask destination register are always tail-agnostic */
     data = FIELD_DP32(data, VDATA, VTA, s->cfg_vta_all_1s);
     data = FIELD_DP32(data, VDATA, VMA, s->vma);
+    data = FIELD_DP32(data, VDATA, VM, 1);
     return ldst_us_trans(a->rd, a->rs1, data, fn, s, false);
 }
 
@@ -787,6 +859,7 @@ static bool st_us_mask_op(DisasContext *s, arg_vsm_v *a, uint8_t eew)
     /* EMUL = 1, NFIELDS = 1 */
     data = FIELD_DP32(data, VDATA, LMUL, 0);
     data = FIELD_DP32(data, VDATA, NF, 1);
+    data = FIELD_DP32(data, VDATA, VM, 1);
     return ldst_us_trans(a->rd, a->rs1, data, fn, s, true);
 }
 
@@ -979,7 +1052,8 @@ static bool ld_index_check(DisasContext *s, arg_rnfvm* a, uint8_t eew)
 {
     return require_rvv(s) &&
            vext_check_isa_ill(s) &&
-           vext_check_ld_index(s, a->rd, a->rs2, a->nf, a->vm, eew);
+           vext_check_ld_index(s, a->rd, a->rs2, a->nf, a->vm, eew) &&
+           vext_check_input_eew(s, -1, 0, a->rs2, eew, a->vm);
 }
 
 GEN_VEXT_TRANS(vlxei8_v,  MO_8,  rnfvm, ld_index_op, ld_index_check)
@@ -1031,7 +1105,8 @@ static bool st_index_check(DisasContext *s, arg_rnfvm* a, uint8_t eew)
 {
     return require_rvv(s) &&
            vext_check_isa_ill(s) &&
-           vext_check_st_index(s, a->rd, a->rs2, a->nf, eew);
+           vext_check_st_index(s, a->rd, a->rs2, a->nf, eew) &&
+           vext_check_input_eew(s, a->rd, s->sew, a->rs2, eew, a->vm);
 }
 
 GEN_VEXT_TRANS(vsxei8_v,  MO_8,  rnfvm, st_index_op, st_index_check)
@@ -1061,6 +1136,12 @@ static bool ldff_trans(uint32_t vd, uint32_t rs1, uint32_t data,
     fn(dest, mask, base, tcg_env, desc);
 
     finalize_rvv_inst(s);
+
+    /* vector unit-stride fault-only-first load may modify vl CSR */
+    gen_update_pc(s, s->cur_insn_len);
+    lookup_and_goto_ptr(s);
+    s->base.is_jmp = DISAS_NORETURN;
+
     return true;
 }
 
@@ -1098,24 +1179,58 @@ GEN_VEXT_TRANS(vle64ff_v, MO_64, r2nfvm, ldff_op, ld_us_check)
 typedef void gen_helper_ldst_whole(TCGv_ptr, TCGv, TCGv_env, TCGv_i32);
 
 static bool ldst_whole_trans(uint32_t vd, uint32_t rs1, uint32_t nf,
-                             gen_helper_ldst_whole *fn,
-                             DisasContext *s)
+                             uint32_t log2_esz, gen_helper_ldst_whole *fn,
+                             DisasContext *s, bool is_load)
 {
-    TCGv_ptr dest;
-    TCGv base;
-    TCGv_i32 desc;
-
-    uint32_t data = FIELD_DP32(0, VDATA, NF, nf);
-    dest = tcg_temp_new_ptr();
-    desc = tcg_constant_i32(simd_desc(s->cfg_ptr->vlenb,
-                                      s->cfg_ptr->vlenb, data));
-
-    base = get_gpr(s, rs1, EXT_NONE);
-    tcg_gen_addi_ptr(dest, tcg_env, vreg_ofs(s, vd));
-
     mark_vs_dirty(s);
 
-    fn(dest, base, tcg_env, desc);
+    /*
+     * Load/store multiple bytes per iteration.
+     * When possible do this atomically.
+     * Update vstart with the number of processed elements.
+     * Use the helper function if either:
+     * - vstart is not 0.
+     */
+
+    bool use_helper_fn = !s->vstart_eq_zero;
+
+    if (!use_helper_fn) {
+        uint32_t size = s->cfg_ptr->vlenb * nf;
+        TCGv_i64 t8 = tcg_temp_new_i64();
+        MemOp atomicity = MO_ATOM_NONE;
+        if (log2_esz == 0) {
+            atomicity = MO_ATOM_NONE;
+        } else {
+            atomicity = MO_ATOM_IFALIGN_PAIR;
+        }
+        for (int i = 0; i < size; i += 8) {
+            TCGv addr = get_address(s, rs1, i);
+            if (is_load) {
+                tcg_gen_qemu_ld_i64(t8, addr, s->mem_idx, MO_LEUQ | atomicity);
+                tcg_gen_st_i64(t8, tcg_env, vreg_ofs(s, vd) + i);
+            } else {
+                tcg_gen_ld_i64(t8, tcg_env, vreg_ofs(s, vd) + i);
+                tcg_gen_qemu_st_i64(t8, addr, s->mem_idx, MO_LEUQ | atomicity);
+            }
+            if (i == size - 8) {
+                tcg_gen_movi_tl(cpu_vstart, 0);
+            } else {
+                tcg_gen_addi_tl(cpu_vstart, cpu_vstart, 8 >> log2_esz);
+            }
+        }
+    } else {
+        TCGv_ptr dest;
+        TCGv base;
+        TCGv_i32 desc;
+        uint32_t data = FIELD_DP32(0, VDATA, NF, nf);
+        data = FIELD_DP32(data, VDATA, VM, 1);
+        dest = tcg_temp_new_ptr();
+        desc = tcg_constant_i32(simd_desc(s->cfg_ptr->vlenb,
+                        s->cfg_ptr->vlenb, data));
+        base = get_gpr(s, rs1, EXT_NONE);
+        tcg_gen_addi_ptr(dest, tcg_env, vreg_ofs(s, vd));
+        fn(dest, base, tcg_env, desc);
+    }
 
     finalize_rvv_inst(s);
     return true;
@@ -1125,42 +1240,42 @@ static bool ldst_whole_trans(uint32_t vd, uint32_t rs1, uint32_t nf,
  * load and store whole register instructions ignore vtype and vl setting.
  * Thus, we don't need to check vill bit. (Section 7.9)
  */
-#define GEN_LDST_WHOLE_TRANS(NAME, ARG_NF)                                \
-static bool trans_##NAME(DisasContext *s, arg_##NAME * a)                 \
-{                                                                         \
-    if (require_rvv(s) &&                                                 \
-        QEMU_IS_ALIGNED(a->rd, ARG_NF)) {                                 \
-        return ldst_whole_trans(a->rd, a->rs1, ARG_NF,                    \
-                                gen_helper_##NAME, s);                    \
-    }                                                                     \
-    return false;                                                         \
+#define GEN_LDST_WHOLE_TRANS(NAME, ETYPE, ARG_NF, IS_LOAD)                  \
+static bool trans_##NAME(DisasContext *s, arg_##NAME * a)                   \
+{                                                                           \
+    if (require_rvv(s) &&                                                   \
+        QEMU_IS_ALIGNED(a->rd, ARG_NF)) {                                   \
+        return ldst_whole_trans(a->rd, a->rs1, ARG_NF, ctzl(sizeof(ETYPE)), \
+                                gen_helper_##NAME, s, IS_LOAD);             \
+    }                                                                       \
+    return false;                                                           \
 }
 
-GEN_LDST_WHOLE_TRANS(vl1re8_v,  1)
-GEN_LDST_WHOLE_TRANS(vl1re16_v, 1)
-GEN_LDST_WHOLE_TRANS(vl1re32_v, 1)
-GEN_LDST_WHOLE_TRANS(vl1re64_v, 1)
-GEN_LDST_WHOLE_TRANS(vl2re8_v,  2)
-GEN_LDST_WHOLE_TRANS(vl2re16_v, 2)
-GEN_LDST_WHOLE_TRANS(vl2re32_v, 2)
-GEN_LDST_WHOLE_TRANS(vl2re64_v, 2)
-GEN_LDST_WHOLE_TRANS(vl4re8_v,  4)
-GEN_LDST_WHOLE_TRANS(vl4re16_v, 4)
-GEN_LDST_WHOLE_TRANS(vl4re32_v, 4)
-GEN_LDST_WHOLE_TRANS(vl4re64_v, 4)
-GEN_LDST_WHOLE_TRANS(vl8re8_v,  8)
-GEN_LDST_WHOLE_TRANS(vl8re16_v, 8)
-GEN_LDST_WHOLE_TRANS(vl8re32_v, 8)
-GEN_LDST_WHOLE_TRANS(vl8re64_v, 8)
+GEN_LDST_WHOLE_TRANS(vl1re8_v,  int8_t,  1, true)
+GEN_LDST_WHOLE_TRANS(vl1re16_v, int16_t, 1, true)
+GEN_LDST_WHOLE_TRANS(vl1re32_v, int32_t, 1, true)
+GEN_LDST_WHOLE_TRANS(vl1re64_v, int64_t, 1, true)
+GEN_LDST_WHOLE_TRANS(vl2re8_v,  int8_t,  2, true)
+GEN_LDST_WHOLE_TRANS(vl2re16_v, int16_t, 2, true)
+GEN_LDST_WHOLE_TRANS(vl2re32_v, int32_t, 2, true)
+GEN_LDST_WHOLE_TRANS(vl2re64_v, int64_t, 2, true)
+GEN_LDST_WHOLE_TRANS(vl4re8_v,  int8_t,  4, true)
+GEN_LDST_WHOLE_TRANS(vl4re16_v, int16_t, 4, true)
+GEN_LDST_WHOLE_TRANS(vl4re32_v, int32_t, 4, true)
+GEN_LDST_WHOLE_TRANS(vl4re64_v, int64_t, 4, true)
+GEN_LDST_WHOLE_TRANS(vl8re8_v,  int8_t,  8, true)
+GEN_LDST_WHOLE_TRANS(vl8re16_v, int16_t, 8, true)
+GEN_LDST_WHOLE_TRANS(vl8re32_v, int32_t, 8, true)
+GEN_LDST_WHOLE_TRANS(vl8re64_v, int64_t, 8, true)
 
 /*
  * The vector whole register store instructions are encoded similar to
  * unmasked unit-stride store of elements with EEW=8.
  */
-GEN_LDST_WHOLE_TRANS(vs1r_v, 1)
-GEN_LDST_WHOLE_TRANS(vs2r_v, 2)
-GEN_LDST_WHOLE_TRANS(vs4r_v, 4)
-GEN_LDST_WHOLE_TRANS(vs8r_v, 8)
+GEN_LDST_WHOLE_TRANS(vs1r_v, int8_t, 1, false)
+GEN_LDST_WHOLE_TRANS(vs2r_v, int8_t, 2, false)
+GEN_LDST_WHOLE_TRANS(vs4r_v, int8_t, 4, false)
+GEN_LDST_WHOLE_TRANS(vs8r_v, int8_t, 8, false)
 
 /*
  *** Vector Integer Arithmetic Instructions
@@ -1355,7 +1470,7 @@ static void tcg_gen_gvec_rsubs(unsigned vece, uint32_t dofs, uint32_t aofs,
           .fniv = gen_rsub_vec,
           .fno = gen_helper_vec_rsubs64,
           .opt_opc = vecop_list,
-          .prefer_i64 = TCG_TARGET_REG_BITS == 64,
+          .prefer_i64 = true,
           .vece = MO_64 },
     };
 
@@ -1472,6 +1587,16 @@ static bool opivv_widen_check(DisasContext *s, arg_rmrr *a)
            vext_check_dss(s, a->rd, a->rs1, a->rs2, a->vm);
 }
 
+/* OPIVV with overwrite and WIDEN */
+static bool opivv_overwrite_widen_check(DisasContext *s, arg_rmrr *a)
+{
+    return require_rvv(s) &&
+           vext_check_isa_ill(s) &&
+           vext_check_dss(s, a->rd, a->rs1, a->rs2, a->vm) &&
+           vext_check_input_eew(s, a->rd, s->sew + 1, a->rs1, s->sew, a->vm) &&
+           vext_check_input_eew(s, a->rd, s->sew + 1, a->rs2, s->sew, a->vm);
+}
+
 static bool do_opivv_widen(DisasContext *s, arg_rmrr *a,
                            gen_helper_gvec_4_ptr *fn,
                            bool (*checkfn)(DisasContext *, arg_rmrr *))
@@ -1517,6 +1642,14 @@ static bool opivx_widen_check(DisasContext *s, arg_rmrr *a)
     return require_rvv(s) &&
            vext_check_isa_ill(s) &&
            vext_check_ds(s, a->rd, a->rs2, a->vm);
+}
+
+static bool opivx_overwrite_widen_check(DisasContext *s, arg_rmrr *a)
+{
+    return require_rvv(s) &&
+           vext_check_isa_ill(s) &&
+           vext_check_ds(s, a->rd, a->rs2, a->vm) &&
+           vext_check_input_eew(s, a->rd, s->sew + 1, a->rs2, s->sew, a->vm);
 }
 
 #define GEN_OPIVX_WIDEN_TRANS(NAME, CHECK) \
@@ -1990,13 +2123,13 @@ GEN_OPIVX_TRANS(vmadd_vx, opivx_check)
 GEN_OPIVX_TRANS(vnmsub_vx, opivx_check)
 
 /* Vector Widening Integer Multiply-Add Instructions */
-GEN_OPIVV_WIDEN_TRANS(vwmaccu_vv, opivv_widen_check)
-GEN_OPIVV_WIDEN_TRANS(vwmacc_vv, opivv_widen_check)
-GEN_OPIVV_WIDEN_TRANS(vwmaccsu_vv, opivv_widen_check)
-GEN_OPIVX_WIDEN_TRANS(vwmaccu_vx, opivx_widen_check)
-GEN_OPIVX_WIDEN_TRANS(vwmacc_vx, opivx_widen_check)
-GEN_OPIVX_WIDEN_TRANS(vwmaccsu_vx, opivx_widen_check)
-GEN_OPIVX_WIDEN_TRANS(vwmaccus_vx, opivx_widen_check)
+GEN_OPIVV_WIDEN_TRANS(vwmaccu_vv, opivv_overwrite_widen_check)
+GEN_OPIVV_WIDEN_TRANS(vwmacc_vv, opivv_overwrite_widen_check)
+GEN_OPIVV_WIDEN_TRANS(vwmaccsu_vv, opivv_overwrite_widen_check)
+GEN_OPIVX_WIDEN_TRANS(vwmaccu_vx, opivx_overwrite_widen_check)
+GEN_OPIVX_WIDEN_TRANS(vwmacc_vx, opivx_overwrite_widen_check)
+GEN_OPIVX_WIDEN_TRANS(vwmaccsu_vx, opivx_overwrite_widen_check)
+GEN_OPIVX_WIDEN_TRANS(vwmaccus_vx, opivx_overwrite_widen_check)
 
 /* Vector Integer Merge and Move Instructions */
 static bool trans_vmv_v_v(DisasContext *s, arg_vmv_v_v *a)
@@ -2195,19 +2328,32 @@ GEN_OPIWI_NARROW_TRANS(vnclip_wi, IMM_ZX, vnclip_wx)
  */
 static void do_nanbox(DisasContext *s, TCGv_i64 out, TCGv_i64 in)
 {
-    switch (s->sew) {
-    case 1:
-        gen_check_nanbox_h(out, in);
-        break;
-    case 2:
+    if (s->sew == MO_16) {
+        if (s->altfmt) {
+            gen_check_nanbox_h_bf16(out, in);
+        } else {
+            gen_check_nanbox_h(out, in);
+        }
+    } else if (s->sew == MO_32) {
         gen_check_nanbox_s(out, in);
-        break;
-    case 3:
+    } else if (s->sew == MO_64) {
         tcg_gen_mov_i64(out, in);
-        break;
-    default:
+    } else {
         g_assert_not_reached();
     }
+}
+
+/*
+ * Check altfmt & sew combinations when Zvfbfa extension is enabled.
+ */
+static bool vext_check_altfmt(DisasContext *s, int8_t valid_vsew)
+{
+    if (s->cfg_ptr->ext_zvfbfa) {
+        if (s->altfmt && (valid_vsew == -1 || s->sew != valid_vsew)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /* Vector Single-Width Floating-Point Add/Subtract Instructions */
@@ -2216,19 +2362,20 @@ static void do_nanbox(DisasContext *s, TCGv_i64 out, TCGv_i64 in)
  * If the current SEW does not correspond to a supported IEEE floating-point
  * type, an illegal instruction exception is raised.
  */
-static bool opfvv_check(DisasContext *s, arg_rmrr *a)
+static bool opfvv_check(DisasContext *s, arg_rmrr *a, int8_t valid_bfa_vsew)
 {
     return require_rvv(s) &&
            require_rvf(s) &&
            vext_check_isa_ill(s) &&
-           vext_check_sss(s, a->rd, a->rs1, a->rs2, a->vm);
+           vext_check_sss(s, a->rd, a->rs1, a->rs2, a->vm) &&
+           vext_check_altfmt(s, valid_bfa_vsew);
 }
 
 /* OPFVV without GVEC IR */
 #define GEN_OPFVV_TRANS(NAME, CHECK)                               \
 static bool trans_##NAME(DisasContext *s, arg_rmrr *a)             \
 {                                                                  \
-    if (CHECK(s, a)) {                                             \
+    if (CHECK(s, a, -1)) {                                         \
         uint32_t data = 0;                                         \
         static gen_helper_gvec_4_ptr * const fns[3] = {            \
             gen_helper_##NAME##_h,                                 \
@@ -2254,8 +2401,41 @@ static bool trans_##NAME(DisasContext *s, arg_rmrr *a)             \
     }                                                              \
     return false;                                                  \
 }
-GEN_OPFVV_TRANS(vfadd_vv, opfvv_check)
-GEN_OPFVV_TRANS(vfsub_vv, opfvv_check)
+
+#define GEN_OPFVV_BFA_TRANS(NAME, CHECK, BFA_HELPER)                    \
+static bool trans_##NAME(DisasContext *s, arg_rmrr *a)                  \
+{                                                                       \
+    if (CHECK(s, a, MO_16)) {                                           \
+        uint32_t data = 0;                                              \
+        static gen_helper_gvec_4_ptr * const fns[3] = {                 \
+            gen_helper_##NAME##_h,                                      \
+            gen_helper_##NAME##_w,                                      \
+            gen_helper_##NAME##_d                                       \
+        };                                                              \
+        gen_set_rm(s, RISCV_FRM_DYN);                                   \
+                                                                        \
+        data = FIELD_DP32(data, VDATA, VM, a->vm);                      \
+        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);                  \
+        data = FIELD_DP32(data, VDATA, VTA, s->vta);                    \
+        data = FIELD_DP32(data, VDATA, VTA_ALL_1S, s->cfg_vta_all_1s);  \
+        data = FIELD_DP32(data, VDATA, VMA, s->vma);                    \
+        tcg_gen_gvec_4_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),          \
+                           vreg_ofs(s, a->rs1),                         \
+                           vreg_ofs(s, a->rs2), tcg_env,                \
+                           s->cfg_ptr->vlenb,                           \
+                           s->cfg_ptr->vlenb, data,                     \
+                           (s->altfmt ? gen_helper_##BFA_HELPER :       \
+                                        fns[s->sew - 1]));              \
+        tcg_gen_movi_tl(cpu_vstart, 0);                                 \
+        finalize_rvv_inst(s);                                           \
+                                                                        \
+        return true;                                                    \
+    }                                                                   \
+    return false;                                                       \
+}
+
+GEN_OPFVV_BFA_TRANS(vfadd_vv, opfvv_check, vfadd_vv_h_bf16)
+GEN_OPFVV_BFA_TRANS(vfsub_vv, opfvv_check, vfsub_vv_h_bf16)
 
 typedef void gen_helper_opfvf(TCGv_ptr, TCGv_ptr, TCGv_i64, TCGv_ptr,
                               TCGv_env, TCGv_i32);
@@ -2291,223 +2471,316 @@ static bool opfvf_trans(uint32_t vd, uint32_t rs1, uint32_t vs2,
  * If the current SEW does not correspond to a supported IEEE floating-point
  * type, an illegal instruction exception is raised
  */
-static bool opfvf_check(DisasContext *s, arg_rmrr *a)
+static bool opfvf_check(DisasContext *s, arg_rmrr *a, int8_t valid_bfa_vsew)
 {
     return require_rvv(s) &&
            require_rvf(s) &&
            vext_check_isa_ill(s) &&
-           vext_check_ss(s, a->rd, a->rs2, a->vm);
+           vext_check_ss(s, a->rd, a->rs2, a->vm) &&
+           vext_check_altfmt(s, valid_bfa_vsew);
 }
 
 /* OPFVF without GVEC IR */
-#define GEN_OPFVF_TRANS(NAME, CHECK)                              \
-static bool trans_##NAME(DisasContext *s, arg_rmrr *a)            \
-{                                                                 \
-    if (CHECK(s, a)) {                                            \
-        uint32_t data = 0;                                        \
-        static gen_helper_opfvf *const fns[3] = {                 \
-            gen_helper_##NAME##_h,                                \
-            gen_helper_##NAME##_w,                                \
-            gen_helper_##NAME##_d,                                \
-        };                                                        \
-        gen_set_rm(s, RISCV_FRM_DYN);                             \
-        data = FIELD_DP32(data, VDATA, VM, a->vm);                \
-        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);            \
-        data = FIELD_DP32(data, VDATA, VTA, s->vta);              \
-        data = FIELD_DP32(data, VDATA, VTA_ALL_1S,                \
-                          s->cfg_vta_all_1s);                     \
-        data = FIELD_DP32(data, VDATA, VMA, s->vma);              \
-        return opfvf_trans(a->rd, a->rs1, a->rs2, data,           \
-                           fns[s->sew - 1], s);                   \
-    }                                                             \
-    return false;                                                 \
+#define GEN_OPFVF_TRANS(NAME, CHECK)                    \
+static bool trans_##NAME(DisasContext *s, arg_rmrr *a)  \
+{                                                       \
+    if (CHECK(s, a, -1)) {                              \
+        uint32_t data = 0;                              \
+        static gen_helper_opfvf *const fns[3] = {       \
+            gen_helper_##NAME##_h,                      \
+            gen_helper_##NAME##_w,                      \
+            gen_helper_##NAME##_d,                      \
+        };                                              \
+        gen_set_rm(s, RISCV_FRM_DYN);                   \
+        data = FIELD_DP32(data, VDATA, VM, a->vm);      \
+        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);  \
+        data = FIELD_DP32(data, VDATA, VTA, s->vta);    \
+        data = FIELD_DP32(data, VDATA, VTA_ALL_1S,      \
+                          s->cfg_vta_all_1s);           \
+        data = FIELD_DP32(data, VDATA, VMA, s->vma);    \
+        return opfvf_trans(a->rd, a->rs1, a->rs2, data, \
+                           fns[s->sew - 1], s);         \
+    }                                                   \
+    return false;                                       \
 }
 
-GEN_OPFVF_TRANS(vfadd_vf,  opfvf_check)
-GEN_OPFVF_TRANS(vfsub_vf,  opfvf_check)
-GEN_OPFVF_TRANS(vfrsub_vf,  opfvf_check)
+#define GEN_OPFVF_BFA_TRANS(NAME, CHECK, BFA_HELPER)                \
+static bool trans_##NAME(DisasContext *s, arg_rmrr *a)              \
+{                                                                   \
+    if (CHECK(s, a, MO_16)) {                                       \
+        uint32_t data = 0;                                          \
+        static gen_helper_opfvf *const fns[3] = {                   \
+            gen_helper_##NAME##_h,                                  \
+            gen_helper_##NAME##_w,                                  \
+            gen_helper_##NAME##_d,                                  \
+        };                                                          \
+        gen_set_rm(s, RISCV_FRM_DYN);                               \
+        data = FIELD_DP32(data, VDATA, VM, a->vm);                  \
+        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);              \
+        data = FIELD_DP32(data, VDATA, VTA, s->vta);                \
+        data = FIELD_DP32(data, VDATA, VTA_ALL_1S,                  \
+                          s->cfg_vta_all_1s);                       \
+        data = FIELD_DP32(data, VDATA, VMA, s->vma);                \
+        return opfvf_trans(a->rd, a->rs1, a->rs2, data,             \
+                           (s->altfmt ? gen_helper_##BFA_HELPER :   \
+                                        fns[s->sew - 1]),           \
+                           s);                                      \
+    }                                                               \
+    return false;                                                   \
+}
+
+GEN_OPFVF_BFA_TRANS(vfadd_vf,  opfvf_check, vfadd_vf_h_bf16)
+GEN_OPFVF_BFA_TRANS(vfsub_vf,  opfvf_check, vfsub_vf_h_bf16)
+GEN_OPFVF_BFA_TRANS(vfrsub_vf,  opfvf_check, vfrsub_vf_h_bf16)
 
 /* Vector Widening Floating-Point Add/Subtract Instructions */
-static bool opfvv_widen_check(DisasContext *s, arg_rmrr *a)
+static bool opfvv_widen_check(DisasContext *s, arg_rmrr *a,
+                              int8_t valid_bfa_vsew)
 {
     return require_rvv(s) &&
            require_rvf(s) &&
            require_scale_rvf(s) &&
            vext_check_isa_ill(s) &&
-           vext_check_dss(s, a->rd, a->rs1, a->rs2, a->vm);
+           vext_check_dss(s, a->rd, a->rs1, a->rs2, a->vm) &&
+           vext_check_altfmt(s, valid_bfa_vsew);
+}
+
+static bool opfvv_overwrite_widen_check(DisasContext *s, arg_rmrr *a,
+                                        int8_t valid_bfa_vsew)
+{
+    return opfvv_widen_check(s, a, valid_bfa_vsew) &&
+           vext_check_input_eew(s, a->rd, s->sew + 1, a->rs1, s->sew, a->vm) &&
+           vext_check_input_eew(s, a->rd, s->sew + 1, a->rs2, s->sew, a->vm);
 }
 
 /* OPFVV with WIDEN */
-#define GEN_OPFVV_WIDEN_TRANS(NAME, CHECK)                       \
-static bool trans_##NAME(DisasContext *s, arg_rmrr *a)           \
-{                                                                \
-    if (CHECK(s, a)) {                                           \
-        uint32_t data = 0;                                       \
-        static gen_helper_gvec_4_ptr * const fns[2] = {          \
-            gen_helper_##NAME##_h, gen_helper_##NAME##_w,        \
-        };                                                       \
-        gen_set_rm(s, RISCV_FRM_DYN);                            \
-                                                                 \
-        data = FIELD_DP32(data, VDATA, VM, a->vm);               \
-        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);           \
-        data = FIELD_DP32(data, VDATA, VTA, s->vta);             \
-        data = FIELD_DP32(data, VDATA, VMA, s->vma);             \
-        tcg_gen_gvec_4_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),   \
-                           vreg_ofs(s, a->rs1),                  \
-                           vreg_ofs(s, a->rs2), tcg_env,         \
-                           s->cfg_ptr->vlenb,                    \
-                           s->cfg_ptr->vlenb, data,              \
-                           fns[s->sew - 1]);                     \
-        finalize_rvv_inst(s);                                    \
-        return true;                                             \
-    }                                                            \
-    return false;                                                \
+#define GEN_OPFVV_WIDEN_TRANS(NAME, CHECK)                      \
+static bool trans_##NAME(DisasContext *s, arg_rmrr *a)          \
+{                                                               \
+    if (CHECK(s, a, -1)) {                                      \
+        uint32_t data = 0;                                      \
+        static gen_helper_gvec_4_ptr * const fns[2] = {         \
+            gen_helper_##NAME##_h, gen_helper_##NAME##_w,       \
+        };                                                      \
+        gen_set_rm(s, RISCV_FRM_DYN);                           \
+                                                                \
+        data = FIELD_DP32(data, VDATA, VM, a->vm);              \
+        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);          \
+        data = FIELD_DP32(data, VDATA, VTA, s->vta);            \
+        data = FIELD_DP32(data, VDATA, VMA, s->vma);            \
+        tcg_gen_gvec_4_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),  \
+                           vreg_ofs(s, a->rs1),                 \
+                           vreg_ofs(s, a->rs2), tcg_env,        \
+                           s->cfg_ptr->vlenb,                   \
+                           s->cfg_ptr->vlenb, data,             \
+                           fns[s->sew - 1]);                    \
+        finalize_rvv_inst(s);                                   \
+        return true;                                            \
+    }                                                           \
+    return false;                                               \
 }
 
-GEN_OPFVV_WIDEN_TRANS(vfwadd_vv, opfvv_widen_check)
-GEN_OPFVV_WIDEN_TRANS(vfwsub_vv, opfvv_widen_check)
+#define GEN_OPFVV_WIDEN_BFA_TRANS(NAME, CHECK, BFA_HELPER)          \
+static bool trans_##NAME(DisasContext *s, arg_rmrr *a)              \
+{                                                                   \
+    if (CHECK(s, a, MO_16)) {                                       \
+        uint32_t data = 0;                                          \
+        static gen_helper_gvec_4_ptr * const fns[2] = {             \
+            gen_helper_##NAME##_h,                                  \
+            gen_helper_##NAME##_w                                   \
+        };                                                          \
+        gen_set_rm(s, RISCV_FRM_DYN);                               \
+                                                                    \
+        data = FIELD_DP32(data, VDATA, VM, a->vm);                  \
+        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);              \
+        data = FIELD_DP32(data, VDATA, VTA, s->vta);                \
+        data = FIELD_DP32(data, VDATA, VMA, s->vma);                \
+        tcg_gen_gvec_4_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),      \
+                           vreg_ofs(s, a->rs1),                     \
+                           vreg_ofs(s, a->rs2), tcg_env,            \
+                           s->cfg_ptr->vlenb,                       \
+                           s->cfg_ptr->vlenb, data,                 \
+                           (s->altfmt ? gen_helper_##BFA_HELPER :   \
+                                        fns[s->sew - 1]));          \
+        finalize_rvv_inst(s);                                       \
+        return true;                                                \
+    }                                                               \
+    return false;                                                   \
+}
 
-static bool opfvf_widen_check(DisasContext *s, arg_rmrr *a)
+GEN_OPFVV_WIDEN_BFA_TRANS(vfwadd_vv, opfvv_widen_check, vfwadd_vv_h_bf16)
+GEN_OPFVV_WIDEN_BFA_TRANS(vfwsub_vv, opfvv_widen_check, vfwsub_vv_h_bf16)
+
+static bool opfvf_widen_check(DisasContext *s, arg_rmrr *a,
+                              int8_t valid_bfa_vsew)
 {
     return require_rvv(s) &&
            require_rvf(s) &&
            require_scale_rvf(s) &&
            vext_check_isa_ill(s) &&
-           vext_check_ds(s, a->rd, a->rs2, a->vm);
+           vext_check_ds(s, a->rd, a->rs2, a->vm) &&
+           vext_check_altfmt(s, valid_bfa_vsew);
+}
+
+static bool opfvf_overwrite_widen_check(DisasContext *s, arg_rmrr *a,
+                                        int8_t valid_bfa_vsew)
+{
+    return opfvf_widen_check(s, a, valid_bfa_vsew) &&
+           vext_check_input_eew(s, a->rd, s->sew + 1, a->rs2, s->sew, a->vm);
 }
 
 /* OPFVF with WIDEN */
-#define GEN_OPFVF_WIDEN_TRANS(NAME)                              \
-static bool trans_##NAME(DisasContext *s, arg_rmrr *a)           \
-{                                                                \
-    if (opfvf_widen_check(s, a)) {                               \
-        uint32_t data = 0;                                       \
-        static gen_helper_opfvf *const fns[2] = {                \
-            gen_helper_##NAME##_h, gen_helper_##NAME##_w,        \
-        };                                                       \
-        gen_set_rm(s, RISCV_FRM_DYN);                            \
-        data = FIELD_DP32(data, VDATA, VM, a->vm);               \
-        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);           \
-        data = FIELD_DP32(data, VDATA, VTA, s->vta);             \
-        data = FIELD_DP32(data, VDATA, VMA, s->vma);             \
-        return opfvf_trans(a->rd, a->rs1, a->rs2, data,          \
-                           fns[s->sew - 1], s);                  \
-    }                                                            \
-    return false;                                                \
+#define GEN_OPFVF_WIDEN_BFA_TRANS(NAME, CHECK, BFA_HELPER)          \
+static bool trans_##NAME(DisasContext *s, arg_rmrr *a)              \
+{                                                                   \
+    if (CHECK(s, a, MO_16)) {                                       \
+        uint32_t data = 0;                                          \
+        static gen_helper_opfvf *const fns[2] = {                   \
+            gen_helper_##NAME##_h,                                  \
+            gen_helper_##NAME##_w,                                  \
+        };                                                          \
+        gen_set_rm(s, RISCV_FRM_DYN);                               \
+        data = FIELD_DP32(data, VDATA, VM, a->vm);                  \
+        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);              \
+        data = FIELD_DP32(data, VDATA, VTA, s->vta);                \
+        data = FIELD_DP32(data, VDATA, VMA, s->vma);                \
+        return opfvf_trans(a->rd, a->rs1, a->rs2, data,             \
+                           (s->altfmt ? gen_helper_##BFA_HELPER :   \
+                                        fns[s->sew - 1]),           \
+                           s);                                      \
+    }                                                               \
+    return false;                                                   \
 }
 
-GEN_OPFVF_WIDEN_TRANS(vfwadd_vf)
-GEN_OPFVF_WIDEN_TRANS(vfwsub_vf)
+GEN_OPFVF_WIDEN_BFA_TRANS(vfwadd_vf, opfvf_widen_check, vfwadd_vf_h_bf16)
+GEN_OPFVF_WIDEN_BFA_TRANS(vfwsub_vf, opfvf_widen_check, vfwsub_vf_h_bf16)
 
-static bool opfwv_widen_check(DisasContext *s, arg_rmrr *a)
+static bool opfwv_widen_check(DisasContext *s, arg_rmrr *a,
+                              int8_t valid_bfa_vsew)
 {
     return require_rvv(s) &&
            require_rvf(s) &&
            require_scale_rvf(s) &&
            vext_check_isa_ill(s) &&
-           vext_check_dds(s, a->rd, a->rs1, a->rs2, a->vm);
+           vext_check_dds(s, a->rd, a->rs1, a->rs2, a->vm) &&
+           vext_check_altfmt(s, valid_bfa_vsew);
 }
 
 /* WIDEN OPFVV with WIDEN */
-#define GEN_OPFWV_WIDEN_TRANS(NAME)                                \
-static bool trans_##NAME(DisasContext *s, arg_rmrr *a)             \
-{                                                                  \
-    if (opfwv_widen_check(s, a)) {                                 \
-        uint32_t data = 0;                                         \
-        static gen_helper_gvec_4_ptr * const fns[2] = {            \
-            gen_helper_##NAME##_h, gen_helper_##NAME##_w,          \
-        };                                                         \
-        gen_set_rm(s, RISCV_FRM_DYN);                              \
-                                                                   \
-        data = FIELD_DP32(data, VDATA, VM, a->vm);                 \
-        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);             \
-        data = FIELD_DP32(data, VDATA, VTA, s->vta);               \
-        data = FIELD_DP32(data, VDATA, VMA, s->vma);               \
-        tcg_gen_gvec_4_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),     \
-                           vreg_ofs(s, a->rs1),                    \
-                           vreg_ofs(s, a->rs2), tcg_env,           \
-                           s->cfg_ptr->vlenb,                      \
-                           s->cfg_ptr->vlenb, data,                \
-                           fns[s->sew - 1]);                       \
-        finalize_rvv_inst(s);                                      \
-        return true;                                               \
-    }                                                              \
-    return false;                                                  \
+#define GEN_OPFWV_WIDEN_BFA_TRANS(NAME)                                 \
+static bool trans_##NAME(DisasContext *s, arg_rmrr *a)                  \
+{                                                                       \
+    if (opfwv_widen_check(s, a, MO_16)) {                               \
+        uint32_t data = 0;                                              \
+        static gen_helper_gvec_4_ptr * const fns[2] = {                 \
+            gen_helper_##NAME##_h,                                      \
+            gen_helper_##NAME##_w                                       \
+        };                                                              \
+        gen_set_rm(s, RISCV_FRM_DYN);                                   \
+                                                                        \
+        data = FIELD_DP32(data, VDATA, VM, a->vm);                      \
+        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);                  \
+        data = FIELD_DP32(data, VDATA, VTA, s->vta);                    \
+        data = FIELD_DP32(data, VDATA, VMA, s->vma);                    \
+        tcg_gen_gvec_4_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),          \
+                           vreg_ofs(s, a->rs1),                         \
+                           vreg_ofs(s, a->rs2), tcg_env,                \
+                           s->cfg_ptr->vlenb,                           \
+                           s->cfg_ptr->vlenb, data,                     \
+                           (s->altfmt ? gen_helper_##NAME##_h_bf16 :    \
+                                        fns[s->sew - 1]));              \
+        finalize_rvv_inst(s);                                           \
+        return true;                                                    \
+    }                                                                   \
+    return false;                                                       \
 }
 
-GEN_OPFWV_WIDEN_TRANS(vfwadd_wv)
-GEN_OPFWV_WIDEN_TRANS(vfwsub_wv)
+GEN_OPFWV_WIDEN_BFA_TRANS(vfwadd_wv)
+GEN_OPFWV_WIDEN_BFA_TRANS(vfwsub_wv)
 
-static bool opfwf_widen_check(DisasContext *s, arg_rmrr *a)
+static bool opfwf_widen_check(DisasContext *s, arg_rmrr *a,
+                              int8_t valid_bfa_vsew)
 {
     return require_rvv(s) &&
            require_rvf(s) &&
            require_scale_rvf(s) &&
            vext_check_isa_ill(s) &&
-           vext_check_dd(s, a->rd, a->rs2, a->vm);
+           vext_check_dd(s, a->rd, a->rs2, a->vm) &&
+           vext_check_altfmt(s, valid_bfa_vsew);
 }
 
 /* WIDEN OPFVF with WIDEN */
-#define GEN_OPFWF_WIDEN_TRANS(NAME)                              \
-static bool trans_##NAME(DisasContext *s, arg_rmrr *a)           \
-{                                                                \
-    if (opfwf_widen_check(s, a)) {                               \
-        uint32_t data = 0;                                       \
-        static gen_helper_opfvf *const fns[2] = {                \
-            gen_helper_##NAME##_h, gen_helper_##NAME##_w,        \
-        };                                                       \
-        gen_set_rm(s, RISCV_FRM_DYN);                            \
-        data = FIELD_DP32(data, VDATA, VM, a->vm);               \
-        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);           \
-        data = FIELD_DP32(data, VDATA, VTA, s->vta);             \
-        data = FIELD_DP32(data, VDATA, VMA, s->vma);             \
-        return opfvf_trans(a->rd, a->rs1, a->rs2, data,          \
-                           fns[s->sew - 1], s);                  \
-    }                                                            \
-    return false;                                                \
+#define GEN_OPFWF_WIDEN_BFA_TRANS(NAME)                                 \
+static bool trans_##NAME(DisasContext *s, arg_rmrr *a)                  \
+{                                                                       \
+    if (opfwf_widen_check(s, a, MO_16)) {                               \
+        uint32_t data = 0;                                              \
+        static gen_helper_opfvf *const fns[2] = {                       \
+            gen_helper_##NAME##_h,                                      \
+            gen_helper_##NAME##_w                                       \
+        };                                                              \
+        gen_set_rm(s, RISCV_FRM_DYN);                                   \
+        data = FIELD_DP32(data, VDATA, VM, a->vm);                      \
+        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);                  \
+        data = FIELD_DP32(data, VDATA, VTA, s->vta);                    \
+        data = FIELD_DP32(data, VDATA, VMA, s->vma);                    \
+        return opfvf_trans(a->rd, a->rs1, a->rs2, data,                 \
+                           (s->altfmt ? gen_helper_##NAME##_h_bf16 :    \
+                                        fns[s->sew - 1]),               \
+                           s);                                          \
+    }                                                                   \
+    return false;                                                       \
 }
 
-GEN_OPFWF_WIDEN_TRANS(vfwadd_wf)
-GEN_OPFWF_WIDEN_TRANS(vfwsub_wf)
+GEN_OPFWF_WIDEN_BFA_TRANS(vfwadd_wf)
+GEN_OPFWF_WIDEN_BFA_TRANS(vfwsub_wf)
 
 /* Vector Single-Width Floating-Point Multiply/Divide Instructions */
-GEN_OPFVV_TRANS(vfmul_vv, opfvv_check)
+GEN_OPFVV_BFA_TRANS(vfmul_vv, opfvv_check, vfmul_vv_h_bf16)
 GEN_OPFVV_TRANS(vfdiv_vv, opfvv_check)
-GEN_OPFVF_TRANS(vfmul_vf,  opfvf_check)
+GEN_OPFVF_BFA_TRANS(vfmul_vf,  opfvf_check, vfmul_vf_h_bf16)
 GEN_OPFVF_TRANS(vfdiv_vf,  opfvf_check)
 GEN_OPFVF_TRANS(vfrdiv_vf,  opfvf_check)
 
 /* Vector Widening Floating-Point Multiply */
-GEN_OPFVV_WIDEN_TRANS(vfwmul_vv, opfvv_widen_check)
-GEN_OPFVF_WIDEN_TRANS(vfwmul_vf)
+GEN_OPFVV_WIDEN_BFA_TRANS(vfwmul_vv, opfvv_widen_check, vfwmul_vv_h_bf16)
+GEN_OPFVF_WIDEN_BFA_TRANS(vfwmul_vf, opfvf_widen_check, vfwmul_vf_h_bf16)
 
 /* Vector Single-Width Floating-Point Fused Multiply-Add Instructions */
-GEN_OPFVV_TRANS(vfmacc_vv, opfvv_check)
-GEN_OPFVV_TRANS(vfnmacc_vv, opfvv_check)
-GEN_OPFVV_TRANS(vfmsac_vv, opfvv_check)
-GEN_OPFVV_TRANS(vfnmsac_vv, opfvv_check)
-GEN_OPFVV_TRANS(vfmadd_vv, opfvv_check)
-GEN_OPFVV_TRANS(vfnmadd_vv, opfvv_check)
-GEN_OPFVV_TRANS(vfmsub_vv, opfvv_check)
-GEN_OPFVV_TRANS(vfnmsub_vv, opfvv_check)
-GEN_OPFVF_TRANS(vfmacc_vf, opfvf_check)
-GEN_OPFVF_TRANS(vfnmacc_vf, opfvf_check)
-GEN_OPFVF_TRANS(vfmsac_vf, opfvf_check)
-GEN_OPFVF_TRANS(vfnmsac_vf, opfvf_check)
-GEN_OPFVF_TRANS(vfmadd_vf, opfvf_check)
-GEN_OPFVF_TRANS(vfnmadd_vf, opfvf_check)
-GEN_OPFVF_TRANS(vfmsub_vf, opfvf_check)
-GEN_OPFVF_TRANS(vfnmsub_vf, opfvf_check)
+GEN_OPFVV_BFA_TRANS(vfmacc_vv, opfvv_check, vfmacc_vv_h_bf16)
+GEN_OPFVV_BFA_TRANS(vfnmacc_vv, opfvv_check, vfnmacc_vv_h_bf16)
+GEN_OPFVV_BFA_TRANS(vfmsac_vv, opfvv_check, vfmsac_vv_h_bf16)
+GEN_OPFVV_BFA_TRANS(vfnmsac_vv, opfvv_check, vfnmsac_vv_h_bf16)
+GEN_OPFVV_BFA_TRANS(vfmadd_vv, opfvv_check, vfmadd_vv_h_bf16)
+GEN_OPFVV_BFA_TRANS(vfnmadd_vv, opfvv_check, vfnmadd_vv_h_bf16)
+GEN_OPFVV_BFA_TRANS(vfmsub_vv, opfvv_check, vfmsub_vv_h_bf16)
+GEN_OPFVV_BFA_TRANS(vfnmsub_vv, opfvv_check, vfnmsub_vv_h_bf16)
+GEN_OPFVF_BFA_TRANS(vfmacc_vf, opfvf_check, vfmacc_vf_h_bf16)
+GEN_OPFVF_BFA_TRANS(vfnmacc_vf, opfvf_check, vfnmacc_vf_h_bf16)
+GEN_OPFVF_BFA_TRANS(vfmsac_vf, opfvf_check, vfmsac_vf_h_bf16)
+GEN_OPFVF_BFA_TRANS(vfnmsac_vf, opfvf_check, vfnmsac_vf_h_bf16)
+GEN_OPFVF_BFA_TRANS(vfmadd_vf, opfvf_check, vfmadd_vf_h_bf16)
+GEN_OPFVF_BFA_TRANS(vfnmadd_vf, opfvf_check, vfnmadd_vf_h_bf16)
+GEN_OPFVF_BFA_TRANS(vfmsub_vf, opfvf_check, vfmsub_vf_h_bf16)
+GEN_OPFVF_BFA_TRANS(vfnmsub_vf, opfvf_check, vfnmsub_vf_h_bf16)
 
 /* Vector Widening Floating-Point Fused Multiply-Add Instructions */
-GEN_OPFVV_WIDEN_TRANS(vfwmacc_vv, opfvv_widen_check)
-GEN_OPFVV_WIDEN_TRANS(vfwnmacc_vv, opfvv_widen_check)
-GEN_OPFVV_WIDEN_TRANS(vfwmsac_vv, opfvv_widen_check)
-GEN_OPFVV_WIDEN_TRANS(vfwnmsac_vv, opfvv_widen_check)
-GEN_OPFVF_WIDEN_TRANS(vfwmacc_vf)
-GEN_OPFVF_WIDEN_TRANS(vfwnmacc_vf)
-GEN_OPFVF_WIDEN_TRANS(vfwmsac_vf)
-GEN_OPFVF_WIDEN_TRANS(vfwnmsac_vf)
+GEN_OPFVV_WIDEN_BFA_TRANS(vfwmacc_vv, opfvv_overwrite_widen_check,
+                          vfwmaccbf16_vv)
+GEN_OPFVV_WIDEN_BFA_TRANS(vfwnmacc_vv, opfvv_overwrite_widen_check,
+                          vfwnmacc_vv_h_bf16)
+GEN_OPFVV_WIDEN_BFA_TRANS(vfwmsac_vv, opfvv_overwrite_widen_check,
+                          vfwmsac_vv_h_bf16)
+GEN_OPFVV_WIDEN_BFA_TRANS(vfwnmsac_vv, opfvv_overwrite_widen_check,
+                          vfwnmsac_vv_h_bf16)
+GEN_OPFVF_WIDEN_BFA_TRANS(vfwmacc_vf, opfvf_overwrite_widen_check,
+                          vfwmaccbf16_vf)
+GEN_OPFVF_WIDEN_BFA_TRANS(vfwnmacc_vf, opfvf_overwrite_widen_check,
+                          vfwnmacc_vf_h_bf16)
+GEN_OPFVF_WIDEN_BFA_TRANS(vfwmsac_vf, opfvf_overwrite_widen_check,
+                          vfwmsac_vf_h_bf16)
+GEN_OPFVF_WIDEN_BFA_TRANS(vfwnmsac_vf, opfvf_overwrite_widen_check,
+                          vfwnmsac_vf_h_bf16)
 
 /* Vector Floating-Point Square-Root Instruction */
 
@@ -2515,21 +2788,23 @@ GEN_OPFVF_WIDEN_TRANS(vfwnmsac_vf)
  * If the current SEW does not correspond to a supported IEEE floating-point
  * type, an illegal instruction exception is raised
  */
-static bool opfv_check(DisasContext *s, arg_rmr *a)
+static bool opfv_check(DisasContext *s, arg_rmr *a, int8_t valid_bfa_vsew)
 {
     return require_rvv(s) &&
            require_rvf(s) &&
            vext_check_isa_ill(s) &&
            /* OPFV instructions ignore vs1 check */
-           vext_check_ss(s, a->rd, a->rs2, a->vm);
+           vext_check_ss(s, a->rd, a->rs2, a->vm) &&
+           vext_check_altfmt(s, valid_bfa_vsew);
 }
 
 static bool do_opfv(DisasContext *s, arg_rmr *a,
                     gen_helper_gvec_3_ptr *fn,
-                    bool (*checkfn)(DisasContext *, arg_rmr *),
-                    int rm)
+                    bool (*checkfn)(DisasContext *, arg_rmr *, int8_t),
+                    int rm,
+                    int8_t valid_bfa_vsew)
 {
-    if (checkfn(s, a)) {
+    if (checkfn(s, a, valid_bfa_vsew)) {
         uint32_t data = 0;
         gen_set_rm_chkfrm(s, rm);
 
@@ -2547,76 +2822,95 @@ static bool do_opfv(DisasContext *s, arg_rmr *a,
     return false;
 }
 
-#define GEN_OPFV_TRANS(NAME, CHECK, FRM)               \
-static bool trans_##NAME(DisasContext *s, arg_rmr *a)  \
-{                                                      \
-    static gen_helper_gvec_3_ptr * const fns[3] = {    \
-        gen_helper_##NAME##_h,                         \
-        gen_helper_##NAME##_w,                         \
-        gen_helper_##NAME##_d                          \
-    };                                                 \
-    return do_opfv(s, a, fns[s->sew - 1], CHECK, FRM); \
+#define GEN_OPFV_TRANS(NAME, CHECK, FRM)                    \
+static bool trans_##NAME(DisasContext *s, arg_rmr *a)       \
+{                                                           \
+    static gen_helper_gvec_3_ptr * const fns[3] = {         \
+        gen_helper_##NAME##_h,                              \
+        gen_helper_##NAME##_w,                              \
+        gen_helper_##NAME##_d                               \
+    };                                                      \
+    return do_opfv(s, a, fns[s->sew - 1], CHECK, FRM, -1);  \
+}
+
+#define GEN_OPFV_BFA_TRANS(NAME, CHECK, FRM)                    \
+static bool trans_##NAME(DisasContext *s, arg_rmr *a)           \
+{                                                               \
+    static gen_helper_gvec_3_ptr * const fns[3] = {             \
+        gen_helper_##NAME##_h,                                  \
+        gen_helper_##NAME##_w,                                  \
+        gen_helper_##NAME##_d                                   \
+    };                                                          \
+    return do_opfv(s, a,                                        \
+                   (s->altfmt ? gen_helper_##NAME##_h_bf16 :    \
+                                fns[s->sew - 1]),               \
+                   CHECK, FRM, MO_16);                          \
 }
 
 GEN_OPFV_TRANS(vfsqrt_v, opfv_check, RISCV_FRM_DYN)
-GEN_OPFV_TRANS(vfrsqrt7_v, opfv_check, RISCV_FRM_DYN)
-GEN_OPFV_TRANS(vfrec7_v, opfv_check, RISCV_FRM_DYN)
+GEN_OPFV_BFA_TRANS(vfrsqrt7_v, opfv_check, RISCV_FRM_DYN)
+GEN_OPFV_BFA_TRANS(vfrec7_v, opfv_check, RISCV_FRM_DYN)
 
 /* Vector Floating-Point MIN/MAX Instructions */
-GEN_OPFVV_TRANS(vfmin_vv, opfvv_check)
-GEN_OPFVV_TRANS(vfmax_vv, opfvv_check)
-GEN_OPFVF_TRANS(vfmin_vf, opfvf_check)
-GEN_OPFVF_TRANS(vfmax_vf, opfvf_check)
+GEN_OPFVV_BFA_TRANS(vfmin_vv, opfvv_check, vfmin_vv_h_bf16)
+GEN_OPFVV_BFA_TRANS(vfmax_vv, opfvv_check, vfmax_vv_h_bf16)
+GEN_OPFVF_BFA_TRANS(vfmin_vf, opfvf_check, vfmin_vf_h_bf16)
+GEN_OPFVF_BFA_TRANS(vfmax_vf, opfvf_check, vfmax_vf_h_bf16)
 
 /* Vector Floating-Point Sign-Injection Instructions */
-GEN_OPFVV_TRANS(vfsgnj_vv, opfvv_check)
-GEN_OPFVV_TRANS(vfsgnjn_vv, opfvv_check)
-GEN_OPFVV_TRANS(vfsgnjx_vv, opfvv_check)
-GEN_OPFVF_TRANS(vfsgnj_vf, opfvf_check)
-GEN_OPFVF_TRANS(vfsgnjn_vf, opfvf_check)
-GEN_OPFVF_TRANS(vfsgnjx_vf, opfvf_check)
+GEN_OPFVV_BFA_TRANS(vfsgnj_vv, opfvv_check, vfsgnj_vv_h)
+GEN_OPFVV_BFA_TRANS(vfsgnjn_vv, opfvv_check, vfsgnjn_vv_h)
+GEN_OPFVV_BFA_TRANS(vfsgnjx_vv, opfvv_check, vfsgnjx_vv_h)
+GEN_OPFVF_BFA_TRANS(vfsgnj_vf, opfvf_check, vfsgnj_vf_h)
+GEN_OPFVF_BFA_TRANS(vfsgnjn_vf, opfvf_check, vfsgnjn_vf_h)
+GEN_OPFVF_BFA_TRANS(vfsgnjx_vf, opfvf_check, vfsgnjx_vf_h)
 
 /* Vector Floating-Point Compare Instructions */
-static bool opfvv_cmp_check(DisasContext *s, arg_rmrr *a)
+static bool opfvv_cmp_check(DisasContext *s, arg_rmrr *a,
+                            int8_t valid_bfa_vsew)
 {
     return require_rvv(s) &&
            require_rvf(s) &&
            vext_check_isa_ill(s) &&
-           vext_check_mss(s, a->rd, a->rs1, a->rs2);
+           vext_check_mss(s, a->rd, a->rs1, a->rs2) &&
+           vext_check_altfmt(s, valid_bfa_vsew);
 }
 
-GEN_OPFVV_TRANS(vmfeq_vv, opfvv_cmp_check)
-GEN_OPFVV_TRANS(vmfne_vv, opfvv_cmp_check)
-GEN_OPFVV_TRANS(vmflt_vv, opfvv_cmp_check)
-GEN_OPFVV_TRANS(vmfle_vv, opfvv_cmp_check)
+GEN_OPFVV_BFA_TRANS(vmfeq_vv, opfvv_cmp_check, vmfeq_vv_h_bf16)
+GEN_OPFVV_BFA_TRANS(vmfne_vv, opfvv_cmp_check, vmfne_vv_h_bf16)
+GEN_OPFVV_BFA_TRANS(vmflt_vv, opfvv_cmp_check, vmflt_vv_h_bf16)
+GEN_OPFVV_BFA_TRANS(vmfle_vv, opfvv_cmp_check, vmfle_vv_h_bf16)
 
-static bool opfvf_cmp_check(DisasContext *s, arg_rmrr *a)
+static bool opfvf_cmp_check(DisasContext *s, arg_rmrr *a,
+                            int8_t valid_bfa_vsew)
 {
     return require_rvv(s) &&
            require_rvf(s) &&
            vext_check_isa_ill(s) &&
-           vext_check_ms(s, a->rd, a->rs2);
+           vext_check_ms(s, a->rd, a->rs2) &&
+           vext_check_altfmt(s, valid_bfa_vsew);
 }
 
-GEN_OPFVF_TRANS(vmfeq_vf, opfvf_cmp_check)
-GEN_OPFVF_TRANS(vmfne_vf, opfvf_cmp_check)
-GEN_OPFVF_TRANS(vmflt_vf, opfvf_cmp_check)
-GEN_OPFVF_TRANS(vmfle_vf, opfvf_cmp_check)
-GEN_OPFVF_TRANS(vmfgt_vf, opfvf_cmp_check)
-GEN_OPFVF_TRANS(vmfge_vf, opfvf_cmp_check)
+GEN_OPFVF_BFA_TRANS(vmfeq_vf, opfvf_cmp_check, vmfeq_vf_h_bf16)
+GEN_OPFVF_BFA_TRANS(vmfne_vf, opfvf_cmp_check, vmfne_vf_h_bf16)
+GEN_OPFVF_BFA_TRANS(vmflt_vf, opfvf_cmp_check, vmflt_vf_h_bf16)
+GEN_OPFVF_BFA_TRANS(vmfle_vf, opfvf_cmp_check, vmfle_vf_h_bf16)
+GEN_OPFVF_BFA_TRANS(vmfgt_vf, opfvf_cmp_check, vmfgt_vf_h_bf16)
+GEN_OPFVF_BFA_TRANS(vmfge_vf, opfvf_cmp_check, vmfge_vf_h_bf16)
 
 /* Vector Floating-Point Classify Instruction */
-GEN_OPFV_TRANS(vfclass_v, opfv_check, RISCV_FRM_DYN)
+GEN_OPFV_BFA_TRANS(vfclass_v, opfv_check, RISCV_FRM_DYN)
 
 /* Vector Floating-Point Merge Instruction */
-GEN_OPFVF_TRANS(vfmerge_vfm,  opfvf_check)
+GEN_OPFVF_BFA_TRANS(vfmerge_vfm,  opfvf_check, vfmerge_vfm_h)
 
 static bool trans_vfmv_v_f(DisasContext *s, arg_vfmv_v_f *a)
 {
     if (require_rvv(s) &&
         require_rvf(s) &&
         vext_check_isa_ill(s) &&
-        require_align(a->rd, s->lmul)) {
+        require_align(a->rd, s->lmul) &&
+        vext_check_altfmt(s, MO_16)) {
         gen_set_rm(s, RISCV_FRM_DYN);
 
         TCGv_i64 t1;
@@ -2637,7 +2931,7 @@ static bool trans_vfmv_v_f(DisasContext *s, arg_vfmv_v_f *a)
             static gen_helper_vmv_vx * const fns[3] = {
                 gen_helper_vmv_v_x_h,
                 gen_helper_vmv_v_x_w,
-                gen_helper_vmv_v_x_d,
+                gen_helper_vmv_v_x_d
             };
 
             t1 = tcg_temp_new_i64();
@@ -2658,15 +2952,15 @@ static bool trans_vfmv_v_f(DisasContext *s, arg_vfmv_v_f *a)
 }
 
 /* Single-Width Floating-Point/Integer Type-Convert Instructions */
-#define GEN_OPFV_CVT_TRANS(NAME, HELPER, FRM)               \
-static bool trans_##NAME(DisasContext *s, arg_rmr *a)       \
-{                                                           \
-    static gen_helper_gvec_3_ptr * const fns[3] = {         \
-        gen_helper_##HELPER##_h,                            \
-        gen_helper_##HELPER##_w,                            \
-        gen_helper_##HELPER##_d                             \
-    };                                                      \
-    return do_opfv(s, a, fns[s->sew - 1], opfv_check, FRM); \
+#define GEN_OPFV_CVT_TRANS(NAME, HELPER, FRM)                   \
+static bool trans_##NAME(DisasContext *s, arg_rmr *a)           \
+{                                                               \
+    static gen_helper_gvec_3_ptr * const fns[3] = {             \
+        gen_helper_##HELPER##_h,                                \
+        gen_helper_##HELPER##_w,                                \
+        gen_helper_##HELPER##_d                                 \
+    };                                                          \
+    return do_opfv(s, a, fns[s->sew - 1], opfv_check, FRM, -1); \
 }
 
 GEN_OPFV_CVT_TRANS(vfcvt_xu_f_v, vfcvt_xu_f_v, RISCV_FRM_DYN)
@@ -2690,95 +2984,129 @@ static bool opfv_widen_check(DisasContext *s, arg_rmr *a)
            vext_check_ds(s, a->rd, a->rs2, a->vm);
 }
 
-static bool opxfv_widen_check(DisasContext *s, arg_rmr *a)
+static bool opxfv_widen_check(DisasContext *s, arg_rmr *a,
+                              int8_t valid_bfa_vsew)
 {
     return opfv_widen_check(s, a) &&
-           require_rvf(s);
+           require_rvf(s) &&
+           vext_check_altfmt(s, valid_bfa_vsew);
 }
 
-static bool opffv_widen_check(DisasContext *s, arg_rmr *a)
+static bool opffv_widen_check(DisasContext *s, arg_rmr *a,
+                              int8_t valid_bfa_vsew)
 {
     return opfv_widen_check(s, a) &&
            require_rvfmin(s) &&
-           require_scale_rvfmin(s);
+           require_scale_rvfmin(s) &&
+           vext_check_altfmt(s, valid_bfa_vsew);
 }
 
-#define GEN_OPFV_WIDEN_TRANS(NAME, CHECK, HELPER, FRM)             \
-static bool trans_##NAME(DisasContext *s, arg_rmr *a)              \
-{                                                                  \
-    if (CHECK(s, a)) {                                             \
-        uint32_t data = 0;                                         \
-        static gen_helper_gvec_3_ptr * const fns[2] = {            \
-            gen_helper_##HELPER##_h,                               \
-            gen_helper_##HELPER##_w,                               \
-        };                                                         \
-        gen_set_rm_chkfrm(s, FRM);                                 \
-                                                                   \
-        data = FIELD_DP32(data, VDATA, VM, a->vm);                 \
-        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);             \
-        data = FIELD_DP32(data, VDATA, VTA, s->vta);               \
-        data = FIELD_DP32(data, VDATA, VMA, s->vma);               \
-        tcg_gen_gvec_3_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),     \
-                           vreg_ofs(s, a->rs2), tcg_env,           \
-                           s->cfg_ptr->vlenb,                      \
-                           s->cfg_ptr->vlenb, data,                \
-                           fns[s->sew - 1]);                       \
-        finalize_rvv_inst(s);                                      \
-        return true;                                               \
-    }                                                              \
-    return false;                                                  \
+#define GEN_OPFV_WIDEN_TRANS(NAME, CHECK, HELPER, FRM)          \
+static bool trans_##NAME(DisasContext *s, arg_rmr *a)           \
+{                                                               \
+    if (CHECK(s, a, -1)) {                                      \
+        uint32_t data = 0;                                      \
+        static gen_helper_gvec_3_ptr * const fns[2] = {         \
+            gen_helper_##HELPER##_h,                            \
+            gen_helper_##HELPER##_w,                            \
+        };                                                      \
+        gen_set_rm_chkfrm(s, FRM);                              \
+                                                                \
+        data = FIELD_DP32(data, VDATA, VM, a->vm);              \
+        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);          \
+        data = FIELD_DP32(data, VDATA, VTA, s->vta);            \
+        data = FIELD_DP32(data, VDATA, VMA, s->vma);            \
+        tcg_gen_gvec_3_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),  \
+                           vreg_ofs(s, a->rs2), tcg_env,        \
+                           s->cfg_ptr->vlenb,                   \
+                           s->cfg_ptr->vlenb, data,             \
+                           fns[s->sew - 1]);                    \
+        finalize_rvv_inst(s);                                   \
+        return true;                                            \
+    }                                                           \
+    return false;                                               \
+}
+
+#define GEN_OPFV_WIDEN_BFA_TRANS(NAME, CHECK, HELPER, FRM, BFA_HELPER)  \
+static bool trans_##NAME(DisasContext *s, arg_rmr *a)                   \
+{                                                                       \
+    if (CHECK(s, a, MO_16)) {                                           \
+        uint32_t data = 0;                                              \
+        static gen_helper_gvec_3_ptr * const fns[2] = {                 \
+            gen_helper_##HELPER##_h,                                    \
+            gen_helper_##HELPER##_w,                                    \
+        };                                                              \
+        gen_set_rm_chkfrm(s, FRM);                                      \
+                                                                        \
+        data = FIELD_DP32(data, VDATA, VM, a->vm);                      \
+        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);                  \
+        data = FIELD_DP32(data, VDATA, VTA, s->vta);                    \
+        data = FIELD_DP32(data, VDATA, VMA, s->vma);                    \
+        tcg_gen_gvec_3_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),          \
+                           vreg_ofs(s, a->rs2), tcg_env,                \
+                           s->cfg_ptr->vlenb,                           \
+                           s->cfg_ptr->vlenb, data,                     \
+                           (s->altfmt ? gen_helper_##BFA_HELPER :       \
+                                        fns[s->sew - 1]));              \
+        finalize_rvv_inst(s);                                           \
+        return true;                                                    \
+    }                                                                   \
+    return false;                                                       \
 }
 
 GEN_OPFV_WIDEN_TRANS(vfwcvt_xu_f_v, opxfv_widen_check, vfwcvt_xu_f_v,
                      RISCV_FRM_DYN)
 GEN_OPFV_WIDEN_TRANS(vfwcvt_x_f_v, opxfv_widen_check, vfwcvt_x_f_v,
                      RISCV_FRM_DYN)
-GEN_OPFV_WIDEN_TRANS(vfwcvt_f_f_v, opffv_widen_check, vfwcvt_f_f_v,
-                     RISCV_FRM_DYN)
+GEN_OPFV_WIDEN_BFA_TRANS(vfwcvt_f_f_v, opffv_widen_check, vfwcvt_f_f_v,
+                         RISCV_FRM_DYN, vfwcvtbf16_f_f_v)
 /* Reuse the helper functions from vfwcvt.xu.f.v and vfwcvt.x.f.v */
 GEN_OPFV_WIDEN_TRANS(vfwcvt_rtz_xu_f_v, opxfv_widen_check, vfwcvt_xu_f_v,
                      RISCV_FRM_RTZ)
 GEN_OPFV_WIDEN_TRANS(vfwcvt_rtz_x_f_v, opxfv_widen_check, vfwcvt_x_f_v,
                      RISCV_FRM_RTZ)
 
-static bool opfxv_widen_check(DisasContext *s, arg_rmr *a)
+static bool opfxv_widen_check(DisasContext *s, arg_rmr *a,
+                              int8_t valid_bfa_vsew)
 {
     return require_rvv(s) &&
            require_scale_rvf(s) &&
            vext_check_isa_ill(s) &&
            /* OPFV widening instructions ignore vs1 check */
-           vext_check_ds(s, a->rd, a->rs2, a->vm);
+           vext_check_ds(s, a->rd, a->rs2, a->vm) &&
+           vext_check_altfmt(s, valid_bfa_vsew);
 }
 
-#define GEN_OPFXV_WIDEN_TRANS(NAME)                                \
-static bool trans_##NAME(DisasContext *s, arg_rmr *a)              \
-{                                                                  \
-    if (opfxv_widen_check(s, a)) {                                 \
-        uint32_t data = 0;                                         \
-        static gen_helper_gvec_3_ptr * const fns[3] = {            \
-            gen_helper_##NAME##_b,                                 \
-            gen_helper_##NAME##_h,                                 \
-            gen_helper_##NAME##_w,                                 \
-        };                                                         \
-        gen_set_rm(s, RISCV_FRM_DYN);                              \
-                                                                   \
-        data = FIELD_DP32(data, VDATA, VM, a->vm);                 \
-        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);             \
-        data = FIELD_DP32(data, VDATA, VTA, s->vta);               \
-        data = FIELD_DP32(data, VDATA, VMA, s->vma);               \
-        tcg_gen_gvec_3_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),     \
-                           vreg_ofs(s, a->rs2), tcg_env,           \
-                           s->cfg_ptr->vlenb,                      \
-                           s->cfg_ptr->vlenb, data,                \
-                           fns[s->sew]);                           \
-        finalize_rvv_inst(s);                                      \
-        return true;                                               \
-    }                                                              \
-    return false;                                                  \
+#define GEN_OPFXV_WIDEN_BFA_TRANS(NAME)                                 \
+static bool trans_##NAME(DisasContext *s, arg_rmr *a)                   \
+{                                                                       \
+    if (opfxv_widen_check(s, a, MO_8)) {                                \
+        uint32_t data = 0;                                              \
+        static gen_helper_gvec_3_ptr * const fns[3] = {                 \
+            gen_helper_##NAME##_b,                                      \
+            gen_helper_##NAME##_h,                                      \
+            gen_helper_##NAME##_w                                       \
+        };                                                              \
+        gen_set_rm(s, RISCV_FRM_DYN);                                   \
+                                                                        \
+        data = FIELD_DP32(data, VDATA, VM, a->vm);                      \
+        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);                  \
+        data = FIELD_DP32(data, VDATA, VTA, s->vta);                    \
+        data = FIELD_DP32(data, VDATA, VMA, s->vma);                    \
+        tcg_gen_gvec_3_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),          \
+                           vreg_ofs(s, a->rs2), tcg_env,                \
+                           s->cfg_ptr->vlenb,                           \
+                           s->cfg_ptr->vlenb, data,                     \
+                           (s->altfmt ? gen_helper_##NAME##_b_bf16 :    \
+                                        fns[s->sew]));                  \
+        finalize_rvv_inst(s);                                           \
+        return true;                                                    \
+    }                                                                   \
+    return false;                                                       \
 }
 
-GEN_OPFXV_WIDEN_TRANS(vfwcvt_f_xu_v)
-GEN_OPFXV_WIDEN_TRANS(vfwcvt_f_x_v)
+GEN_OPFXV_WIDEN_BFA_TRANS(vfwcvt_f_xu_v)
+GEN_OPFXV_WIDEN_BFA_TRANS(vfwcvt_f_x_v)
 
 /* Narrowing Floating-Point/Integer Type-Convert Instructions */
 
@@ -2794,104 +3122,140 @@ static bool opfv_narrow_check(DisasContext *s, arg_rmr *a)
            vext_check_sd(s, a->rd, a->rs2, a->vm);
 }
 
-static bool opfxv_narrow_check(DisasContext *s, arg_rmr *a)
+static bool opfxv_narrow_check(DisasContext *s, arg_rmr *a,
+                               int8_t valid_bfa_vsew)
 {
     return opfv_narrow_check(s, a) &&
            require_rvf(s) &&
-           (s->sew != MO_64);
+           (s->sew != MO_64) &&
+           vext_check_altfmt(s, valid_bfa_vsew);
 }
 
-static bool opffv_narrow_check(DisasContext *s, arg_rmr *a)
+static bool opffv_narrow_check(DisasContext *s, arg_rmr *a,
+                               int8_t valid_bfa_vsew)
 {
     return opfv_narrow_check(s, a) &&
            require_rvfmin(s) &&
-           require_scale_rvfmin(s);
+           require_scale_rvfmin(s) &&
+           vext_check_altfmt(s, valid_bfa_vsew);
 }
 
-static bool opffv_rod_narrow_check(DisasContext *s, arg_rmr *a)
+static bool opffv_rod_narrow_check(DisasContext *s, arg_rmr *a,
+                                   int8_t valid_bfa_vsew)
 {
     return opfv_narrow_check(s, a) &&
            require_rvf(s) &&
-           require_scale_rvf(s);
+           require_scale_rvf(s) &&
+           vext_check_altfmt(s, valid_bfa_vsew);
 }
 
-#define GEN_OPFV_NARROW_TRANS(NAME, CHECK, HELPER, FRM)            \
-static bool trans_##NAME(DisasContext *s, arg_rmr *a)              \
-{                                                                  \
-    if (CHECK(s, a)) {                                             \
-        uint32_t data = 0;                                         \
-        static gen_helper_gvec_3_ptr * const fns[2] = {            \
-            gen_helper_##HELPER##_h,                               \
-            gen_helper_##HELPER##_w,                               \
-        };                                                         \
-        gen_set_rm_chkfrm(s, FRM);                                 \
-                                                                   \
-        data = FIELD_DP32(data, VDATA, VM, a->vm);                 \
-        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);             \
-        data = FIELD_DP32(data, VDATA, VTA, s->vta);               \
-        data = FIELD_DP32(data, VDATA, VMA, s->vma);               \
-        tcg_gen_gvec_3_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),     \
-                           vreg_ofs(s, a->rs2), tcg_env,           \
-                           s->cfg_ptr->vlenb,                      \
-                           s->cfg_ptr->vlenb, data,                \
-                           fns[s->sew - 1]);                       \
-        finalize_rvv_inst(s);                                      \
-        return true;                                               \
-    }                                                              \
-    return false;                                                  \
+#define GEN_OPFV_NARROW_TRANS(NAME, CHECK, HELPER, FRM)         \
+static bool trans_##NAME(DisasContext *s, arg_rmr *a)           \
+{                                                               \
+    if (CHECK(s, a, -1)) {                                      \
+        uint32_t data = 0;                                      \
+        static gen_helper_gvec_3_ptr * const fns[2] = {         \
+            gen_helper_##HELPER##_h,                            \
+            gen_helper_##HELPER##_w,                            \
+        };                                                      \
+        gen_set_rm_chkfrm(s, FRM);                              \
+                                                                \
+        data = FIELD_DP32(data, VDATA, VM, a->vm);              \
+        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);          \
+        data = FIELD_DP32(data, VDATA, VTA, s->vta);            \
+        data = FIELD_DP32(data, VDATA, VMA, s->vma);            \
+        tcg_gen_gvec_3_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),  \
+                           vreg_ofs(s, a->rs2), tcg_env,        \
+                           s->cfg_ptr->vlenb,                   \
+                           s->cfg_ptr->vlenb, data,             \
+                           fns[s->sew - 1]);                    \
+        finalize_rvv_inst(s);                                   \
+        return true;                                            \
+    }                                                           \
+    return false;                                               \
+}
+
+#define GEN_OPFV_NARROW_BFA_TRANS(NAME, CHECK, HELPER, FRM, BFA_HELPER) \
+static bool trans_##NAME(DisasContext *s, arg_rmr *a)                   \
+{                                                                       \
+    if (CHECK(s, a, MO_16)) {                                           \
+        uint32_t data = 0;                                              \
+        static gen_helper_gvec_3_ptr * const fns[2] = {                 \
+            gen_helper_##HELPER##_h,                                    \
+            gen_helper_##HELPER##_w,                                    \
+        };                                                              \
+        gen_set_rm_chkfrm(s, FRM);                                      \
+                                                                        \
+        data = FIELD_DP32(data, VDATA, VM, a->vm);                      \
+        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);                  \
+        data = FIELD_DP32(data, VDATA, VTA, s->vta);                    \
+        data = FIELD_DP32(data, VDATA, VMA, s->vma);                    \
+        tcg_gen_gvec_3_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),          \
+                           vreg_ofs(s, a->rs2), tcg_env,                \
+                           s->cfg_ptr->vlenb,                           \
+                           s->cfg_ptr->vlenb, data,                     \
+                           (s->altfmt ? gen_helper_##BFA_HELPER :       \
+                                        fns[s->sew - 1]));              \
+        finalize_rvv_inst(s);                                           \
+        return true;                                                    \
+    }                                                                   \
+    return false;                                                       \
 }
 
 GEN_OPFV_NARROW_TRANS(vfncvt_f_xu_w, opfxv_narrow_check, vfncvt_f_xu_w,
                       RISCV_FRM_DYN)
 GEN_OPFV_NARROW_TRANS(vfncvt_f_x_w, opfxv_narrow_check, vfncvt_f_x_w,
                       RISCV_FRM_DYN)
-GEN_OPFV_NARROW_TRANS(vfncvt_f_f_w, opffv_narrow_check, vfncvt_f_f_w,
-                      RISCV_FRM_DYN)
+GEN_OPFV_NARROW_BFA_TRANS(vfncvt_f_f_w, opffv_narrow_check, vfncvt_f_f_w,
+                          RISCV_FRM_DYN, vfncvtbf16_f_f_w)
 /* Reuse the helper function from vfncvt.f.f.w */
-GEN_OPFV_NARROW_TRANS(vfncvt_rod_f_f_w, opffv_rod_narrow_check, vfncvt_f_f_w,
-                      RISCV_FRM_ROD)
+GEN_OPFV_NARROW_BFA_TRANS(vfncvt_rod_f_f_w, opffv_rod_narrow_check,
+                          vfncvt_f_f_w, RISCV_FRM_ROD, vfncvtbf16_f_f_w)
 
-static bool opxfv_narrow_check(DisasContext *s, arg_rmr *a)
+static bool opxfv_narrow_check(DisasContext *s, arg_rmr *a,
+                               int8_t valid_bfa_vsew)
 {
     return require_rvv(s) &&
            require_scale_rvf(s) &&
            vext_check_isa_ill(s) &&
            /* OPFV narrowing instructions ignore vs1 check */
-           vext_check_sd(s, a->rd, a->rs2, a->vm);
+           vext_check_sd(s, a->rd, a->rs2, a->vm) &&
+           vext_check_altfmt(s, valid_bfa_vsew);
 }
 
-#define GEN_OPXFV_NARROW_TRANS(NAME, HELPER, FRM)                  \
-static bool trans_##NAME(DisasContext *s, arg_rmr *a)              \
-{                                                                  \
-    if (opxfv_narrow_check(s, a)) {                                \
-        uint32_t data = 0;                                         \
-        static gen_helper_gvec_3_ptr * const fns[3] = {            \
-            gen_helper_##HELPER##_b,                               \
-            gen_helper_##HELPER##_h,                               \
-            gen_helper_##HELPER##_w,                               \
-        };                                                         \
-        gen_set_rm_chkfrm(s, FRM);                                 \
-                                                                   \
-        data = FIELD_DP32(data, VDATA, VM, a->vm);                 \
-        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);             \
-        data = FIELD_DP32(data, VDATA, VTA, s->vta);               \
-        data = FIELD_DP32(data, VDATA, VMA, s->vma);               \
-        tcg_gen_gvec_3_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),     \
-                           vreg_ofs(s, a->rs2), tcg_env,           \
-                           s->cfg_ptr->vlenb,                      \
-                           s->cfg_ptr->vlenb, data,                \
-                           fns[s->sew]);                           \
-        finalize_rvv_inst(s);                                      \
-        return true;                                               \
-    }                                                              \
-    return false;                                                  \
+#define GEN_OPXFV_NARROW_BFA_TRANS(NAME, HELPER, FRM)                   \
+static bool trans_##NAME(DisasContext *s, arg_rmr *a)                   \
+{                                                                       \
+    if (opxfv_narrow_check(s, a, MO_8)) {                               \
+        uint32_t data = 0;                                              \
+        static gen_helper_gvec_3_ptr * const fns[3] = {                 \
+            gen_helper_##HELPER##_b,                                    \
+            gen_helper_##HELPER##_h,                                    \
+            gen_helper_##HELPER##_w                                     \
+        };                                                              \
+        gen_set_rm_chkfrm(s, FRM);                                      \
+                                                                        \
+        data = FIELD_DP32(data, VDATA, VM, a->vm);                      \
+        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);                  \
+        data = FIELD_DP32(data, VDATA, VTA, s->vta);                    \
+        data = FIELD_DP32(data, VDATA, VMA, s->vma);                    \
+        tcg_gen_gvec_3_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),          \
+                           vreg_ofs(s, a->rs2), tcg_env,                \
+                           s->cfg_ptr->vlenb,                           \
+                           s->cfg_ptr->vlenb, data,                     \
+                           (s->altfmt ? gen_helper_##HELPER##_b_bf16 :  \
+                                        fns[s->sew]));                  \
+        finalize_rvv_inst(s);                                           \
+        return true;                                                    \
+    }                                                                   \
+    return false;                                                       \
 }
 
-GEN_OPXFV_NARROW_TRANS(vfncvt_xu_f_w, vfncvt_xu_f_w, RISCV_FRM_DYN)
-GEN_OPXFV_NARROW_TRANS(vfncvt_x_f_w, vfncvt_x_f_w, RISCV_FRM_DYN)
+GEN_OPXFV_NARROW_BFA_TRANS(vfncvt_xu_f_w, vfncvt_xu_f_w, RISCV_FRM_DYN)
+GEN_OPXFV_NARROW_BFA_TRANS(vfncvt_x_f_w, vfncvt_x_f_w, RISCV_FRM_DYN)
 /* Reuse the helper functions from vfncvt.xu.f.w and vfncvt.x.f.w */
-GEN_OPXFV_NARROW_TRANS(vfncvt_rtz_xu_f_w, vfncvt_xu_f_w, RISCV_FRM_RTZ)
-GEN_OPXFV_NARROW_TRANS(vfncvt_rtz_x_f_w, vfncvt_x_f_w, RISCV_FRM_RTZ)
+GEN_OPXFV_NARROW_BFA_TRANS(vfncvt_rtz_xu_f_w, vfncvt_xu_f_w, RISCV_FRM_RTZ)
+GEN_OPXFV_NARROW_BFA_TRANS(vfncvt_rtz_x_f_w, vfncvt_x_f_w, RISCV_FRM_RTZ)
 
 /*
  *** Vector Reduction Operations
@@ -2901,6 +3265,8 @@ static bool reduction_check(DisasContext *s, arg_rmrr *a)
 {
     return require_rvv(s) &&
            vext_check_isa_ill(s) &&
+           require_vm(a->vm, a->rs1) &&
+           require_vm(a->vm, a->rs2) &&
            vext_check_reduction(s, a->rs2);
 }
 
@@ -2917,6 +3283,7 @@ GEN_OPIVV_TRANS(vredxor_vs, reduction_check)
 static bool reduction_widen_check(DisasContext *s, arg_rmrr *a)
 {
     return reduction_check(s, a) && (s->sew < MO_64) &&
+           !is_overlapped(a->rs1, 1, a->rs2, 1 << MAX(s->lmul, 0)) &&
            ((s->sew + 1) <= (s->cfg_ptr->elen >> 4));
 }
 
@@ -2924,10 +3291,12 @@ GEN_OPIVV_WIDEN_TRANS(vwredsum_vs, reduction_widen_check)
 GEN_OPIVV_WIDEN_TRANS(vwredsumu_vs, reduction_widen_check)
 
 /* Vector Single-Width Floating-Point Reduction Instructions */
-static bool freduction_check(DisasContext *s, arg_rmrr *a)
+static bool freduction_check(DisasContext *s, arg_rmrr *a,
+                             int8_t valid_bfa_vsew)
 {
     return reduction_check(s, a) &&
-           require_rvf(s);
+           require_rvf(s) &&
+           vext_check_altfmt(s, valid_bfa_vsew);
 }
 
 GEN_OPFVV_TRANS(vfredusum_vs, freduction_check)
@@ -2936,11 +3305,13 @@ GEN_OPFVV_TRANS(vfredmax_vs, freduction_check)
 GEN_OPFVV_TRANS(vfredmin_vs, freduction_check)
 
 /* Vector Widening Floating-Point Reduction Instructions */
-static bool freduction_widen_check(DisasContext *s, arg_rmrr *a)
+static bool freduction_widen_check(DisasContext *s, arg_rmrr *a,
+                                   int8_t valid_bfa_vsew)
 {
     return reduction_widen_check(s, a) &&
            require_rvf(s) &&
-           require_scale_rvf(s);
+           require_scale_rvf(s) &&
+           vext_check_altfmt(s, valid_bfa_vsew);
 }
 
 GEN_OPFVV_WIDEN_TRANS(vfwredusum_vs, freduction_widen_check)
@@ -3172,26 +3543,25 @@ static void load_element(TCGv_i64 dest, TCGv_ptr base,
         break;
     default:
         g_assert_not_reached();
-        break;
     }
 }
 
 /* offset of the idx element with base register r */
 static uint32_t endian_ofs(DisasContext *s, int r, int idx)
 {
-#if HOST_BIG_ENDIAN
-    return vreg_ofs(s, r) + ((idx ^ (7 >> s->sew)) << s->sew);
-#else
-    return vreg_ofs(s, r) + (idx << s->sew);
-#endif
+    if (HOST_BIG_ENDIAN) {
+        return vreg_ofs(s, r) + ((idx ^ (7 >> s->sew)) << s->sew);
+    } else {
+        return vreg_ofs(s, r) + (idx << s->sew);
+    }
 }
 
 /* adjust the index according to the endian */
 static void endian_adjust(TCGv_i32 ofs, int sew)
 {
-#if HOST_BIG_ENDIAN
-    tcg_gen_xori_i32(ofs, ofs, 7 >> sew);
-#endif
+    if (HOST_BIG_ENDIAN) {
+        tcg_gen_xori_i32(ofs, ofs, 7 >> sew);
+    }
 }
 
 /* Load idx >= VLMAX ? 0 : vreg[idx] */
@@ -3237,38 +3607,21 @@ static void vec_element_loadi(DisasContext *s, TCGv_i64 dest,
     load_element(dest, tcg_env, endian_ofs(s, vreg, idx), s->sew, sign);
 }
 
-/* Integer Scalar Move Instruction */
+typedef void gen_helper_vset_velem0(TCGv_ptr, TCGv_i64, TCGv_env, TCGv_i32);
 
-static void store_element(TCGv_i64 val, TCGv_ptr base,
-                          int ofs, int sew)
+static void vec_element_storei_tail(DisasContext *s, int vreg, TCGv_i64 val)
 {
-    switch (sew) {
-    case MO_8:
-        tcg_gen_st8_i64(val, base, ofs);
-        break;
-    case MO_16:
-        tcg_gen_st16_i64(val, base, ofs);
-        break;
-    case MO_32:
-        tcg_gen_st32_i64(val, base, ofs);
-        break;
-    case MO_64:
-        tcg_gen_st_i64(val, base, ofs);
-        break;
-    default:
-        g_assert_not_reached();
-        break;
-    }
-}
+    static gen_helper_vset_velem0 * const fns[4] = {
+        gen_helper_vset_velem0_b, gen_helper_vset_velem0_h,
+        gen_helper_vset_velem0_w, gen_helper_vset_velem0_d,
+    };
+    TCGv_ptr dest = tcg_temp_new_ptr();
+    uint32_t data = FIELD_DP32(0, VDATA, VTA, s->vta);
+    TCGv_i32 desc = tcg_constant_i32(simd_desc(s->cfg_ptr->vlenb,
+                                              s->cfg_ptr->vlenb, data));
 
-/*
- * Store vreg[idx] = val.
- * The index must be in range of VLMAX.
- */
-static void vec_element_storei(DisasContext *s, int vreg,
-                               int idx, TCGv_i64 val)
-{
-    store_element(val, tcg_env, endian_ofs(s, vreg, idx), s->sew);
+    tcg_gen_addi_ptr(dest, tcg_env, vreg_ofs(s, vreg));
+    fns[s->sew](dest, val, tcg_env, desc);
 }
 
 /* vmv.x.s rd, vs2 # x[rd] = vs2[0] */
@@ -3315,7 +3668,7 @@ static bool trans_vmv_s_x(DisasContext *s, arg_vmv_s_x *a)
          */
         s1 = get_gpr(s, a->rs1, EXT_NONE);
         tcg_gen_ext_tl_i64(t1, s1);
-        vec_element_storei(s, a->rd, 0, t1);
+        vec_element_storei_tail(s, a->rd, t1);
         gen_set_label(over);
         tcg_gen_movi_tl(cpu_vstart, 0);
         finalize_rvv_inst(s);
@@ -3357,7 +3710,8 @@ static bool trans_vfmv_s_f(DisasContext *s, arg_vfmv_s_f *a)
 {
     if (require_rvv(s) &&
         require_rvf(s) &&
-        vext_check_isa_ill(s)) {
+        vext_check_isa_ill(s) &&
+        vext_check_altfmt(s, MO_16)) {
         gen_set_rm(s, RISCV_FRM_DYN);
 
         /* The instructions ignore LMUL and vector register group. */
@@ -3371,7 +3725,7 @@ static bool trans_vfmv_s_f(DisasContext *s, arg_vfmv_s_f *a)
         t1 = tcg_temp_new_i64();
         do_nanbox(s, t1, cpu_fpr[a->rs1]);
 
-        vec_element_storei(s, a->rd, 0, t1);
+        vec_element_storei_tail(s, a->rd, t1);
 
         gen_set_label(over);
         tcg_gen_movi_tl(cpu_vstart, 0);
@@ -3390,7 +3744,6 @@ static bool slideup_check(DisasContext *s, arg_rmrr *a)
 }
 
 GEN_OPIVX_TRANS(vslideup_vx, slideup_check)
-GEN_OPIVX_TRANS(vslide1up_vx, slideup_check)
 GEN_OPIVI_TRANS(vslideup_vi, IMM_ZX, vslideup_vx, slideup_check)
 
 static bool slidedown_check(DisasContext *s, arg_rmrr *a)
@@ -3401,30 +3754,82 @@ static bool slidedown_check(DisasContext *s, arg_rmrr *a)
 }
 
 GEN_OPIVX_TRANS(vslidedown_vx, slidedown_check)
-GEN_OPIVX_TRANS(vslide1down_vx, slidedown_check)
 GEN_OPIVI_TRANS(vslidedown_vi, IMM_ZX, vslidedown_vx, slidedown_check)
 
+typedef void gen_helper_vslide1_vx(TCGv_ptr, TCGv_ptr, TCGv_i64, TCGv_ptr,
+                                TCGv_env, TCGv_i32);
+
+#define GEN_OPIVX_VSLIDE1_TRANS(NAME, CHECK)                            \
+static bool trans_##NAME(DisasContext *s, arg_rmrr *a)                  \
+{                                                                       \
+    if (CHECK(s, a)) {                                                  \
+        static gen_helper_vslide1_vx * const fns[4] = {                 \
+            gen_helper_##NAME##_b, gen_helper_##NAME##_h,               \
+            gen_helper_##NAME##_w, gen_helper_##NAME##_d,               \
+        };                                                              \
+                                                                        \
+        TCGv_ptr dest, src2, mask;                                      \
+        TCGv_i64 src1;                                                  \
+        TCGv_i32 desc;                                                  \
+        uint32_t data = 0;                                              \
+                                                                        \
+        dest = tcg_temp_new_ptr();                                      \
+        mask = tcg_temp_new_ptr();                                      \
+        src2 = tcg_temp_new_ptr();                                      \
+        src1 = tcg_temp_new_i64();                                      \
+                                                                        \
+        data = FIELD_DP32(data, VDATA, VM, a->vm);                      \
+        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);                  \
+        data = FIELD_DP32(data, VDATA, VTA, s->vta);                    \
+        data = FIELD_DP32(data, VDATA, VTA_ALL_1S, s->cfg_vta_all_1s);  \
+        data = FIELD_DP32(data, VDATA, VMA, s->vma);                    \
+        desc = tcg_constant_i32(simd_desc(s->cfg_ptr->vlenb,            \
+                                s->cfg_ptr->vlenb, data));              \
+                                                                        \
+        tcg_gen_addi_ptr(dest, tcg_env, vreg_ofs(s, a->rd));            \
+        tcg_gen_addi_ptr(src2, tcg_env, vreg_ofs(s, a->rs2));           \
+        tcg_gen_addi_ptr(mask, tcg_env, vreg_ofs(s, 0));                \
+        tcg_gen_ext_tl_i64(src1, get_gpr(s, a->rs1, EXT_SIGN));         \
+                                                                        \
+        fns[s->sew](dest, mask, src1, src2, tcg_env, desc);             \
+                                                                        \
+        tcg_gen_movi_tl(cpu_vstart, 0);                                 \
+        finalize_rvv_inst(s);                                           \
+                                                                        \
+        return true;                                                    \
+    }                                                                   \
+    return false;                                                       \
+}
+
+GEN_OPIVX_VSLIDE1_TRANS(vslide1up_vx, slideup_check)
+GEN_OPIVX_VSLIDE1_TRANS(vslide1down_vx, slidedown_check)
+
 /* Vector Floating-Point Slide Instructions */
-static bool fslideup_check(DisasContext *s, arg_rmrr *a)
+static bool fslideup_check(DisasContext *s, arg_rmrr *a,
+                           int8_t valid_bfa_vsew)
 {
     return slideup_check(s, a) &&
-           require_rvf(s);
+           require_rvf(s) &&
+           vext_check_altfmt(s, valid_bfa_vsew);
 }
 
-static bool fslidedown_check(DisasContext *s, arg_rmrr *a)
+static bool fslidedown_check(DisasContext *s, arg_rmrr *a,
+                             int8_t valid_bfa_vsew)
 {
     return slidedown_check(s, a) &&
-           require_rvf(s);
+           require_rvf(s) &&
+           vext_check_altfmt(s, valid_bfa_vsew);
 }
 
-GEN_OPFVF_TRANS(vfslide1up_vf, fslideup_check)
-GEN_OPFVF_TRANS(vfslide1down_vf, fslidedown_check)
+GEN_OPFVF_BFA_TRANS(vfslide1up_vf, fslideup_check, vfslide1up_vf_h)
+GEN_OPFVF_BFA_TRANS(vfslide1down_vf, fslidedown_check, vfslide1down_vf_h)
 
 /* Vector Register Gather Instruction */
 static bool vrgather_vv_check(DisasContext *s, arg_rmrr *a)
 {
     return require_rvv(s) &&
            vext_check_isa_ill(s) &&
+           vext_check_input_eew(s, a->rs1, s->sew, a->rs2, s->sew, a->vm) &&
            require_align(a->rd, s->lmul) &&
            require_align(a->rs1, s->lmul) &&
            require_align(a->rs2, s->lmul) &&
@@ -3437,6 +3842,7 @@ static bool vrgatherei16_vv_check(DisasContext *s, arg_rmrr *a)
     int8_t emul = MO_16 - s->sew + s->lmul;
     return require_rvv(s) &&
            vext_check_isa_ill(s) &&
+           vext_check_input_eew(s, a->rs1, MO_16, a->rs2, s->sew, a->vm) &&
            (emul >= -3 && emul <= 3) &&
            require_align(a->rd, s->lmul) &&
            require_align(a->rs1, emul) &&
@@ -3456,6 +3862,7 @@ static bool vrgather_vx_check(DisasContext *s, arg_rmrr *a)
 {
     return require_rvv(s) &&
            vext_check_isa_ill(s) &&
+           vext_check_input_eew(s, -1, MO_64, a->rs2, s->sew, a->vm) &&
            require_align(a->rd, s->lmul) &&
            require_align(a->rs2, s->lmul) &&
            (a->rd != a->rs2) &&
@@ -3599,7 +4006,9 @@ static bool int_ext_check(DisasContext *s, arg_rmr *a, uint8_t div)
         require_align(a->rd, s->lmul) &&
         require_align(a->rs2, s->lmul - div) &&
         require_vm(a->vm, a->rd) &&
-        require_noover(a->rd, s->lmul, a->rs2, s->lmul - div);
+        require_noover(a->rd, s->lmul, a->rs2, s->lmul - div) &&
+        vext_check_input_eew(s, -1, 0, a->rs2, s->sew, a->vm);
+
     return ret;
 }
 

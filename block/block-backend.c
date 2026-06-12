@@ -11,15 +11,15 @@
  */
 
 #include "qemu/osdep.h"
-#include "sysemu/block-backend.h"
+#include "system/block-backend.h"
 #include "block/block_int.h"
 #include "block/blockjob.h"
 #include "block/coroutines.h"
 #include "block/throttle-groups.h"
-#include "hw/qdev-core.h"
-#include "sysemu/blockdev.h"
-#include "sysemu/runstate.h"
-#include "sysemu/replay.h"
+#include "hw/core/qdev.h"
+#include "system/blockdev.h"
+#include "system/runstate.h"
+#include "system/replay.h"
 #include "qapi/error.h"
 #include "qapi/qapi-events-block.h"
 #include "qemu/id.h"
@@ -82,6 +82,7 @@ struct BlockBackend {
     QemuMutex queued_requests_lock; /* protects queued_requests */
     CoQueue queued_requests;
     bool disable_request_queuing; /* atomic */
+    int start_request_count; /* atomic */
 
     VMChangeStateEntry *vmsh;
     bool force_allow_inactivate;
@@ -136,9 +137,9 @@ static void blk_root_drained_end(BdrvChild *child);
 static void blk_root_change_media(BdrvChild *child, bool load);
 static void blk_root_resize(BdrvChild *child);
 
-static bool blk_root_change_aio_ctx(BdrvChild *child, AioContext *ctx,
-                                    GHashTable *visited, Transaction *tran,
-                                    Error **errp);
+static bool GRAPH_RDLOCK
+blk_root_change_aio_ctx(BdrvChild *child, AioContext *ctx, GHashTable *visited,
+                        Transaction *tran, Error **errp);
 
 static char *blk_root_get_parent_desc(BdrvChild *child)
 {
@@ -253,7 +254,7 @@ static bool blk_can_inactivate(BlockBackend *blk)
      * guest.  For block job BBs that satisfy this, we can just allow
      * it.  This is the case for mirror job source, which is required
      * by libvirt non-shared block migration. */
-    if (!(blk->perm & (BLK_PERM_WRITE | BLK_PERM_WRITE_UNCHANGED))) {
+    if (!(blk->perm & ~BLK_PERM_CONSISTENT_READ)) {
         return true;
     }
 
@@ -854,15 +855,6 @@ BlockBackendPublic *blk_get_public(BlockBackend *blk)
 }
 
 /*
- * Returns a BlockBackend given the associated @public fields.
- */
-BlockBackend *blk_by_public(BlockBackendPublic *public)
-{
-    GLOBAL_STATE_CODE();
-    return container_of(public, BlockBackend, public);
-}
-
-/*
  * Disassociates the currently associated BlockDriverState from @blk.
  */
 void blk_remove_bs(BlockBackend *blk)
@@ -898,7 +890,7 @@ void blk_remove_bs(BlockBackend *blk)
     root = blk->root;
     blk->root = NULL;
 
-    bdrv_graph_wrlock();
+    bdrv_graph_wrlock_drained();
     bdrv_root_unref_child(root);
     bdrv_graph_wrunlock();
 }
@@ -909,14 +901,24 @@ void blk_remove_bs(BlockBackend *blk)
 int blk_insert_bs(BlockBackend *blk, BlockDriverState *bs, Error **errp)
 {
     ThrottleGroupMember *tgm = &blk->public.throttle_group_member;
+    uint64_t perm, shared_perm;
 
     GLOBAL_STATE_CODE();
     bdrv_ref(bs);
-    bdrv_graph_wrlock();
+    bdrv_graph_wrlock_drained();
+
+    if ((bs->open_flags & BDRV_O_INACTIVE) && blk_can_inactivate(blk)) {
+        blk->disable_perm = true;
+        perm = 0;
+        shared_perm = BLK_PERM_ALL;
+    } else {
+        perm = blk->perm;
+        shared_perm = blk->shared_perm;
+    }
+
     blk->root = bdrv_root_attach_child(bs, "root", &child_root,
                                        BDRV_CHILD_FILTERED | BDRV_CHILD_PRIMARY,
-                                       blk->perm, blk->shared_perm,
-                                       blk, errp);
+                                       perm, shared_perm, blk, errp);
     bdrv_graph_wrunlock();
     if (blk->root == NULL) {
         return -EPERM;
@@ -1028,20 +1030,36 @@ DeviceState *blk_get_attached_dev(BlockBackend *blk)
     return blk->dev;
 }
 
-/* Return the qdev ID, or if no ID is assigned the QOM path, of the block
- * device attached to the BlockBackend. */
-char *blk_get_attached_dev_id(BlockBackend *blk)
+/*
+ * The caller is responsible for releasing the value returned
+ * with g_free() after use.
+ */
+static char *blk_get_attached_dev_id_or_path(BlockBackend *blk, bool want_id)
 {
     DeviceState *dev = blk->dev;
     IO_CODE();
 
     if (!dev) {
         return g_strdup("");
-    } else if (dev->id) {
+    } else if (want_id && dev->id) {
         return g_strdup(dev->id);
     }
 
     return object_get_canonical_path(OBJECT(dev)) ?: g_strdup("");
+}
+
+char *blk_get_attached_dev_id(BlockBackend *blk)
+{
+    return blk_get_attached_dev_id_or_path(blk, true);
+}
+
+/*
+ * The caller is responsible for releasing the value returned
+ * with g_free() after use.
+ */
+static char *blk_get_attached_dev_path(BlockBackend *blk)
+{
+    return blk_get_attached_dev_id_or_path(blk, false);
 }
 
 /*
@@ -1214,12 +1232,6 @@ BlockDeviceIoStatus blk_iostatus(const BlockBackend *blk)
     return blk->iostatus;
 }
 
-void blk_iostatus_disable(BlockBackend *blk)
-{
-    GLOBAL_STATE_CODE();
-    blk->iostatus_enabled = false;
-}
-
 void blk_iostatus_reset(BlockBackend *blk)
 {
     GLOBAL_STATE_CODE();
@@ -1295,9 +1307,15 @@ bool blk_in_drain(BlockBackend *blk)
 }
 
 /* To be called between exactly one pair of blk_inc/dec_in_flight() */
-static void coroutine_fn blk_wait_while_drained(BlockBackend *blk)
+static void coroutine_fn blk_wait_while_drained(BlockBackend *blk,
+                                                BdrvRequestFlags flags)
 {
     assert(blk->in_flight > 0);
+
+    if (flags & BDRV_REQ_NO_QUEUE) {
+        assert(qatomic_read(&blk->start_request_count));
+        return;
+    }
 
     if (qatomic_read(&blk->quiesce_counter) &&
         !qatomic_read(&blk->disable_request_queuing)) {
@@ -1307,9 +1325,9 @@ static void coroutine_fn blk_wait_while_drained(BlockBackend *blk)
          * section.
          */
         qemu_mutex_lock(&blk->queued_requests_lock);
+        /* blk_root_drained_end() has the corresponding blk_inc_in_flight() */
         blk_dec_in_flight(blk);
         qemu_co_queue_wait(&blk->queued_requests, &blk->queued_requests_lock);
-        blk_inc_in_flight(blk);
         qemu_mutex_unlock(&blk->queued_requests_lock);
     }
 }
@@ -1324,7 +1342,7 @@ blk_co_do_preadv_part(BlockBackend *blk, int64_t offset, int64_t bytes,
     BlockDriverState *bs;
     IO_CODE();
 
-    blk_wait_while_drained(blk);
+    blk_wait_while_drained(blk, flags);
     GRAPH_RDLOCK_GUARD();
 
     /* Call blk_bs() only after waiting, the graph may have changed */
@@ -1399,7 +1417,7 @@ blk_co_do_pwritev_part(BlockBackend *blk, int64_t offset, int64_t bytes,
     BlockDriverState *bs;
     IO_CODE();
 
-    blk_wait_while_drained(blk);
+    blk_wait_while_drained(blk, flags);
     GRAPH_RDLOCK_GUARD();
 
     /* Call blk_bs() only after waiting, the graph may have changed */
@@ -1510,6 +1528,19 @@ void blk_dec_in_flight(BlockBackend *blk)
     IO_CODE();
     qatomic_dec(&blk->in_flight);
     aio_wait_kick();
+}
+
+void coroutine_fn blk_co_start_request(BlockBackend *blk)
+{
+    blk_inc_in_flight(blk);
+    blk_wait_while_drained(blk, 0);
+    qatomic_inc(&blk->start_request_count);
+}
+
+void blk_end_request(BlockBackend *blk)
+{
+    qatomic_dec(&blk->start_request_count);
+    blk_dec_in_flight(blk);
 }
 
 static void error_callback_bh(void *opaque)
@@ -1730,7 +1761,7 @@ blk_co_do_ioctl(BlockBackend *blk, unsigned long int req, void *buf)
 {
     IO_CODE();
 
-    blk_wait_while_drained(blk);
+    blk_wait_while_drained(blk, 0);
     GRAPH_RDLOCK_GUARD();
 
     if (!blk_co_is_available(blk)) {
@@ -1772,12 +1803,13 @@ BlockAIOCB *blk_aio_ioctl(BlockBackend *blk, unsigned long int req, void *buf,
 
 /* To be called between exactly one pair of blk_inc/dec_in_flight() */
 static int coroutine_fn
-blk_co_do_pdiscard(BlockBackend *blk, int64_t offset, int64_t bytes)
+blk_co_do_pdiscard(BlockBackend *blk, int64_t offset, int64_t bytes,
+                   BdrvRequestFlags flags)
 {
     int ret;
     IO_CODE();
 
-    blk_wait_while_drained(blk);
+    blk_wait_while_drained(blk, flags);
     GRAPH_RDLOCK_GUARD();
 
     ret = blk_check_byte_request(blk, offset, bytes);
@@ -1793,7 +1825,7 @@ static void coroutine_fn blk_aio_pdiscard_entry(void *opaque)
     BlkAioEmAIOCB *acb = opaque;
     BlkRwCo *rwco = &acb->rwco;
 
-    rwco->ret = blk_co_do_pdiscard(rwco->blk, rwco->offset, acb->bytes);
+    rwco->ret = blk_co_do_pdiscard(rwco->blk, rwco->offset, acb->bytes, 0);
     blk_aio_complete(acb);
 }
 
@@ -1807,13 +1839,13 @@ BlockAIOCB *blk_aio_pdiscard(BlockBackend *blk,
 }
 
 int coroutine_fn blk_co_pdiscard(BlockBackend *blk, int64_t offset,
-                                 int64_t bytes)
+                                 int64_t bytes, BdrvRequestFlags flags)
 {
     int ret;
     IO_OR_GS_CODE();
 
     blk_inc_in_flight(blk);
-    ret = blk_co_do_pdiscard(blk, offset, bytes);
+    ret = blk_co_do_pdiscard(blk, offset, bytes, flags);
     blk_dec_in_flight(blk);
 
     return ret;
@@ -1823,7 +1855,7 @@ int coroutine_fn blk_co_pdiscard(BlockBackend *blk, int64_t offset,
 static int coroutine_fn blk_co_do_flush(BlockBackend *blk)
 {
     IO_CODE();
-    blk_wait_while_drained(blk);
+    blk_wait_while_drained(blk, 0);
     GRAPH_RDLOCK_GUARD();
 
     if (!blk_co_is_available(blk)) {
@@ -1998,7 +2030,7 @@ int coroutine_fn blk_co_zone_report(BlockBackend *blk, int64_t offset,
     IO_CODE();
 
     blk_inc_in_flight(blk); /* increase before waiting */
-    blk_wait_while_drained(blk);
+    blk_wait_while_drained(blk, 0);
     GRAPH_RDLOCK_GUARD();
     if (!blk_is_available(blk)) {
         blk_dec_in_flight(blk);
@@ -2023,7 +2055,7 @@ int coroutine_fn blk_co_zone_mgmt(BlockBackend *blk, BlockZoneOp op,
     IO_CODE();
 
     blk_inc_in_flight(blk);
-    blk_wait_while_drained(blk);
+    blk_wait_while_drained(blk, 0);
     GRAPH_RDLOCK_GUARD();
 
     ret = blk_check_byte_request(blk, offset, len);
@@ -2047,7 +2079,7 @@ int coroutine_fn blk_co_zone_append(BlockBackend *blk, int64_t *offset,
     IO_CODE();
 
     blk_inc_in_flight(blk);
-    blk_wait_while_drained(blk);
+    blk_wait_while_drained(blk, flags);
     GRAPH_RDLOCK_GUARD();
     if (!blk_is_available(blk)) {
         blk_dec_in_flight(blk);
@@ -2137,9 +2169,10 @@ static void send_qmp_error_event(BlockBackend *blk,
 {
     IoOperationType optype;
     BlockDriverState *bs = blk_bs(blk);
+    g_autofree char *path = blk_get_attached_dev_path(blk);
 
     optype = is_read ? IO_OPERATION_TYPE_READ : IO_OPERATION_TYPE_WRITE;
-    qapi_event_send_block_io_error(blk_name(blk),
+    qapi_event_send_block_io_error(path, blk_name(blk),
                                    bs ? bdrv_get_node_name(bs) : NULL, optype,
                                    action, blk_iostatus_is_enabled(blk),
                                    error == ENOSPC, strerror(error));
@@ -2228,28 +2261,6 @@ void blk_set_enable_write_cache(BlockBackend *blk, bool wce)
     blk->enable_write_cache = wce;
 }
 
-void blk_activate(BlockBackend *blk, Error **errp)
-{
-    BlockDriverState *bs = blk_bs(blk);
-    GLOBAL_STATE_CODE();
-
-    if (!bs) {
-        error_setg(errp, "Device '%s' has no medium", blk->name);
-        return;
-    }
-
-    /*
-     * Migration code can call this function in coroutine context, so leave
-     * coroutine context if necessary.
-     */
-    if (qemu_in_coroutine()) {
-        bdrv_co_activate(bs, errp);
-    } else {
-        GRAPH_RDLOCK_GUARD_MAINLOOP();
-        bdrv_activate(bs, errp);
-    }
-}
-
 bool coroutine_fn blk_co_is_inserted(BlockBackend *blk)
 {
     BlockDriverState *bs = blk_bs(blk);
@@ -2315,6 +2326,17 @@ uint32_t blk_get_request_alignment(BlockBackend *blk)
     return bs ? bs->bl.request_alignment : BDRV_SECTOR_SIZE;
 }
 
+/* Returns the optimal write zeroes alignment, in bytes; guaranteed nonzero */
+uint32_t blk_get_pwrite_zeroes_alignment(BlockBackend *blk)
+{
+    BlockDriverState *bs = blk_bs(blk);
+    IO_CODE();
+    if (!bs) {
+        return BDRV_SECTOR_SIZE;
+    }
+    return bs->bl.pwrite_zeroes_alignment ?: bs->bl.request_alignment;
+}
+
 /* Returns the maximum hardware transfer length, in bytes; guaranteed nonzero */
 uint64_t blk_get_max_hw_transfer(BlockBackend *blk)
 {
@@ -2367,48 +2389,6 @@ void *blk_blockalign(BlockBackend *blk, size_t size)
     return qemu_blockalign(blk ? blk_bs(blk) : NULL, size);
 }
 
-bool blk_op_is_blocked(BlockBackend *blk, BlockOpType op, Error **errp)
-{
-    BlockDriverState *bs = blk_bs(blk);
-    GLOBAL_STATE_CODE();
-    GRAPH_RDLOCK_GUARD_MAINLOOP();
-
-    if (!bs) {
-        return false;
-    }
-
-    return bdrv_op_is_blocked(bs, op, errp);
-}
-
-void blk_op_unblock(BlockBackend *blk, BlockOpType op, Error *reason)
-{
-    BlockDriverState *bs = blk_bs(blk);
-    GLOBAL_STATE_CODE();
-
-    if (bs) {
-        bdrv_op_unblock(bs, op, reason);
-    }
-}
-
-void blk_op_block_all(BlockBackend *blk, Error *reason)
-{
-    BlockDriverState *bs = blk_bs(blk);
-    GLOBAL_STATE_CODE();
-
-    if (bs) {
-        bdrv_op_block_all(bs, reason);
-    }
-}
-
-void blk_op_unblock_all(BlockBackend *blk, Error *reason)
-{
-    BlockDriverState *bs = blk_bs(blk);
-    GLOBAL_STATE_CODE();
-
-    if (bs) {
-        bdrv_op_unblock_all(bs, reason);
-    }
-}
 
 /**
  * Return BB's current AioContext.  Note that this context may change
@@ -2562,12 +2542,6 @@ void blk_add_remove_bs_notifier(BlockBackend *blk, Notifier *notify)
 {
     GLOBAL_STATE_CODE();
     notifier_list_add(&blk->remove_bs_notifiers, notify);
-}
-
-void blk_add_insert_bs_notifier(BlockBackend *blk, Notifier *notify)
-{
-    GLOBAL_STATE_CODE();
-    notifier_list_add(&blk->insert_bs_notifiers, notify);
 }
 
 BlockAcctStats *blk_get_stats(BlockBackend *blk)
@@ -2825,9 +2799,11 @@ static void blk_root_drained_end(BdrvChild *child)
             blk->dev_ops->drained_end(blk->dev_opaque);
         }
         qemu_mutex_lock(&blk->queued_requests_lock);
-        while (qemu_co_enter_next(&blk->queued_requests,
-                                  &blk->queued_requests_lock)) {
+        while (!qemu_co_queue_empty(&blk->queued_requests)) {
             /* Resume all queued requests */
+            blk_inc_in_flight(blk);
+            qemu_co_enter_next(&blk->queued_requests,
+                               &blk->queued_requests_lock);
         }
         qemu_mutex_unlock(&blk->queued_requests_lock);
     }

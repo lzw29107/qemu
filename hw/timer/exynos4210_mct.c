@@ -54,14 +54,14 @@
 
 #include "qemu/osdep.h"
 #include "qemu/log.h"
-#include "hw/sysbus.h"
+#include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
 #include "qemu/timer.h"
 #include "qemu/module.h"
-#include "hw/ptimer.h"
+#include "hw/core/ptimer.h"
 
 #include "hw/arm/exynos4210.h"
-#include "hw/irq.h"
+#include "hw/core/irq.h"
 #include "qom/object.h"
 
 //#define DEBUG_MCT
@@ -815,7 +815,7 @@ static uint32_t exynos4210_ltick_cnt_get_cnto(struct tick_timer *s)
         /* Both are counting */
         icnto = remain / s->tcntb;
         if (icnto) {
-            tcnto = remain % (icnto * s->tcntb);
+            tcnto = remain % ((uint64_t)icnto * s->tcntb);
         } else {
             tcnto = remain % s->tcntb;
         }
@@ -1546,11 +1546,11 @@ static void exynos4210_mct_finalize(Object *obj)
     }
 }
 
-static void exynos4210_mct_class_init(ObjectClass *klass, void *data)
+static void exynos4210_mct_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->reset = exynos4210_mct_reset;
+    device_class_set_legacy_reset(dc, exynos4210_mct_reset);
     dc->vmsd = &vmstate_exynos4210_mct_state;
 }
 

@@ -26,7 +26,7 @@
 #define ASPEED_SMC_H
 
 #include "hw/ssi/ssi.h"
-#include "hw/sysbus.h"
+#include "hw/core/sysbus.h"
 #include "qom/object.h"
 
 struct AspeedSMCState;
@@ -82,6 +82,7 @@ struct AspeedSMCState {
 
     uint8_t snoop_index;
     uint8_t snoop_dummies;
+    bool unselect;
 };
 
 typedef struct AspeedSegments {

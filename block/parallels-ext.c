@@ -30,6 +30,7 @@
 #include "block/dirty-bitmap.h"
 #include "parallels.h"
 #include "crypto/hash.h"
+#include "qemu/bswap.h"
 #include "qemu/uuid.h"
 #include "qemu/memalign.h"
 
@@ -206,7 +207,7 @@ parallels_parse_format_extension(BlockDriverState *bs, uint8_t *ext_cluster,
         goto fail;
     }
 
-    ret = qcrypto_hash_bytes(QCRYPTO_HASH_ALG_MD5, (char *)pos, remaining,
+    ret = qcrypto_hash_bytes(QCRYPTO_HASH_ALGO_MD5, (char *)pos, remaining,
                              &hash, &hash_len, errp);
     if (ret < 0) {
         goto fail;

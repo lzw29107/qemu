@@ -10,9 +10,9 @@ DEF_HELPER_4(swl, void, env, tl, tl, int)
 DEF_HELPER_4(swr, void, env, tl, tl, int)
 
 #ifndef CONFIG_USER_ONLY
-DEF_HELPER_3(ll, tl, env, tl, int)
+DEF_HELPER_3(ll, tl, env, tl, i32)
 #ifdef TARGET_MIPS64
-DEF_HELPER_3(lld, tl, env, tl, int)
+DEF_HELPER_3(lld, tl, env, tl, i32)
 #endif
 #endif
 
@@ -21,6 +21,8 @@ DEF_HELPER_FLAGS_1(bitswap, TCG_CALL_NO_RWG_SE, tl, tl)
 DEF_HELPER_FLAGS_1(dbitswap, TCG_CALL_NO_RWG_SE, tl, tl)
 #endif
 
+DEF_HELPER_3(crc32, tl, tl, tl, i32)
+DEF_HELPER_3(crc32c, tl, tl, tl, i32)
 DEF_HELPER_FLAGS_4(rotx, TCG_CALL_NO_RWG_SE, tl, tl, i32, i32, i32)
 
 /* microMIPS functions */
@@ -594,7 +596,7 @@ DEF_HELPER_FLAGS_3(wrdsp, 0, void, tl, tl, env)
 DEF_HELPER_FLAGS_2(rddsp, 0, tl, tl, env)
 
 #ifndef CONFIG_USER_ONLY
-#include "tcg/sysemu_helper.h.inc"
+#include "tcg/system_helper.h.inc"
 #endif /* !CONFIG_USER_ONLY */
 
 #include "tcg/msa_helper.h.inc"

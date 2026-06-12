@@ -27,9 +27,9 @@
 #include "ui/console.h"
 #include "hw/i386/vmport.h"
 #include "hw/input/i8042.h"
-#include "hw/qdev-properties.h"
+#include "hw/core/qdev-properties.h"
 #include "migration/vmstate.h"
-#include "cpu.h"
+#include "target/i386/cpu.h"
 #include "qom/object.h"
 
 #include "trace.h"
@@ -72,7 +72,7 @@ struct VMMouseState {
     ISAKBDState *i8042;
 };
 
-static void vmmouse_get_data(uint32_t *data)
+static void vmmouse_get_data(uint64_t *data)
 {
     X86CPU *cpu = X86_CPU(current_cpu);
     CPUX86State *env = &cpu->env;
@@ -82,7 +82,7 @@ static void vmmouse_get_data(uint32_t *data)
     data[4] = env->regs[R_ESI]; data[5] = env->regs[R_EDI];
 }
 
-static void vmmouse_set_data(const uint32_t *data)
+static void vmmouse_set_data(const uint64_t *data)
 {
     X86CPU *cpu = X86_CPU(current_cpu);
     CPUX86State *env = &cpu->env;
@@ -197,7 +197,7 @@ static void vmmouse_disable(VMMouseState *s)
     vmmouse_remove_handler(s);
 }
 
-static void vmmouse_data(VMMouseState *s, uint32_t *data, uint32_t size)
+static void vmmouse_data(VMMouseState *s, uint64_t *data, uint32_t size)
 {
     int i;
 
@@ -221,7 +221,7 @@ static void vmmouse_data(VMMouseState *s, uint32_t *data, uint32_t size)
 static uint32_t vmmouse_ioport_read(void *opaque, uint32_t addr)
 {
     VMMouseState *s = opaque;
-    uint32_t data[6];
+    uint64_t data[6];
     uint16_t command;
 
     vmmouse_get_data(data);
@@ -247,7 +247,7 @@ static uint32_t vmmouse_ioport_read(void *opaque, uint32_t addr)
             vmmouse_request_absolute(s);
             break;
         default:
-            printf("vmmouse: unknown command %x\n", data[1]);
+            printf("vmmouse: unknown command %" PRIx64 "\n", data[1]);
             break;
         }
         break;
@@ -278,7 +278,7 @@ static const VMStateDescription vmstate_vmmouse = {
     .minimum_version_id = 0,
     .post_load = vmmouse_post_load,
     .fields = (const VMStateField[]) {
-        VMSTATE_INT32_EQUAL(queue_size, VMMouseState, NULL),
+        VMSTATE_INT32_EQUAL(queue_size, VMMouseState),
         VMSTATE_UINT32_ARRAY(queue, VMMouseState, VMMOUSE_QUEUE_SIZE),
         VMSTATE_UINT16(nb_queue, VMMouseState),
         VMSTATE_UINT16(status, VMMouseState),
@@ -317,17 +317,16 @@ static void vmmouse_realizefn(DeviceState *dev, Error **errp)
     vmport_register(VMPORT_CMD_VMMOUSE_DATA, vmmouse_ioport_read, s);
 }
 
-static Property vmmouse_properties[] = {
+static const Property vmmouse_properties[] = {
     DEFINE_PROP_LINK("i8042", VMMouseState, i8042, TYPE_I8042, ISAKBDState *),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
-static void vmmouse_class_initfn(ObjectClass *klass, void *data)
+static void vmmouse_class_initfn(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = vmmouse_realizefn;
-    dc->reset = vmmouse_reset;
+    device_class_set_legacy_reset(dc, vmmouse_reset);
     dc->vmsd = &vmstate_vmmouse;
     device_class_set_props(dc, vmmouse_properties);
     set_bit(DEVICE_CATEGORY_INPUT, dc->categories);

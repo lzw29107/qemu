@@ -26,15 +26,16 @@
 #include "qemu/osdep.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
+#include "qemu/error-report.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "hw/usb/hcd-ohci.h"
-#include "hw/char/serial.h"
+#include "hw/char/serial-mm.h"
 #include "ui/console.h"
-#include "hw/sysbus.h"
+#include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
 #include "hw/pci/pci_device.h"
-#include "hw/qdev-properties.h"
+#include "hw/core/qdev-properties.h"
 #include "hw/i2c/i2c.h"
 #include "hw/display/i2c-ddc.h"
 #include "qemu/range.h"
@@ -1715,7 +1716,7 @@ static void draw_hwc_line_32(uint8_t *d, const uint8_t *s, int width,
     }
 }
 
-static void sm501_update_display(void *opaque)
+static bool sm501_update_display(void *opaque)
 {
     SM501State *s = opaque;
     DisplaySurface *surface = qemu_console_surface(s->con);
@@ -1739,7 +1740,7 @@ static void sm501_update_display(void *opaque)
 
     if (!((crt ? s->dc_crt_control : s->dc_panel_control)
           & SM501_DC_CRT_CONTROL_ENABLE)) {
-        return;
+        return true;
     }
 
     palette = (uint32_t *)(crt ? &s->dc_palette[SM501_DC_CRT_PALETTE -
@@ -1760,7 +1761,7 @@ static void sm501_update_display(void *opaque)
     default:
         qemu_log_mask(LOG_GUEST_ERROR, "sm501: update display"
                       "invalid control register value.\n");
-        return;
+        return true;
     }
 
     /* set up to draw hardware cursor */
@@ -1821,7 +1822,7 @@ static void sm501_update_display(void *opaque)
         } else {
             if (y_start >= 0) {
                 /* flush to display */
-                dpy_gfx_update(s->con, 0, y_start, width, y - y_start);
+                qemu_console_update(s->con, 0, y_start, width, y - y_start);
                 y_start = -1;
             }
         }
@@ -1830,8 +1831,10 @@ static void sm501_update_display(void *opaque)
 
     /* complete flush to display */
     if (y_start >= 0) {
-        dpy_gfx_update(s->con, 0, y_start, width, y - y_start);
+        qemu_console_update(s->con, 0, y_start, width, y - y_start);
     }
+
+    return true;
 }
 
 static const GraphicHwOps sm501_ops = {
@@ -1933,7 +1936,7 @@ static void sm501_init(SM501State *s, DeviceState *dev,
                                 &s->twoD_engine_region);
 
     /* create qemu graphic console */
-    s->con = graphic_console_init(dev, 0, &sm501_ops, s);
+    s->con = qemu_graphic_console_create(dev, 0, &sm501_ops, s);
 }
 
 static const VMStateDescription vmstate_sm501_state = {
@@ -2054,11 +2057,10 @@ static void sm501_realize_sysbus(DeviceState *dev, Error **errp)
     /* TODO : chain irq to IRL */
 }
 
-static Property sm501_sysbus_properties[] = {
+static const Property sm501_sysbus_properties[] = {
     DEFINE_PROP_UINT32("vram-size", SM501SysBusState, vram_size, 0),
     /* this a debug option, prefer PROP_UINT over PROP_BIT for simplicity */
     DEFINE_PROP_UINT8("x-pixman", SM501SysBusState, state.use_pixman, DEFAULT_X_PIXMAN),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void sm501_reset_sysbus(DeviceState *dev)
@@ -2078,7 +2080,7 @@ static const VMStateDescription vmstate_sm501_sysbus = {
      }
 };
 
-static void sm501_sysbus_class_init(ObjectClass *klass, void *data)
+static void sm501_sysbus_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
@@ -2086,7 +2088,7 @@ static void sm501_sysbus_class_init(ObjectClass *klass, void *data)
     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
     dc->desc = "SM501 Multimedia Companion";
     device_class_set_props(dc, sm501_sysbus_properties);
-    dc->reset = sm501_reset_sysbus;
+    device_class_set_legacy_reset(dc, sm501_reset_sysbus);
     dc->vmsd = &vmstate_sm501_sysbus;
 }
 
@@ -2143,10 +2145,9 @@ static void sm501_realize_pci(PCIDevice *dev, Error **errp)
                      &s->state.mmio_region);
 }
 
-static Property sm501_pci_properties[] = {
+static const Property sm501_pci_properties[] = {
     DEFINE_PROP_UINT32("vram-size", SM501PCIState, vram_size, 64 * MiB),
     DEFINE_PROP_UINT8("x-pixman", SM501PCIState, state.use_pixman, DEFAULT_X_PIXMAN),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void sm501_reset_pci(DeviceState *dev)
@@ -2169,7 +2170,7 @@ static const VMStateDescription vmstate_sm501_pci = {
      }
 };
 
-static void sm501_pci_class_init(ObjectClass *klass, void *data)
+static void sm501_pci_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
@@ -2181,7 +2182,7 @@ static void sm501_pci_class_init(ObjectClass *klass, void *data)
     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
     dc->desc = "SM501 Display Controller";
     device_class_set_props(dc, sm501_pci_properties);
-    dc->reset = sm501_reset_pci;
+    device_class_set_legacy_reset(dc, sm501_reset_pci);
     dc->hotpluggable = false;
     dc->vmsd = &vmstate_sm501_pci;
 }
@@ -2198,7 +2199,7 @@ static const TypeInfo sm501_pci_info = {
     .instance_size = sizeof(SM501PCIState),
     .class_init    = sm501_pci_class_init,
     .instance_init = sm501_pci_init,
-    .interfaces = (InterfaceInfo[]) {
+    .interfaces = (const InterfaceInfo[]) {
         { INTERFACE_CONVENTIONAL_PCI_DEVICE },
         { },
     },

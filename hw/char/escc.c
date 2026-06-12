@@ -23,13 +23,14 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/irq.h"
-#include "hw/qdev-properties.h"
-#include "hw/qdev-properties-system.h"
-#include "hw/sysbus.h"
+#include "hw/core/irq.h"
+#include "hw/core/qdev-properties.h"
+#include "hw/core/qdev-properties-system.h"
+#include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
 #include "qemu/module.h"
 #include "hw/char/escc.h"
+#include "standard-headers/linux/input-event-codes.h"
 #include "ui/console.h"
 
 #include "qemu/cutils.h"
@@ -287,6 +288,7 @@ static void escc_reset_chn(ESCCChannelState *s)
     s->rxint = s->txint = 0;
     s->rxint_under_svc = s->txint_under_svc = 0;
     s->e0_mode = s->led_mode = s->caps_lock_mode = s->num_lock_mode = 0;
+    s->sunmouse_dx = s->sunmouse_dy = s->sunmouse_buttons = 0;
     clear_queue(s);
 }
 
@@ -793,20 +795,18 @@ static const VMStateDescription vmstate_escc = {
 };
 
 static void sunkbd_handle_event(DeviceState *dev, QemuConsole *src,
-                                InputEvent *evt)
+                                QemuInputEvent *evt)
 {
     ESCCChannelState *s = (ESCCChannelState *)dev;
     int qcode, keycode;
-    InputKeyEvent *key;
 
     assert(evt->type == INPUT_EVENT_KIND_KEY);
-    key = evt->u.key.data;
-    qcode = qemu_input_key_value_to_qcode(key->key);
+    qcode = qemu_input_linux_to_qcode(evt->key.key);
     trace_escc_sunkbd_event_in(qcode, QKeyCode_str(qcode),
-                               key->down);
+                               evt->key.down);
 
-    if (qcode == Q_KEY_CODE_CAPS_LOCK) {
-        if (key->down) {
+    if (evt->key.key == KEY_CAPSLOCK) {
+        if (evt->key.down) {
             s->caps_lock_mode ^= 1;
             if (s->caps_lock_mode == 2) {
                 return; /* Drop second press */
@@ -819,8 +819,8 @@ static void sunkbd_handle_event(DeviceState *dev, QemuConsole *src,
         }
     }
 
-    if (qcode == Q_KEY_CODE_NUM_LOCK) {
-        if (key->down) {
+    if (evt->key.key == KEY_NUMLOCK) {
+        if (evt->key.down) {
             s->num_lock_mode ^= 1;
             if (s->num_lock_mode == 2) {
                 return; /* Drop second press */
@@ -833,12 +833,12 @@ static void sunkbd_handle_event(DeviceState *dev, QemuConsole *src,
         }
     }
 
-    if (qcode >= qemu_input_map_qcode_to_sun_len) {
+    if (evt->key.key >= qemu_input_map_linux_to_sun_len) {
         return;
     }
 
-    keycode = qemu_input_map_qcode_to_sun[qcode];
-    if (!key->down) {
+    keycode = qemu_input_map_linux_to_sun[evt->key.key];
+    if (!evt->key.down) {
         keycode |= 0x80;
     }
     trace_escc_sunkbd_event_out(keycode);
@@ -952,52 +952,91 @@ static void handle_kbd_command(ESCCChannelState *s, int val)
     }
 }
 
-static void sunmouse_event(void *opaque,
-                               int dx, int dy, int dz, int buttons_state)
+static void sunmouse_handle_event(DeviceState *dev, QemuConsole *src,
+                                  QemuInputEvent *evt)
 {
-    ESCCChannelState *s = opaque;
+    ESCCChannelState *s = (ESCCChannelState *)dev;
+    static const int bmap[INPUT_BUTTON__MAX] = {
+        [INPUT_BUTTON_LEFT]   = 0x4,
+        [INPUT_BUTTON_MIDDLE] = 0x2,
+        [INPUT_BUTTON_RIGHT]  = 0x1,
+    };
+
+    switch (evt->type) {
+    case INPUT_EVENT_KIND_REL:
+        if (evt->rel.axis == INPUT_AXIS_X) {
+            s->sunmouse_dx += evt->rel.value;
+        } else if (evt->rel.axis == INPUT_AXIS_Y) {
+            s->sunmouse_dy -= evt->rel.value;
+        }
+        break;
+
+    case INPUT_EVENT_KIND_BTN:
+        if (bmap[evt->btn.button]) {
+            if (evt->btn.down) {
+                s->sunmouse_buttons |= bmap[evt->btn.button];
+            } else {
+                s->sunmouse_buttons &= ~bmap[evt->btn.button];
+            }
+            /* Indicate we have a supported button event */
+            s->sunmouse_buttons |= 0x80;
+        }
+        break;
+
+    default:
+        /* keep gcc happy */
+        break;
+    }
+}
+
+static void sunmouse_sync(DeviceState *dev)
+{
+    ESCCChannelState *s = (ESCCChannelState *)dev;
     int ch;
 
-    trace_escc_sunmouse_event(dx, dy, buttons_state);
+    if (s->sunmouse_dx == 0 && s->sunmouse_dy == 0 &&
+        (s->sunmouse_buttons & 0x80) == 0) {
+            /* Nothing to do after button event filter */
+            return;
+    }
+
+    /* Clear our button event flag */
+    s->sunmouse_buttons &= ~0x80;
+    trace_escc_sunmouse_event(s->sunmouse_dx, s->sunmouse_dy,
+                              s->sunmouse_buttons);
     ch = 0x80 | 0x7; /* protocol start byte, no buttons pressed */
-
-    if (buttons_state & MOUSE_EVENT_LBUTTON) {
-        ch ^= 0x4;
-    }
-    if (buttons_state & MOUSE_EVENT_MBUTTON) {
-        ch ^= 0x2;
-    }
-    if (buttons_state & MOUSE_EVENT_RBUTTON) {
-        ch ^= 0x1;
-    }
-
+    ch ^= s->sunmouse_buttons;
     put_queue(s, ch);
 
-    ch = dx;
-
+    ch = s->sunmouse_dx;
     if (ch > 127) {
         ch = 127;
     } else if (ch < -127) {
         ch = -127;
     }
-
     put_queue(s, ch & 0xff);
+    s->sunmouse_dx -= ch;
 
-    ch = -dy;
-
+    ch = s->sunmouse_dy;
     if (ch > 127) {
         ch = 127;
     } else if (ch < -127) {
         ch = -127;
     }
-
     put_queue(s, ch & 0xff);
+    s->sunmouse_dy -= ch;
 
     /* MSC protocol specifies two extra motion bytes */
-
     put_queue(s, 0);
     put_queue(s, 0);
 }
+
+static const QemuInputHandler sunmouse_handler = {
+    .name  = "QEMU Sun Mouse",
+    .mask  = INPUT_EVENT_MASK_BTN | INPUT_EVENT_MASK_REL,
+    .event = sunmouse_handle_event,
+    .sync  = sunmouse_sync,
+};
 
 static void escc_init1(Object *obj)
 {
@@ -1036,8 +1075,8 @@ static void escc_realize(DeviceState *dev, Error **errp)
     }
 
     if (s->chn[0].type == escc_mouse) {
-        qemu_add_mouse_event_handler(sunmouse_event, &s->chn[0], 0,
-                                     "QEMU Sun Mouse");
+        s->chn[0].hs = qemu_input_handler_register((DeviceState *)(&s->chn[0]),
+                                                   &sunmouse_handler);
     }
     if (s->chn[1].type == escc_kbd) {
         s->chn[1].hs = qemu_input_handler_register((DeviceState *)(&s->chn[1]),
@@ -1045,7 +1084,7 @@ static void escc_realize(DeviceState *dev, Error **errp)
     }
 }
 
-static Property escc_properties[] = {
+static const Property escc_properties[] = {
     DEFINE_PROP_UINT32("frequency", ESCCState, frequency,   0),
     DEFINE_PROP_UINT32("it_shift",  ESCCState, it_shift,    0),
     DEFINE_PROP_BOOL("bit_swap",    ESCCState, bit_swap,    false),
@@ -1055,14 +1094,13 @@ static Property escc_properties[] = {
     DEFINE_PROP_CHR("chrB", ESCCState, chn[0].chr),
     DEFINE_PROP_CHR("chrA", ESCCState, chn[1].chr),
     DEFINE_PROP_STRING("chnA-sunkbd-layout", ESCCState, chn[1].sunkbd_layout),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
-static void escc_class_init(ObjectClass *klass, void *data)
+static void escc_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->reset = escc_reset;
+    device_class_set_legacy_reset(dc, escc_reset);
     dc->realize = escc_realize;
     dc->vmsd = &vmstate_escc;
     device_class_set_props(dc, escc_properties);

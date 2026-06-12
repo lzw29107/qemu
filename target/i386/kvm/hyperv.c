@@ -13,6 +13,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/main-loop.h"
+#include "exec/target_page.h"
 #include "hyperv.h"
 #include "hw/hyperv/hyperv.h"
 #include "hyperv-proto.h"
@@ -21,6 +22,15 @@ int hyperv_x86_synic_add(X86CPU *cpu)
 {
     hyperv_synic_add(CPU(cpu));
     return 0;
+}
+
+int hyperv_enable_synic(X86CPU *cpu)
+{
+    int ret = 0;
+    if (!hyperv_is_synic_present(CPU(cpu))) {
+        ret = hyperv_x86_synic_add(cpu);
+    }
+    return ret;
 }
 
 /*

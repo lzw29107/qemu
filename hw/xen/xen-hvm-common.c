@@ -1,31 +1,41 @@
 #include "qemu/osdep.h"
 #include "qemu/units.h"
+#include "qemu/bitops.h"
+#include "qemu/error-report.h"
+#include "qemu/target-info.h"
 #include "qapi/error.h"
+#include "qapi/qapi-events-misc.h"
 #include "exec/target_page.h"
 #include "trace.h"
 
+#include "hw/core/hw-error.h"
 #include "hw/pci/pci_host.h"
 #include "hw/xen/xen-hvm-common.h"
 #include "hw/xen/xen-bus.h"
-#include "hw/boards.h"
+#include "hw/core/boards.h"
 #include "hw/xen/arch_hvm.h"
+#include "system/memory.h"
+#include "system/runstate.h"
+#include "system/system.h"
+#include "system/xen.h"
+#include "system/xen-mapcache.h"
 
 MemoryRegion xen_memory, xen_grants;
 
 /* Check for any kind of xen memory, foreign mappings or grants.  */
-bool xen_mr_is_memory(MemoryRegion *mr)
+bool xen_mr_is_memory(const MemoryRegion *mr)
 {
     return mr == &xen_memory || mr == &xen_grants;
 }
 
 /* Check specifically for grants.  */
-bool xen_mr_is_grants(MemoryRegion *mr)
+bool xen_mr_is_grants(const MemoryRegion *mr)
 {
     return mr == &xen_grants;
 }
 
-void xen_ram_alloc(ram_addr_t ram_addr, ram_addr_t size, MemoryRegion *mr,
-                   Error **errp)
+void xen_ram_alloc(ram_addr_t ram_addr, ram_addr_t size,
+                   const MemoryRegion *mr, Error **errp)
 {
     unsigned target_page_bits = qemu_target_page_bits();
     unsigned long nr_pfn;
@@ -272,8 +282,8 @@ static void do_outp(uint32_t addr,
  * memory, as part of the implementation of an ioreq.
  *
  * Equivalent to
- *   cpu_physical_memory_rw(addr + (req->df ? -1 : +1) * req->size * i,
- *                          val, req->size, 0/1)
+ *   address_space_rw(as, addr + (req->df ? -1 : +1) * req->size * i,
+ *                    attrs, val, req->size, 0/1)
  * except without the integer overflow problems.
  */
 static void rw_phys_req_item(hwaddr addr,
@@ -288,7 +298,8 @@ static void rw_phys_req_item(hwaddr addr,
     } else {
         addr += offset;
     }
-    cpu_physical_memory_rw(addr, val, req->size, rw);
+    address_space_rw(&address_space_memory, addr, MEMTXATTRS_UNSPECIFIED,
+                     val, req->size, rw);
 }
 
 static inline void read_phys_req_item(hwaddr addr,
@@ -439,12 +450,14 @@ static void cpu_ioreq_config(XenIOState *state, ioreq_t *req)
 
 static void handle_ioreq(XenIOState *state, ioreq_t *req)
 {
+    size_t req_size_bits = req->size * BITS_PER_BYTE;
+
     trace_handle_ioreq(req, req->type, req->dir, req->df, req->data_is_ptr,
                        req->addr, req->data, req->count, req->size);
 
     if (!req->data_is_ptr && (req->dir == IOREQ_WRITE) &&
-            (req->size < sizeof (target_ulong))) {
-        req->data &= ((target_ulong) 1 << (8 * req->size)) - 1;
+            (req_size_bits < target_long_bits())) {
+        req->data &= MAKE_64BIT_MASK(0, req_size_bits);
     }
 
     if (req->dir == IOREQ_WRITE)
@@ -459,9 +472,12 @@ static void handle_ioreq(XenIOState *state, ioreq_t *req)
             cpu_ioreq_move(req);
             break;
         case IOREQ_TYPE_TIMEOFFSET:
+            qapi_event_send_rtc_change((int64_t)req->data, "");
             break;
         case IOREQ_TYPE_INVALIDATE:
-            xen_invalidate_map_cache();
+            if (xen_map_cache_enabled()) {
+                xen_invalidate_map_cache();
+            }
             break;
         case IOREQ_TYPE_PCI_CONFIG:
             cpu_ioreq_config(state, req);
@@ -667,6 +683,8 @@ static int xen_map_ioreq_server(XenIOState *state)
     xen_pfn_t ioreq_pfn;
     xen_pfn_t bufioreq_pfn;
     evtchn_port_t bufioreq_evtchn;
+    unsigned long num_frames = 1;
+    unsigned long frame = 1;
     int rc;
 
     /*
@@ -675,65 +693,85 @@ static int xen_map_ioreq_server(XenIOState *state)
      */
     QEMU_BUILD_BUG_ON(XENMEM_resource_ioreq_server_frame_bufioreq != 0);
     QEMU_BUILD_BUG_ON(XENMEM_resource_ioreq_server_frame_ioreq(0) != 1);
+
+    if (state->has_bufioreq) {
+        frame = 0;
+        num_frames = 2;
+    }
     state->fres = xenforeignmemory_map_resource(xen_fmem, xen_domid,
                                          XENMEM_resource_ioreq_server,
-                                         state->ioservid, 0, 2,
+                                         state->ioservid,
+                                         frame, num_frames,
                                          &addr,
                                          PROT_READ | PROT_WRITE, 0);
     if (state->fres != NULL) {
         trace_xen_map_resource_ioreq(state->ioservid, addr);
-        state->buffered_io_page = addr;
-        state->shared_page = addr + XC_PAGE_SIZE;
+        state->shared_page = addr;
+        if (state->has_bufioreq) {
+            state->buffered_io_page = addr;
+            state->shared_page = addr + XC_PAGE_SIZE;
+        }
     } else if (errno != EOPNOTSUPP) {
         error_report("failed to map ioreq server resources: error %d handle=%p",
                      errno, xen_xc);
         return -1;
     }
 
-    rc = xen_get_ioreq_server_info(xen_domid, state->ioservid,
-                                   (state->shared_page == NULL) ?
-                                   &ioreq_pfn : NULL,
-                                   (state->buffered_io_page == NULL) ?
-                                   &bufioreq_pfn : NULL,
-                                   &bufioreq_evtchn);
-    if (rc < 0) {
-        error_report("failed to get ioreq server info: error %d handle=%p",
-                     errno, xen_xc);
-        return rc;
-    }
+    /*
+     * If we fail to map the shared page with xenforeignmemory_map_resource()
+     * or if we're using buffered ioreqs, we need xen_get_ioreq_server_info()
+     * to provide the addresses to map the shared page and/or to get the
+     * event-channel port for buffered ioreqs.
+     */
+    if (state->shared_page == NULL || state->has_bufioreq) {
+        rc = xen_get_ioreq_server_info(xen_domid, state->ioservid,
+                                       (state->shared_page == NULL) ?
+                                       &ioreq_pfn : NULL,
+                                       (state->has_bufioreq &&
+                                        state->buffered_io_page == NULL) ?
+                                       &bufioreq_pfn : NULL,
+                                       &bufioreq_evtchn);
+        if (rc < 0) {
+            error_report("failed to get ioreq server info: error %d handle=%p",
+                         errno, xen_xc);
+            return rc;
+        }
 
-    if (state->shared_page == NULL) {
-        trace_xen_map_ioreq_server_shared_page(ioreq_pfn);
+        if (state->shared_page == NULL) {
+            trace_xen_map_ioreq_server_shared_page(ioreq_pfn);
 
-        state->shared_page = xenforeignmemory_map(xen_fmem, xen_domid,
-                                                  PROT_READ | PROT_WRITE,
-                                                  1, &ioreq_pfn, NULL);
+            state->shared_page = xenforeignmemory_map(xen_fmem, xen_domid,
+                                                      PROT_READ | PROT_WRITE,
+                                                      1, &ioreq_pfn, NULL);
+        }
         if (state->shared_page == NULL) {
             error_report("map shared IO page returned error %d handle=%p",
                          errno, xen_xc);
         }
-    }
 
-    if (state->buffered_io_page == NULL) {
-        trace_xen_map_ioreq_server_buffered_io_page(bufioreq_pfn);
+        if (state->has_bufioreq && state->buffered_io_page == NULL) {
+            trace_xen_map_ioreq_server_buffered_io_page(bufioreq_pfn);
 
-        state->buffered_io_page = xenforeignmemory_map(xen_fmem, xen_domid,
-                                                       PROT_READ | PROT_WRITE,
-                                                       1, &bufioreq_pfn,
-                                                       NULL);
-        if (state->buffered_io_page == NULL) {
-            error_report("map buffered IO page returned error %d", errno);
-            return -1;
+            state->buffered_io_page = xenforeignmemory_map(xen_fmem, xen_domid,
+                                                        PROT_READ | PROT_WRITE,
+                                                        1, &bufioreq_pfn,
+                                                        NULL);
+            if (state->buffered_io_page == NULL) {
+                error_report("map buffered IO page returned error %d", errno);
+                return -1;
+            }
         }
     }
 
-    if (state->shared_page == NULL || state->buffered_io_page == NULL) {
+    if (state->shared_page == NULL ||
+        (state->has_bufioreq && state->buffered_io_page == NULL)) {
         return -1;
     }
 
-    trace_xen_map_ioreq_server_buffered_io_evtchn(bufioreq_evtchn);
-
-    state->bufioreq_remote_port = bufioreq_evtchn;
+    if (state->has_bufioreq) {
+        trace_xen_map_ioreq_server_buffered_io_evtchn(bufioreq_evtchn);
+        state->bufioreq_remote_port = bufioreq_evtchn;
+    }
 
     return 0;
 }
@@ -789,7 +827,8 @@ void xen_shutdown_fatal_error(const char *fmt, ...)
 
 static void xen_do_ioreq_register(XenIOState *state,
                                   unsigned int max_cpus,
-                                  const MemoryListener *xen_memory_listener)
+                                  const MemoryListener *xen_memory_listener,
+                                  bool mapcache)
 {
     int i, rc;
 
@@ -830,20 +869,23 @@ static void xen_do_ioreq_register(XenIOState *state,
         state->ioreq_local_port[i] = rc;
     }
 
-    rc = qemu_xen_evtchn_bind_interdomain(state->xce_handle, xen_domid,
-                                          state->bufioreq_remote_port);
-    if (rc == -1) {
-        error_report("buffered evtchn bind error %d", errno);
-        goto err;
+    if (state->has_bufioreq) {
+        rc = qemu_xen_evtchn_bind_interdomain(state->xce_handle, xen_domid,
+                                              state->bufioreq_remote_port);
+        if (rc == -1) {
+            error_report("buffered evtchn bind error %d", errno);
+            goto err;
+        }
+        state->bufioreq_local_port = rc;
     }
-    state->bufioreq_local_port = rc;
-
     /* Init RAM management */
+    if (mapcache) {
 #ifdef XEN_COMPAT_PHYSMAP
-    xen_map_cache_init(xen_phys_offset_to_gaddr, state);
+        xen_map_cache_init(xen_phys_offset_to_gaddr, state);
 #else
-    xen_map_cache_init(NULL, state);
+        xen_map_cache_init(NULL, state);
 #endif
+    }
 
     qemu_add_vm_change_state_handler(xen_hvm_change_state_handler, state);
 
@@ -865,7 +907,9 @@ err:
 }
 
 void xen_register_ioreq(XenIOState *state, unsigned int max_cpus,
-                        const MemoryListener *xen_memory_listener)
+                        uint8_t handle_bufioreq,
+                        const MemoryListener *xen_memory_listener,
+                        bool mapcache)
 {
     int rc;
 
@@ -883,9 +927,10 @@ void xen_register_ioreq(XenIOState *state, unsigned int max_cpus,
         goto err;
     }
 
-    rc = xen_create_ioreq_server(xen_domid, &state->ioservid);
+    state->has_bufioreq = handle_bufioreq != HVM_IOREQSRV_BUFIOREQ_OFF;
+    rc = xen_create_ioreq_server(xen_domid, handle_bufioreq, &state->ioservid);
     if (!rc) {
-        xen_do_ioreq_register(state, max_cpus, xen_memory_listener);
+        xen_do_ioreq_register(state, max_cpus, xen_memory_listener, mapcache);
     } else {
         warn_report("xen: failed to create ioreq server");
     }

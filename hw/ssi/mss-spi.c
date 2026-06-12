@@ -24,7 +24,7 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/irq.h"
+#include "hw/core/irq.h"
 #include "hw/ssi/mss-spi.h"
 #include "migration/vmstate.h"
 #include "qemu/log.h"
@@ -398,12 +398,12 @@ static const VMStateDescription vmstate_mss_spi = {
     }
 };
 
-static void mss_spi_class_init(ObjectClass *klass, void *data)
+static void mss_spi_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = mss_spi_realize;
-    dc->reset = mss_spi_reset;
+    device_class_set_legacy_reset(dc, mss_spi_reset);
     dc->vmsd = &vmstate_mss_spi;
 }
 

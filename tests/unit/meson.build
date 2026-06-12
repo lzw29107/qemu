@@ -10,6 +10,7 @@ tests = {
   'check-qnull': [],
   'check-qobject': [],
   'check-qjson': [],
+  'check-json-parser': [],
   'check-qlit': [],
   'test-error-report': [],
   'test-qobject-output-visitor': [testqapi],
@@ -47,6 +48,8 @@ tests = {
   'test-logging': [],
   'test-qapi-util': [],
   'test-interval-tree': [],
+  'test-fifo': [],
+  'test-envlist': [],
 }
 
 if have_system or have_tools
@@ -109,21 +112,16 @@ if have_block
   if pam.found()
     tests += {'test-authz-pam': [authz]}
   endif
-  if xts == 'private'
-    tests += {'test-crypto-xts': [crypto, io]}
-  endif
   if host_os != 'windows'
     tests += {
       'test-image-locking': [testblock],
-      'test-nested-aio-poll': [testblock],
+      'test-nested-aio-poll': [],
     }
   endif
   if config_host_data.get('CONFIG_REPLICATION')
     tests += {'test-replication': [testblock]}
   endif
-  if nettle.found() or gcrypt.found()
-    tests += {'test-crypto-pbkdf': [io]}
-  endif
+  tests += {'test-crypto-pbkdf': [io]}
 endif
 
 if have_system
@@ -160,10 +158,11 @@ if have_system
       'test-qdev-global-props': [qom, hwcore]
     }
   endif
+  tests += {'test-qdev': [qom, hwcore]}
 endif
 
 if have_ga and host_os == 'linux'
-  tests += {'test-qga': ['../qtest/libqmp.c']}
+  tests += {'test-qga': ['../qtest/libqmp.c', '../qtest/libqtest.c']}
   test_deps += {'test-qga': qga}
 endif
 

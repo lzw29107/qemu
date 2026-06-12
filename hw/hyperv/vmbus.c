@@ -10,15 +10,17 @@
 #include "qemu/osdep.h"
 #include "qemu/error-report.h"
 #include "qemu/main-loop.h"
+#include "exec/target_page.h"
 #include "qapi/error.h"
 #include "migration/vmstate.h"
-#include "hw/qdev-properties.h"
-#include "hw/qdev-properties-system.h"
+#include "hw/core/qdev-properties.h"
+#include "hw/core/qdev-properties-system.h"
 #include "hw/hyperv/hyperv.h"
 #include "hw/hyperv/vmbus.h"
 #include "hw/hyperv/vmbus-bridge.h"
-#include "hw/sysbus.h"
-#include "cpu.h"
+#include "hw/core/sysbus.h"
+#include "exec/cpu-common.h"
+#include "system/kvm.h"
 #include "trace.h"
 
 enum {
@@ -246,6 +248,12 @@ struct VMBus {
      * interrupt page
      */
     EventNotifier notifier;
+
+    /*
+     * Notifier to inform when vmfd is changed as a part of confidential guest
+     * reset mechanism.
+     */
+    NotifierWithReturn vmbus_vmfd_change_notifier;
 };
 
 static bool gpadl_full(VMBusGpadl *gpadl)
@@ -1423,7 +1431,7 @@ static void open_channel(VMBusChannel *chan)
         goto put_gpadl;
     }
 
-    if (event_notifier_init(&chan->notifier, 0)) {
+    if (event_notifier_init(&chan->notifier, 0) < 0) {
         goto put_gpadl;
     }
 
@@ -1874,7 +1882,7 @@ static void send_create_gpadl(VMBus *vmbus)
         }
     }
 
-    assert(false);
+    g_assert_not_reached();
 }
 
 static bool complete_create_gpadl(VMBus *vmbus)
@@ -1889,8 +1897,7 @@ static bool complete_create_gpadl(VMBus *vmbus)
         }
     }
 
-    assert(false);
-    return false;
+    g_assert_not_reached();
 }
 
 static void handle_gpadl_teardown(VMBus *vmbus,
@@ -1931,7 +1938,7 @@ static void send_teardown_gpadl(VMBus *vmbus)
         }
     }
 
-    assert(false);
+    g_assert_not_reached();
 }
 
 static bool complete_teardown_gpadl(VMBus *vmbus)
@@ -1946,8 +1953,7 @@ static bool complete_teardown_gpadl(VMBus *vmbus)
         }
     }
 
-    assert(false);
-    return false;
+    g_assert_not_reached();
 }
 
 static void handle_open_channel(VMBus *vmbus, vmbus_message_open_channel *msg,
@@ -1996,7 +2002,7 @@ static void send_open_channel(VMBus *vmbus)
         }
     }
 
-    assert(false);
+    g_assert_not_reached();
 }
 
 static bool complete_open_channel(VMBus *vmbus)
@@ -2020,8 +2026,7 @@ static bool complete_open_channel(VMBus *vmbus)
         }
     }
 
-    assert(false);
-    return false;
+    g_assert_not_reached();
 }
 
 static void vdev_reset_on_close(VMBusDevice *vdev)
@@ -2076,7 +2081,6 @@ static void send_unload(VMBus *vmbus)
     qemu_mutex_unlock(&vmbus->rx_queue_lock);
 
     post_msg(vmbus, &msg, sizeof(msg));
-    return;
 }
 
 static bool complete_unload(VMBus *vmbus)
@@ -2349,20 +2353,46 @@ static void vmbus_dev_unrealize(DeviceState *dev)
     free_channels(vdev);
 }
 
-static Property vmbus_dev_props[] = {
+/*
+ * If the KVM fd changes because of VM reset in confidential guests,
+ * reassociate event fd with the new KVM fd.
+ */
+static int vmbus_handle_vmfd_change(NotifierWithReturn *notifier,
+                                    void *data, Error** errp)
+{
+    VMBus *vmbus = container_of(notifier, VMBus,
+                                vmbus_vmfd_change_notifier);
+    int ret = 0;
+
+    /* we are not interested in pre vmfd change notification */
+    if (((VmfdChangeNotifier *)data)->pre) {
+        return 0;
+    }
+
+    ret = hyperv_set_event_flag_handler(VMBUS_EVENT_CONNECTION_ID,
+                                            &vmbus->notifier);
+    /* if we are only using userland event handler, it may already exist */
+    if (ret != 0 && ret != -EEXIST) {
+        error_setg(errp, "hyperv set event handler failed with %d", ret);
+    }
+
+    trace_vmbus_handle_vmfd_change();
+    return ret;
+}
+
+static const Property vmbus_dev_props[] = {
     DEFINE_PROP_UUID("instanceid", VMBusDevice, instanceid),
-    DEFINE_PROP_END_OF_LIST()
 };
 
 
-static void vmbus_dev_class_init(ObjectClass *klass, void *data)
+static void vmbus_dev_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *kdev = DEVICE_CLASS(klass);
     device_class_set_props(kdev, vmbus_dev_props);
     kdev->bus_type = TYPE_VMBUS;
     kdev->realize = vmbus_dev_realize;
     kdev->unrealize = vmbus_dev_unrealize;
-    kdev->reset = vmbus_dev_reset;
+    device_class_set_legacy_reset(kdev, vmbus_dev_reset);
 }
 
 static void vmbus_dev_instance_init(Object *obj)
@@ -2419,7 +2449,7 @@ static void vmbus_realize(BusState *bus, Error **errp)
     }
 
     ret = event_notifier_init(&vmbus->notifier, 0);
-    if (ret != 0) {
+    if (ret < 0) {
         error_setg(errp, "event notifier failed to init with %d", ret);
         goto remove_msg_handler;
     }
@@ -2431,6 +2461,9 @@ static void vmbus_realize(BusState *bus, Error **errp)
         error_setg(errp, "hyperv set event handler failed with %d", ret);
         goto clear_event_notifier;
     }
+
+    vmbus->vmbus_vmfd_change_notifier.notify = vmbus_handle_vmfd_change;
+    kvm_vmfd_add_change_notifier(&vmbus->vmbus_vmfd_change_notifier);
 
     return;
 
@@ -2473,7 +2506,7 @@ static char *vmbus_get_fw_dev_path(DeviceState *dev)
     return g_strdup_printf("%s@%s", qdev_fw_name(dev), uuid);
 }
 
-static void vmbus_class_init(ObjectClass *klass, void *data)
+static void vmbus_class_init(ObjectClass *klass, const void *data)
 {
     BusClass *k = BUS_CLASS(klass);
     ResettableClass *rc = RESETTABLE_CLASS(klass);
@@ -2656,12 +2689,11 @@ static const VMStateDescription vmstate_vmbus_bridge = {
     },
 };
 
-static Property vmbus_bridge_props[] = {
+static const Property vmbus_bridge_props[] = {
     DEFINE_PROP_UINT8("irq", VMBusBridge, irq, 7),
-    DEFINE_PROP_END_OF_LIST()
 };
 
-static void vmbus_bridge_class_init(ObjectClass *klass, void *data)
+static void vmbus_bridge_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *k = DEVICE_CLASS(klass);
     SysBusDeviceClass *sk = SYS_BUS_DEVICE_CLASS(klass);

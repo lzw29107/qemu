@@ -48,15 +48,16 @@
 #include "qemu/units.h"
 #include "qemu/cutils.h"
 #include "qapi/error.h"
-#include "qapi/qmp/qlist.h"
+#include "qobject/qlist.h"
 #include "qemu/error-report.h"
 #include "hw/arm/boot.h"
 #include "hw/arm/armv7m.h"
-#include "hw/or-irq.h"
-#include "hw/boards.h"
-#include "exec/address-spaces.h"
-#include "sysemu/sysemu.h"
-#include "sysemu/reset.h"
+#include "hw/arm/machines-qom.h"
+#include "hw/core/or-irq.h"
+#include "hw/core/boards.h"
+#include "system/address-spaces.h"
+#include "system/system.h"
+#include "system/reset.h"
 #include "hw/misc/unimp.h"
 #include "hw/char/cmsdk-apb-uart.h"
 #include "hw/timer/cmsdk-apb-timer.h"
@@ -72,9 +73,9 @@
 #include "hw/net/lan9118.h"
 #include "net/net.h"
 #include "hw/core/split-irq.h"
-#include "hw/qdev-clock.h"
+#include "hw/core/qdev-clock.h"
 #include "qom/object.h"
-#include "hw/irq.h"
+#include "hw/core/irq.h"
 
 #define MPS2TZ_NUMIRQ_MAX 96
 #define MPS2TZ_RAM_MAX 5
@@ -435,7 +436,7 @@ static MemoryRegion *make_uart(MPS2TZMachineState *mms, void *opaque,
                                const char *name, hwaddr size,
                                const int *irqs, const PPCExtraData *extradata)
 {
-    /* The irq[] array is tx, rx, combined, in that order */
+    /* The irq[] array is rx, tx, combined, in that order */
     MPS2TZMachineClass *mmc = MPS2TZ_MACHINE_GET_CLASS(mms);
     CMSDKAPBUART *uart = opaque;
     int i = uart - &mms->uart[0];
@@ -447,8 +448,8 @@ static MemoryRegion *make_uart(MPS2TZMachineState *mms, void *opaque,
     qdev_prop_set_uint32(DEVICE(uart), "pclk-frq", mmc->apb_periph_frq);
     sysbus_realize(SYS_BUS_DEVICE(uart), &error_fatal);
     s = SYS_BUS_DEVICE(uart);
-    sysbus_connect_irq(s, 0, get_sse_irq_in(mms, irqs[0]));
-    sysbus_connect_irq(s, 1, get_sse_irq_in(mms, irqs[1]));
+    sysbus_connect_irq(s, 0, get_sse_irq_in(mms, irqs[1]));
+    sysbus_connect_irq(s, 1, get_sse_irq_in(mms, irqs[0]));
     sysbus_connect_irq(s, 2, qdev_get_gpio_in(orgate_dev, i * 2));
     sysbus_connect_irq(s, 3, qdev_get_gpio_in(orgate_dev, i * 2 + 1));
     sysbus_connect_irq(s, 4, get_sse_irq_in(mms, irqs[2]));
@@ -1211,7 +1212,7 @@ static void mps2tz_common_init(MachineState *machine)
                                     mms->remap_irq);
     }
 
-    armv7m_load_kernel(ARM_CPU(first_cpu), machine->kernel_filename,
+    armv7m_load_kernel(mms->iotkit.armv7m[0].cpu, machine->kernel_filename,
                        0, boot_ram_size(mms));
 }
 
@@ -1254,7 +1255,7 @@ static void mps2_set_remap(Object *obj, const char *value, Error **errp)
     }
 }
 
-static void mps2_machine_reset(MachineState *machine, ShutdownCause reason)
+static void mps2_machine_reset(MachineState *machine, ResetType type)
 {
     MPS2TZMachineState *mms = MPS2TZ_MACHINE(machine);
 
@@ -1264,10 +1265,10 @@ static void mps2_machine_reset(MachineState *machine, ShutdownCause reason)
      * reset see the correct mapping.
      */
     remap_memory(mms, mms->remap);
-    qemu_devices_reset(reason);
+    qemu_devices_reset(type);
 }
 
-static void mps2tz_class_init(ObjectClass *oc, void *data)
+static void mps2tz_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
     IDAUInterfaceClass *iic = IDAU_INTERFACE_CLASS(oc);
@@ -1304,7 +1305,7 @@ static void mps2tz_set_default_ram_info(MPS2TZMachineClass *mmc)
     g_assert_not_reached();
 }
 
-static void mps2tz_an505_class_init(ObjectClass *oc, void *data)
+static void mps2tz_an505_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
     MPS2TZMachineClass *mmc = MPS2TZ_MACHINE_CLASS(oc);
@@ -1338,7 +1339,7 @@ static void mps2tz_an505_class_init(ObjectClass *oc, void *data)
     mps2tz_set_default_ram_info(mmc);
 }
 
-static void mps2tz_an521_class_init(ObjectClass *oc, void *data)
+static void mps2tz_an521_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
     MPS2TZMachineClass *mmc = MPS2TZ_MACHINE_CLASS(oc);
@@ -1372,7 +1373,7 @@ static void mps2tz_an521_class_init(ObjectClass *oc, void *data)
     mps2tz_set_default_ram_info(mmc);
 }
 
-static void mps3tz_an524_class_init(ObjectClass *oc, void *data)
+static void mps3tz_an524_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
     MPS2TZMachineClass *mmc = MPS2TZ_MACHINE_CLASS(oc);
@@ -1411,7 +1412,7 @@ static void mps3tz_an524_class_init(ObjectClass *oc, void *data)
                                           "are BRAM (default) and QSPI.");
 }
 
-static void mps3tz_an547_class_init(ObjectClass *oc, void *data)
+static void mps3tz_an547_class_init(ObjectClass *oc, const void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
     MPS2TZMachineClass *mmc = MPS2TZ_MACHINE_CLASS(oc);
@@ -1453,7 +1454,7 @@ static const TypeInfo mps2tz_info = {
     .instance_size = sizeof(MPS2TZMachineState),
     .class_size = sizeof(MPS2TZMachineClass),
     .class_init = mps2tz_class_init,
-    .interfaces = (InterfaceInfo[]) {
+    .interfaces = (const InterfaceInfo[]) {
         { TYPE_IDAU_INTERFACE },
         { }
     },
@@ -1463,24 +1464,28 @@ static const TypeInfo mps2tz_an505_info = {
     .name = TYPE_MPS2TZ_AN505_MACHINE,
     .parent = TYPE_MPS2TZ_MACHINE,
     .class_init = mps2tz_an505_class_init,
+    .interfaces = arm_machine_interfaces,
 };
 
 static const TypeInfo mps2tz_an521_info = {
     .name = TYPE_MPS2TZ_AN521_MACHINE,
     .parent = TYPE_MPS2TZ_MACHINE,
     .class_init = mps2tz_an521_class_init,
+    .interfaces = arm_machine_interfaces,
 };
 
 static const TypeInfo mps3tz_an524_info = {
     .name = TYPE_MPS3TZ_AN524_MACHINE,
     .parent = TYPE_MPS2TZ_MACHINE,
     .class_init = mps3tz_an524_class_init,
+    .interfaces = arm_machine_interfaces,
 };
 
 static const TypeInfo mps3tz_an547_info = {
     .name = TYPE_MPS3TZ_AN547_MACHINE,
     .parent = TYPE_MPS2TZ_MACHINE,
     .class_init = mps3tz_an547_class_init,
+    .interfaces = arm_machine_interfaces,
 };
 
 static void mps2tz_machine_init(void)

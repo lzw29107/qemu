@@ -27,25 +27,16 @@
 
 #include "cpu-qom.h"
 #include "cpu_models.h"
-#include "exec/cpu-defs.h"
+#include "exec/cpu-common.h"
+#include "exec/cpu-interrupt.h"
 #include "qemu/cpu-float.h"
 #include "qapi/qapi-types-machine-common.h"
 
 #define ELF_MACHINE_UNAME "S390X"
 
-#define TARGET_HAS_PRECISE_SMC
-
-#define TARGET_INSN_START_EXTRA_WORDS 2
-
 #define MMU_USER_IDX 0
 
 #define S390_MAX_CPUS 248
-
-#ifndef CONFIG_KVM
-#define S390_ADAPTER_SUPPRESSIBLE 0x01
-#else
-#define S390_ADAPTER_SUPPRESSIBLE KVM_S390_ADAPTER_SUPPRESSIBLE
-#endif
 
 typedef struct PSW {
     uint64_t mask;
@@ -133,7 +124,7 @@ typedef struct CPUArchState {
     int32_t book_id;
     int32_t drawer_id;
     bool dedicated;
-    CpuS390Entitlement entitlement; /* Used only for vertical polarization */
+    S390CpuEntitlement entitlement; /* Used only for vertical polarization */
     uint64_t cpuid;
 #endif
 
@@ -177,19 +168,11 @@ struct ArchCPU {
     uint32_t irqstate_saved_size;
 };
 
-typedef enum cpu_reset_type {
-    S390_CPU_RESET_NORMAL,
-    S390_CPU_RESET_INITIAL,
-    S390_CPU_RESET_CLEAR,
-} cpu_reset_type;
-
 /**
  * S390CPUClass:
  * @parent_realize: The parent class' realize handler.
- * @parent_reset: The parent class' reset handler.
+ * @parent_phases: The parent class' reset phase handlers.
  * @load_normal: Performs a load normal.
- * @cpu_reset: Performs a CPU reset.
- * @initial_cpu_reset: Performs an initial CPU reset.
  *
  * An S/390 CPU model.
  */
@@ -203,9 +186,8 @@ struct S390CPUClass {
     const char *desc;
 
     DeviceRealize parent_realize;
-    DeviceReset parent_reset;
+    ResettablePhases parent_phases;
     void (*load_normal)(CPUState *cpu);
-    void (*reset)(CPUState *cpu, cpu_reset_type type);
 };
 
 #ifndef CONFIG_USER_ONLY
@@ -421,15 +403,6 @@ static inline int s390x_env_mmu_index(CPUS390XState *env, bool ifetch)
     }
 #endif
 }
-
-#ifdef CONFIG_TCG
-
-#include "tcg/tcg_s390x.h"
-
-void cpu_get_tb_cpu_state(CPUS390XState *env, vaddr *pc,
-                          uint64_t *cs_base, uint32_t *flags);
-
-#endif /* CONFIG_TCG */
 
 /* PER bits from control register 9 */
 #define PER_CR9_EVENT_BRANCH                    0x80000000
@@ -865,37 +838,9 @@ static inline uint64_t s390_build_validity_mcic(void)
     return mcic;
 }
 
-static inline void s390_do_cpu_full_reset(CPUState *cs, run_on_cpu_data arg)
-{
-    cpu_reset(cs);
-}
-
-static inline void s390_do_cpu_reset(CPUState *cs, run_on_cpu_data arg)
-{
-    S390CPUClass *scc = S390_CPU_GET_CLASS(cs);
-
-    scc->reset(cs, S390_CPU_RESET_NORMAL);
-}
-
-static inline void s390_do_cpu_initial_reset(CPUState *cs, run_on_cpu_data arg)
-{
-    S390CPUClass *scc = S390_CPU_GET_CLASS(cs);
-
-    scc->reset(cs, S390_CPU_RESET_INITIAL);
-}
-
-static inline void s390_do_cpu_load_normal(CPUState *cs, run_on_cpu_data arg)
-{
-    S390CPUClass *scc = S390_CPU_GET_CLASS(cs);
-
-    scc->load_normal(cs);
-}
-
-
 /* cpu.c */
+void s390_do_cpu_full_reset(CPUState *cs, run_on_cpu_data arg);
 void s390_crypto_reset(void);
-int s390_set_memory_limit(uint64_t new_limit, uint64_t *hw_limit);
-void s390_set_max_pagesize(uint64_t pagesize, Error **errp);
 void s390_cmma_reset(void);
 void s390_enable_css_support(S390CPU *cpu);
 void s390_do_cpu_set_diag318(CPUState *cs, run_on_cpu_data arg);
@@ -913,13 +858,6 @@ static inline uint8_t s390_cpu_get_state(S390CPU *cpu)
 {
     return cpu->env.cpu_state;
 }
-
-
-/* cpu_models.c */
-void s390_cpu_list(void);
-#define cpu_list s390_cpu_list
-void s390_set_qemu_cpu_model(uint16_t type, uint8_t gen, uint8_t ec_ga,
-                             const S390FeatInit feat_init);
 
 
 /* helper.c */
@@ -957,10 +895,9 @@ void s390_init_sigp(void);
 /* helper.c */
 void s390_cpu_set_psw(CPUS390XState *env, uint64_t mask, uint64_t addr);
 uint64_t s390_cpu_get_psw_mask(CPUS390XState *env);
+void cpu_s390x_load_fpc(CPUS390XState *env, uint32_t fpc);
 
 /* outside of target/s390x/ */
 S390CPU *s390_cpu_addr2state(uint16_t cpu_addr);
-
-#include "exec/cpu-all.h"
 
 #endif

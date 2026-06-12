@@ -26,6 +26,7 @@ typedef struct InterfaceClass InterfaceClass;
 typedef struct InterfaceInfo InterfaceInfo;
 
 #define TYPE_OBJECT "object"
+#define TYPE_CONTAINER "container"
 
 typedef struct ObjectProperty ObjectProperty;
 
@@ -279,7 +280,7 @@ struct Object
     static void \
     module_obj_name##_finalize(Object *obj); \
     static void \
-    module_obj_name##_class_init(ObjectClass *oc, void *data); \
+    module_obj_name##_class_init(ObjectClass *oc, const void *data); \
     static void \
     module_obj_name##_init(Object *obj); \
     \
@@ -293,7 +294,7 @@ struct Object
         .class_size = CLASS_SIZE, \
         .class_init = module_obj_name##_class_init, \
         .abstract = ABSTRACT, \
-        .interfaces = (InterfaceInfo[]) { __VA_ARGS__ } , \
+        .interfaces = (const InterfaceInfo[]) { __VA_ARGS__ } , \
     }; \
     \
     static void \
@@ -444,7 +445,8 @@ struct Object
  *   class will have already been initialized so the type is only responsible
  *   for initializing its own members.
  * @instance_post_init: This function is called to finish initialization of
- *   an object, after all @instance_init functions were called.
+ *   an object, after all @instance_init functions were called, as well as
+ *   @instance_post_init functions for the parent classes.
  * @instance_finalize: This function is called during object destruction.  This
  *   is called before the parent @instance_finalize function has been called.
  *   An object should only free the members that are unique to its type in this
@@ -485,11 +487,11 @@ struct TypeInfo
     bool abstract;
     size_t class_size;
 
-    void (*class_init)(ObjectClass *klass, void *data);
-    void (*class_base_init)(ObjectClass *klass, void *data);
-    void *class_data;
+    void (*class_init)(ObjectClass *klass, const void *data);
+    void (*class_base_init)(ObjectClass *klass, const void *data);
+    const void *class_data;
 
-    InterfaceInfo *interfaces;
+    const InterfaceInfo *interfaces;
 };
 
 /**
@@ -572,12 +574,15 @@ struct InterfaceInfo {
  *
  * The class for all interfaces.  Subclasses of this class should only add
  * virtual methods.
+ *
+ * Note that most of the fields of ObjectClass are unused (all except
+ * "type", in fact).  They are only present in InterfaceClass to allow
+ * @object_class_dynamic_cast to work with both regular classes and interfaces.
  */
 struct InterfaceClass
 {
     ObjectClass parent_class;
     /* private: */
-    ObjectClass *concrete_class;
     Type interface_type;
 };
 
@@ -684,24 +689,82 @@ Object *object_new_with_props(const char *typename,
  * @typename:  The name of the type of the object to instantiate.
  * @parent: the parent object
  * @id: The unique ID of the object
- * @errp: pointer to error object
  * @vargs: list of property names and values
+ * @errp: pointer to error object
  *
  * See object_new_with_props() for documentation.
  */
 Object *object_new_with_propv(const char *typename,
                               Object *parent,
                               const char *id,
-                              Error **errp,
-                              va_list vargs);
+                              va_list vargs,
+                              Error **errp);
 
-bool object_apply_global_props(Object *obj, const GPtrArray *props,
-                               Error **errp);
-void object_set_machine_compat_props(GPtrArray *compat_props);
-void object_set_accelerator_compat_props(GPtrArray *compat_props);
-void object_register_sugar_prop(const char *driver, const char *prop,
-                                const char *value, bool optional);
-void object_apply_compat_props(Object *obj);
+/**
+ * object_new_with_props_from_qdict:
+ * @typename:  The name of the type of the object to instantiate.
+ * @parent: the parent object
+ * @id: The unique ID of the object
+ * @props: dictionary of property names and values
+ * @v: visitor to iterate over @props
+ * @errp: pointer to error object
+ *
+ * A variant of object_new_with_props() which accepts the
+ * properties in a QDict.
+ */
+Object *object_new_with_props_from_qdict(const char *typename,
+                                         Object *parent,
+                                         const char *id,
+                                         const QDict *props,
+                                         Visitor *v,
+                                         Error **errp);
+
+/**
+ * object_new_with_props_parentless:
+ * @typename:  The name of the type of the object to instantiate.
+ * @errp: pointer to error object
+ * @...: list of property names and values
+ *
+ * Behaviour as object_new_with_props(), except the object
+ * will not be added to any parent and thus the caller will
+ * own the returned instance. The caller must call
+ * object_unref when it is no longer required.
+ */
+Object *object_new_with_props_parentless(const char *typename,
+                                         Error **errp,
+                                         ...) G_GNUC_NULL_TERMINATED;
+
+/**
+ * object_new_with_propv_parentless:
+ * @typename:  The name of the type of the object to instantiate.
+ * @vargs: list of property names and values
+ * @errp: pointer to error object
+ *
+ * Behaviour as object_new_with_propv(), except the object
+ * will not be added to any parent and thus the caller will
+ * own the returned instance. The caller must call
+ * object_unref when it is no longer required.
+ */
+Object *object_new_with_propv_parentless(const char *typename,
+                                         va_list vargs,
+                                         Error **errp);
+
+/**
+ * object_new_with_props_from_qdict_parentless:
+ * @typename:  The name of the type of the object to instantiate.
+ * @props: dictionary of property names and values
+ * @v: visitor to iterate over @props
+ * @errp: pointer to error object
+ *
+ * Behaviour as object_new_with_props_from_qdict(), except the
+ * object will not be added to any parent and thus the caller
+ * will own the returned instance. The caller must call
+ * object_unref when it is no longer required.
+ */
+Object *object_new_with_props_from_qdict_parentless(const char *typename,
+                                                    const QDict *props,
+                                                    Visitor *v,
+                                                    Error **errp);
 
 /**
  * object_set_props:
@@ -742,14 +805,45 @@ bool object_set_props(Object *obj, Error **errp, ...) G_GNUC_NULL_TERMINATED;
 /**
  * object_set_propv:
  * @obj: the object instance to set properties on
- * @errp: pointer to error object
  * @vargs: list of property names and values
+ * @errp: pointer to error object
  *
  * See object_set_props() for documentation.
  *
  * Returns: %true on success, %false on error.
  */
-bool object_set_propv(Object *obj, Error **errp, va_list vargs);
+bool object_set_propv(Object *obj, va_list vargs, Error **errp);
+
+/**
+ * object_set_props_from_qdict:
+ * @obj: a QOM object
+ * @qdict: a dictionary with the properties to be set
+ * @v: a visitor to iterate over @dict
+ * @errp: pointer to error object
+ *
+ * For each key in the dictionary, set the corresponding
+ * property in @obj.
+ *
+ * Returns: %true on success, %false on error.
+ */
+bool object_set_props_from_qdict(Object *obj, const QDict *qdict,
+                                 Visitor *v, Error **errp);
+
+/**
+ * object_set_props_from_keyval:
+ * @obj: a QOM object
+ * @qdict: a dictionary with the properties to be set
+ * @from_json: true if leaf values of @qdict are typed, false if they
+ * are strings
+ * @errp: pointer to error object
+ *
+ * For each key in the dictionary, parse the value string if needed,
+ * then set the corresponding property in @obj.
+ *
+ * Returns: %true on success, %false on error.
+ */
+bool object_set_props_from_keyval(Object *obj, const QDict *qdict,
+                                  bool from_json, Error **errp);
 
 /**
  * object_initialize:
@@ -880,23 +974,9 @@ const char *object_get_typename(const Object *obj);
  * type_register_static:
  * @info: The #TypeInfo of the new type.
  *
- * @info and all of the strings it points to should exist for the life time
- * that the type is registered.
- *
  * Returns: the new #Type.
  */
 Type type_register_static(const TypeInfo *info);
-
-/**
- * type_register:
- * @info: The #TypeInfo of the new type
- *
- * Unlike type_register_static(), this call does not require @info or its
- * string members to continue to exist after the call returns.
- *
- * Returns: the new #Type.
- */
-Type type_register(const TypeInfo *info);
 
 /**
  * type_register_static_array:
@@ -930,20 +1010,6 @@ type_init(do_qemu_init_ ## type_array)
  * Return whether an object was found.
  */
 bool type_print_class_properties(const char *type);
-
-/**
- * object_set_properties_from_keyval:
- * @obj: a QOM object
- * @qdict: a dictionary with the properties to be set
- * @from_json: true if leaf values of @qdict are typed, false if they
- * are strings
- * @errp: pointer to error object
- *
- * For each key in the dictionary, parse the value string if needed,
- * then set the corresponding property in @obj.
- */
-void object_set_properties_from_keyval(Object *obj, const QDict *qdict,
-                                       bool from_json, Error **errp);
 
 /**
  * object_class_dynamic_cast_assert:
@@ -1523,6 +1589,16 @@ const char *object_property_get_type(Object *obj, const char *name,
  */
 Object *object_get_root(void);
 
+/**
+ * object_get_container:
+ * @name: the name of container to lookup
+ *
+ * Lookup a root level container.
+ *
+ * Returns: the container with @name.
+ */
+Object *object_get_container(const char *name);
+
 
 /**
  * object_get_objects_root:
@@ -1569,8 +1645,8 @@ char *object_get_canonical_path(const Object *obj);
 /**
  * object_resolve_path:
  * @path: the path to resolve
- * @ambiguous: returns true if the path resolution failed because of an
- *   ambiguous match
+ * @ambiguous: (out) (optional): location to store whether the lookup failed
+ *   because it was ambiguous, or %NULL. Set to %false on success.
  *
  * There are two types of supported paths--absolute paths and partial paths.
  * 
@@ -1587,7 +1663,7 @@ char *object_get_canonical_path(const Object *obj);
  * only one match is found.  If more than one match is found, a flag is
  * returned to indicate that the match was ambiguous.
  *
- * Returns: The matched object or NULL on path lookup failure.
+ * Returns: The matched object or %NULL on path lookup failure.
  */
 Object *object_resolve_path(const char *path, bool *ambiguous);
 
@@ -1595,10 +1671,10 @@ Object *object_resolve_path(const char *path, bool *ambiguous);
  * object_resolve_path_type:
  * @path: the path to resolve
  * @typename: the type to look for.
- * @ambiguous: returns true if the path resolution failed because of an
- *   ambiguous match
+ * @ambiguous: (out) (optional): location to store whether the lookup failed
+ *   because it was ambiguous, or %NULL. Set to %false on success.
  *
- * This is similar to object_resolve_path.  However, when looking for a
+ * This is similar to object_resolve_path().  However, when looking for a
  * partial path only matches that implement the given type are considered.
  * This restricts the search and avoids spuriously flagging matches as
  * ambiguous.
@@ -1721,10 +1797,10 @@ void object_property_allow_set_link(const Object *obj, const char *name,
  *
  * Links form the graph in the object model.
  *
- * The @check() callback is invoked when
- * object_property_set_link() is called and can raise an error to prevent the
- * link being set.  If @check is NULL, the property is read-only
- * and cannot be set.
+ * The @check() callback is invoked when object_property_set_link() is called
+ * and can raise an error to prevent the link being set. If @check is NULL, the
+ * property is read-only and cannot be set. Care must be taken to handle NULL
+ * values for @val.
  *
  * Ownership of the pointer that @child points to is transferred to the
  * link property.  The reference count for *@child is
@@ -1748,6 +1824,23 @@ ObjectProperty *object_class_property_add_link(ObjectClass *oc,
                               void (*check)(const Object *obj, const char *name,
                                             Object *val, Error **errp),
                               ObjectPropertyLinkFlags flags);
+
+/**
+ * object_resolve_and_typecheck:
+ * @path: path to look up
+ * @name: name of property we are resolving for (used only in error messages)
+ * @target_type: QOM type we expect @path to resolve to
+ * @errp: error
+ *
+ * Look up the object at @path and return it. If it does not have the
+ * correct type @target_type, return NULL and set @errp.
+ *
+ * This is similar to object_resolve_path_type(), but it insists on a
+ * non-ambiguous path and it produces error messages that are
+ * specialised to the use case of setting a link property on an object.
+ */
+Object *object_resolve_and_typecheck(const char *path, const char *name,
+                                     const char *target_type, Error **errp);
 
 /**
  * object_property_add_str:
@@ -2020,25 +2113,18 @@ int object_child_foreach(Object *obj, int (*fn)(Object *child, void *opaque),
 int object_child_foreach_recursive(Object *obj,
                                    int (*fn)(Object *child, void *opaque),
                                    void *opaque);
-/**
- * container_get:
- * @root: root of the #path, e.g., object_get_root()
- * @path: path to the container
- *
- * Return a container object whose path is @path.  Create more containers
- * along the path if necessary.
- *
- * Returns: the container object.
- */
-Object *container_get(Object *root, const char *path);
 
 /**
- * object_type_get_instance_size:
- * @typename: Name of the Type whose instance_size is required
+ * object_property_add_new_container:
+ * @obj: the parent object
+ * @name: the name of the parent object's property to add
  *
- * Returns the instance_size of the given @typename.
+ * Add a newly created container object to a parent object.
+ *
+ * Returns: the newly created container object.  Its reference count is 1,
+ * and the reference is owned by the parent object.
  */
-size_t object_type_get_instance_size(const char *typename);
+Object *object_property_add_new_container(Object *obj, const char *name);
 
 /**
  * object_property_help:

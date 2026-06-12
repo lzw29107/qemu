@@ -24,7 +24,7 @@
 #ifndef HW_STM32L4X5_SYSCFG_H
 #define HW_STM32L4X5_SYSCFG_H
 
-#include "hw/sysbus.h"
+#include "hw/core/sysbus.h"
 #include "qom/object.h"
 #include "hw/gpio/stm32l4x5_gpio.h"
 
@@ -48,6 +48,7 @@ struct Stm32l4x5SyscfgState {
     uint32_t swpr2;
 
     qemu_irq gpio_out[GPIO_NUM_PINS];
+    Clock *clk;
 };
 
 #endif

@@ -301,7 +301,6 @@ static uint64_t imx6_analog_get_periph_clk(IMX6CCMState *dev)
     default:
         /* We should never get there */
         g_assert_not_reached();
-        break;
     }
 
     trace_imx6_analog_get_periph_clk(freq);
@@ -742,12 +741,12 @@ static void imx6_ccm_init(Object *obj)
     sysbus_init_mmio(sd, &s->container);
 }
 
-static void imx6_ccm_class_init(ObjectClass *klass, void *data)
+static void imx6_ccm_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     IMXCCMClass *ccm = IMX_CCM_CLASS(klass);
 
-    dc->reset = imx6_ccm_reset;
+    device_class_set_legacy_reset(dc, imx6_ccm_reset);
     dc->vmsd = &vmstate_imx6_ccm;
     dc->desc = "i.MX6 Clock Control Module";
 
