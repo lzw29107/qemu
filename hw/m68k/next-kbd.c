@@ -29,8 +29,9 @@
 
 #include "qemu/osdep.h"
 #include "qemu/log.h"
-#include "hw/sysbus.h"
+#include "hw/core/sysbus.h"
 #include "hw/m68k/next-cube.h"
+#include "standard-headers/linux/input-event-codes.h"
 #include "ui/console.h"
 #include "migration/vmstate.h"
 #include "qom/object.h"
@@ -64,11 +65,11 @@ typedef struct {
 struct NextKBDState {
     SysBusDevice sbd;
     MemoryRegion mr;
+    QemuInputHandlerState *hs;
     KBDQueue queue;
     uint16_t shift;
 };
 
-static void queue_code(void *opaque, int code);
 
 /* lots of magic numbers here */
 static uint32_t kbd_read_byte(void *opaque, hwaddr addr)
@@ -163,71 +164,73 @@ static const MemoryRegionOps kbd_ops = {
     .write = kbd_writefn,
     .valid.min_access_size = 1,
     .valid.max_access_size = 4,
-    .endianness = DEVICE_NATIVE_ENDIAN,
+    .endianness = DEVICE_BIG_ENDIAN,
 };
 
-static void nextkbd_event(void *opaque, int ch)
-{
-    /*
-     * Will want to set vars for caps/num lock
-     * if (ch & 0x80) -> key release
-     * there's also e0 escaped scancodes that might need to be handled
-     */
-    queue_code(opaque, ch);
-}
+static const int linux_to_nextkbd_keycode[] = {
+    [KEY_ESC]        = 0x49,
+    [KEY_1]          = 0x4a,
+    [KEY_2]          = 0x4b,
+    [KEY_3]          = 0x4c,
+    [KEY_4]          = 0x4d,
+    [KEY_5]          = 0x50,
+    [KEY_6]          = 0x4f,
+    [KEY_7]          = 0x4e,
+    [KEY_8]          = 0x1e,
+    [KEY_9]          = 0x1f,
+    [KEY_0]          = 0x20,
+    [KEY_MINUS]      = 0x1d,
+    [KEY_EQUAL]      = 0x1c,
+    [KEY_BACKSPACE]  = 0x1b,
 
-static const unsigned char next_keycodes[128] = {
-    0x00, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x50, 0x4F,
-    0x4E, 0x1E, 0x1F, 0x20, 0x1D, 0x1C, 0x1B, 0x00,
-    0x42, 0x43, 0x44, 0x45, 0x48, 0x47, 0x46, 0x06,
-    0x07, 0x08, 0x00, 0x00, 0x2A, 0x00, 0x39, 0x3A,
-    0x3B, 0x3C, 0x3D, 0x40, 0x3F, 0x3E, 0x2D, 0x2C,
-    0x2B, 0x26, 0x00, 0x00, 0x31, 0x32, 0x33, 0x34,
-    0x35, 0x37, 0x36, 0x2e, 0x2f, 0x30, 0x00, 0x00,
-    0x00, 0x38, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    [KEY_Q]          = 0x42,
+    [KEY_W]          = 0x43,
+    [KEY_E]          = 0x44,
+    [KEY_R]          = 0x45,
+    [KEY_T]          = 0x48,
+    [KEY_Y]          = 0x47,
+    [KEY_U]          = 0x46,
+    [KEY_I]          = 0x06,
+    [KEY_O]          = 0x07,
+    [KEY_P]          = 0x08,
+    [KEY_ENTER]      = 0x2a,
+    [KEY_A]          = 0x39,
+    [KEY_S]          = 0x3a,
+
+    [KEY_D]          = 0x3b,
+    [KEY_F]          = 0x3c,
+    [KEY_G]          = 0x3d,
+    [KEY_H]          = 0x40,
+    [KEY_J]          = 0x3f,
+    [KEY_K]          = 0x3e,
+    [KEY_L]          = 0x2d,
+    [KEY_SEMICOLON]  = 0x2c,
+    [KEY_APOSTROPHE] = 0x2b,
+    [KEY_GRAVE]      = 0x26,
+    [KEY_Z]          = 0x31,
+    [KEY_X]          = 0x32,
+    [KEY_C]          = 0x33,
+    [KEY_V]          = 0x34,
+
+    [KEY_B]          = 0x35,
+    [KEY_N]          = 0x37,
+    [KEY_M]          = 0x36,
+    [KEY_COMMA]      = 0x2e,
+    [KEY_DOT]        = 0x2f,
+    [KEY_SLASH]      = 0x30,
+
+    [KEY_SPACE]      = 0x38,
 };
 
-static void queue_code(void *opaque, int code)
+static void nextkbd_put_keycode(NextKBDState *s, int keycode)
 {
-    NextKBDState *s = NEXTKBD(opaque);
     KBDQueue *q = &s->queue;
-    int key = code & KD_KEYMASK;
-    int release = code & 0x80;
-    static int ext;
-
-    if (code == 0xE0) {
-        ext = 1;
-    }
-
-    if (code == 0x2A || code == 0x1D || code == 0x36) {
-        if (code == 0x2A) {
-            s->shift = KD_LSHIFT;
-        } else if (code == 0x36) {
-            s->shift = KD_RSHIFT;
-            ext = 0;
-        } else if (code == 0x1D && !ext) {
-            s->shift = KD_LCOMM;
-        } else if (code == 0x1D && ext) {
-            ext = 0;
-            s->shift = KD_RCOMM;
-        }
-        return;
-    } else if (code == (0x2A | 0x80) || code == (0x1D | 0x80) ||
-               code == (0x36 | 0x80)) {
-        s->shift = 0;
-        return;
-    }
 
     if (q->count >= KBD_QUEUE_SIZE) {
         return;
     }
 
-    q->data[q->wptr] = next_keycodes[key] | release;
-
+    q->data[q->wptr] = keycode;
     if (++q->wptr == KBD_QUEUE_SIZE) {
         q->wptr = 0;
     }
@@ -240,6 +243,52 @@ static void queue_code(void *opaque, int code)
      */
     /* s->update_irq(s->update_arg, 1); */
 }
+
+static void nextkbd_event(DeviceState *dev, QemuConsole *src,
+                          QemuInputEvent *evt)
+{
+    NextKBDState *s = NEXTKBD(dev);
+    int keycode;
+
+    if (evt->key.key >= ARRAY_SIZE(linux_to_nextkbd_keycode)) {
+        return;
+    }
+
+    /* Shift key currently has no keycode, so handle separately */
+    if (evt->key.key == KEY_LEFTSHIFT) {
+        if (evt->key.down) {
+            s->shift |= KD_LSHIFT;
+        } else {
+            s->shift &= ~KD_LSHIFT;
+        }
+    }
+
+    if (evt->key.key == KEY_RIGHTSHIFT) {
+        if (evt->key.down) {
+            s->shift |= KD_RSHIFT;
+        } else {
+            s->shift &= ~KD_RSHIFT;
+        }
+    }
+
+    keycode = linux_to_nextkbd_keycode[evt->key.key];
+    if (!keycode) {
+        return;
+    }
+
+    /* If key release event, create keyboard break code */
+    if (!evt->key.down) {
+        keycode |= 0x80;
+    }
+
+    nextkbd_put_keycode(s, keycode);
+}
+
+static const QemuInputHandler nextkbd_handler = {
+    .name  = "QEMU NeXT Keyboard",
+    .mask  = INPUT_EVENT_MASK_KEY,
+    .event = nextkbd_event,
+};
 
 static void nextkbd_reset(DeviceState *dev)
 {
@@ -256,7 +305,14 @@ static void nextkbd_realize(DeviceState *dev, Error **errp)
     memory_region_init_io(&s->mr, OBJECT(dev), &kbd_ops, s, "next.kbd", 0x1000);
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->mr);
 
-    qemu_add_kbd_event_handler(nextkbd_event, s);
+    s->hs = qemu_input_handler_register(dev, &nextkbd_handler);
+}
+
+static void nextkbd_unrealize(DeviceState *dev)
+{
+    NextKBDState *s = NEXTKBD(dev);
+
+    g_clear_pointer(&s->hs, qemu_input_handler_unregister);
 }
 
 static const VMStateDescription nextkbd_vmstate = {
@@ -264,14 +320,15 @@ static const VMStateDescription nextkbd_vmstate = {
     .unmigratable = 1,    /* TODO: Implement this when m68k CPU is migratable */
 };
 
-static void nextkbd_class_init(ObjectClass *oc, void *data)
+static void nextkbd_class_init(ObjectClass *oc, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
 
     set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
     dc->vmsd = &nextkbd_vmstate;
     dc->realize = nextkbd_realize;
-    dc->reset = nextkbd_reset;
+    dc->unrealize = nextkbd_unrealize;
+    device_class_set_legacy_reset(dc, nextkbd_reset);
 }
 
 static const TypeInfo nextkbd_info = {

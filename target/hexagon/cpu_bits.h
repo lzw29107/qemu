@@ -19,18 +19,27 @@
 #define HEXAGON_CPU_BITS_H
 
 #include "qemu/bitops.h"
+#include "cpu-qom.h"
 
 #define PCALIGN 4
 #define PCALIGN_MASK (PCALIGN - 1)
 
-#define HEX_EXCP_FETCH_NO_UPAGE  0x012
-#define HEX_EXCP_INVALID_PACKET  0x015
-#define HEX_EXCP_INVALID_OPCODE  0x015
-#define HEX_EXCP_PC_NOT_ALIGNED  0x01e
-#define HEX_EXCP_PRIV_NO_UREAD   0x024
-#define HEX_EXCP_PRIV_NO_UWRITE  0x025
+enum hex_event {
+    HEX_EVENT_NONE           = -1,
+    HEX_EVENT_TRAP0          =  0x008,
+};
 
-#define HEX_EXCP_TRAP0           0x172
+enum hex_cause {
+    HEX_CAUSE_NONE = -1,
+    HEX_CAUSE_TRAP0 = 0x172,
+    HEX_CAUSE_FETCH_NO_UPAGE =  0x012,
+    HEX_CAUSE_INVALID_PACKET =  0x015,
+    HEX_CAUSE_INVALID_OPCODE =  0x015,
+    HEX_CAUSE_REG_WRITE_CONFLICT = 0x01d,
+    HEX_CAUSE_PC_NOT_ALIGNED =  0x01e,
+    HEX_CAUSE_PRIV_NO_UREAD  =  0x024,
+    HEX_CAUSE_PRIV_NO_UWRITE =  0x025,
+};
 
 #define PACKET_WORDS_MAX         4
 
@@ -57,6 +66,7 @@ static inline bool is_packet_end(uint32_t endocing)
     return ((bits == 0x3) || (bits == 0x0));
 }
 
-int disassemble_hexagon(uint32_t *words, int nwords, bfd_vma pc, GString *buf);
+int disassemble_hexagon(uint32_t *words, int nwords, bfd_vma pc, GString *buf,
+                        const HexagonCPUDef *hex_def);
 
 #endif

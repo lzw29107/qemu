@@ -48,14 +48,20 @@ TESTS+=lae
 TESTS+=cvd
 TESTS+=cvb
 TESTS+=ts
+TESTS+=ex-smc
+TESTS+=divide-to-integer
 
 cdsg: CFLAGS+=-pthread
 cdsg: LDFLAGS+=-pthread
 
+# The following tests contain inline assembly that requires inlining,
+# and thus cannot be built with -O0.
 rxsbg: CFLAGS+=-O2
+divide-to-integer: CFLAGS+=-O2
 
 cgebra: LDFLAGS+=-lm
 clgebr: LDFLAGS+=-lm
+divide-to-integer: LDFLAGS+=-lm
 
 include $(S390X_SRC)/pgm-specification.mak
 $(PGM_SPECIFICATION_TESTS): pgm-specification-user.o
@@ -73,8 +79,11 @@ $(Z13_TESTS): CFLAGS+=-march=z13 -O2
 TESTS+=$(Z13_TESTS)
 
 ifneq ($(CROSS_CC_HAS_Z14),)
-Z14_TESTS=vfminmax
+Z14_TESTS=fma vfminmax
+fma: float.h
+fma: LDFLAGS+=-lm
 vfminmax: LDFLAGS+=-lm
+vfminmax: float.h
 $(Z14_TESTS): CFLAGS+=-march=z14 -O2
 TESTS+=$(Z14_TESTS)
 endif

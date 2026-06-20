@@ -30,7 +30,6 @@
 #include "cpu.h"
 #include "exec/helper-proto.h"
 #include "qemu/host-utils.h"
-#include "exec/exec-all.h"
 #include "fpu/softfloat.h"
 
 enum {
@@ -57,56 +56,15 @@ static const struct {
     { XTENSA_FP_V, float_flag_invalid, },
 };
 
-void HELPER(wur_fpu2k_fcr)(CPUXtensaState *env, uint32_t v)
+void xtensa_use_first_nan(CPUXtensaState *env, bool use_first)
 {
-    static const int rounding_mode[] = {
-        float_round_nearest_even,
-        float_round_to_zero,
-        float_round_up,
-        float_round_down,
-    };
-
-    env->uregs[FCR] = v & 0xfffff07f;
-    set_float_rounding_mode(rounding_mode[v & 3], &env->fp_status);
+    set_float_2nan_prop_rule(use_first ? float_2nan_prop_ab : float_2nan_prop_ba,
+                             &env->fp_status);
+    set_float_3nan_prop_rule(use_first ? float_3nan_prop_abc : float_3nan_prop_cba,
+                             &env->fp_status);
 }
 
-void HELPER(wur_fpu_fcr)(CPUXtensaState *env, uint32_t v)
-{
-    static const int rounding_mode[] = {
-        float_round_nearest_even,
-        float_round_to_zero,
-        float_round_up,
-        float_round_down,
-    };
-
-    if (v & 0xfffff000) {
-        qemu_log_mask(LOG_GUEST_ERROR,
-                      "MBZ field of FCR is written non-zero: %08x\n", v);
-    }
-    env->uregs[FCR] = v & 0x0000007f;
-    set_float_rounding_mode(rounding_mode[v & 3], &env->fp_status);
-}
-
-void HELPER(wur_fpu_fsr)(CPUXtensaState *env, uint32_t v)
-{
-    uint32_t flags = v >> XTENSA_FSR_FLAGS_SHIFT;
-    int fef = 0;
-    unsigned i;
-
-    if (v & 0xfffff000) {
-        qemu_log_mask(LOG_GUEST_ERROR,
-                      "MBZ field of FSR is written non-zero: %08x\n", v);
-    }
-    env->uregs[FSR] = v & 0x00000f80;
-    for (i = 0; i < ARRAY_SIZE(xtensa_fp_flag_map); ++i) {
-        if (flags & xtensa_fp_flag_map[i].xtensa_fp_flag) {
-            fef |= xtensa_fp_flag_map[i].softfloat_fp_flag;
-        }
-    }
-    set_float_exception_flags(fef, &env->fp_status);
-}
-
-uint32_t HELPER(rur_fpu_fsr)(CPUXtensaState *env)
+uint32_t cpu_get_fsr(CPUXtensaState *env)
 {
     uint32_t flags = 0;
     int fef = get_float_exception_flags(&env->fp_status);
@@ -117,8 +75,66 @@ uint32_t HELPER(rur_fpu_fsr)(CPUXtensaState *env)
             flags |= xtensa_fp_flag_map[i].xtensa_fp_flag;
         }
     }
-    env->uregs[FSR] = flags << XTENSA_FSR_FLAGS_SHIFT;
     return flags << XTENSA_FSR_FLAGS_SHIFT;
+}
+
+void cpu_set_fcr(CPUXtensaState *env, uint32_t v)
+{
+    static const FloatRoundMode rounding_mode[] = {
+        float_round_nearest_even,
+        float_round_to_zero,
+        float_round_up,
+        float_round_down,
+    };
+
+    env->uregs[FCR] = v & 0xfffff07f;
+    set_float_rounding_mode(rounding_mode[v & 3], &env->fp_status);
+}
+
+void cpu_set_fsr(CPUXtensaState *env, uint32_t v)
+{
+    uint32_t flags = v >> XTENSA_FSR_FLAGS_SHIFT;
+    int fef = 0;
+    unsigned i;
+
+    env->uregs[FSR] = v & 0x00000f80;
+    for (i = 0; i < ARRAY_SIZE(xtensa_fp_flag_map); ++i) {
+        if (flags & xtensa_fp_flag_map[i].xtensa_fp_flag) {
+            fef |= xtensa_fp_flag_map[i].softfloat_fp_flag;
+        }
+    }
+    set_float_exception_flags(fef, &env->fp_status);
+}
+
+void HELPER(wur_fpu2k_fcr)(CPUXtensaState *env, uint32_t v)
+{
+    cpu_set_fcr(env, v);
+}
+
+void HELPER(wur_fpu_fcr)(CPUXtensaState *env, uint32_t v)
+{
+    if (v & 0xfffff000) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "MBZ field of FCR is written non-zero: %08x\n", v);
+    }
+    cpu_set_fcr(env, v & 0x0000007f);
+}
+
+void HELPER(wur_fpu_fsr)(CPUXtensaState *env, uint32_t v)
+{
+    if (v & 0xfffff000) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "MBZ field of FSR is written non-zero: %08x\n", v);
+    }
+    cpu_set_fsr(env, v);
+}
+
+uint32_t HELPER(rur_fpu_fsr)(CPUXtensaState *env)
+{
+    uint32_t fsr = cpu_get_fsr(env);
+
+    env->uregs[FSR] = fsr;
+    return fsr;
 }
 
 float64 HELPER(abs_d)(float64 v)
@@ -171,87 +187,87 @@ float32 HELPER(fpu2k_msub_s)(CPUXtensaState *env,
 
 float64 HELPER(add_d)(CPUXtensaState *env, float64 a, float64 b)
 {
-    set_use_first_nan(true, &env->fp_status);
+    xtensa_use_first_nan(env, true);
     return float64_add(a, b, &env->fp_status);
 }
 
 float32 HELPER(add_s)(CPUXtensaState *env, float32 a, float32 b)
 {
-    set_use_first_nan(env->config->use_first_nan, &env->fp_status);
+    xtensa_use_first_nan(env, env->config->use_first_nan);
     return float32_add(a, b, &env->fp_status);
 }
 
 float64 HELPER(sub_d)(CPUXtensaState *env, float64 a, float64 b)
 {
-    set_use_first_nan(true, &env->fp_status);
+    xtensa_use_first_nan(env, true);
     return float64_sub(a, b, &env->fp_status);
 }
 
 float32 HELPER(sub_s)(CPUXtensaState *env, float32 a, float32 b)
 {
-    set_use_first_nan(env->config->use_first_nan, &env->fp_status);
+    xtensa_use_first_nan(env, env->config->use_first_nan);
     return float32_sub(a, b, &env->fp_status);
 }
 
 float64 HELPER(mul_d)(CPUXtensaState *env, float64 a, float64 b)
 {
-    set_use_first_nan(true, &env->fp_status);
+    xtensa_use_first_nan(env, true);
     return float64_mul(a, b, &env->fp_status);
 }
 
 float32 HELPER(mul_s)(CPUXtensaState *env, float32 a, float32 b)
 {
-    set_use_first_nan(env->config->use_first_nan, &env->fp_status);
+    xtensa_use_first_nan(env, env->config->use_first_nan);
     return float32_mul(a, b, &env->fp_status);
 }
 
 float64 HELPER(madd_d)(CPUXtensaState *env, float64 a, float64 b, float64 c)
 {
-    set_use_first_nan(env->config->use_first_nan, &env->fp_status);
+    xtensa_use_first_nan(env, env->config->use_first_nan);
     return float64_muladd(b, c, a, 0, &env->fp_status);
 }
 
 float32 HELPER(madd_s)(CPUXtensaState *env, float32 a, float32 b, float32 c)
 {
-    set_use_first_nan(env->config->use_first_nan, &env->fp_status);
+    xtensa_use_first_nan(env, env->config->use_first_nan);
     return float32_muladd(b, c, a, 0, &env->fp_status);
 }
 
 float64 HELPER(msub_d)(CPUXtensaState *env, float64 a, float64 b, float64 c)
 {
-    set_use_first_nan(env->config->use_first_nan, &env->fp_status);
+    xtensa_use_first_nan(env, env->config->use_first_nan);
     return float64_muladd(b, c, a, float_muladd_negate_product,
                           &env->fp_status);
 }
 
 float32 HELPER(msub_s)(CPUXtensaState *env, float32 a, float32 b, float32 c)
 {
-    set_use_first_nan(env->config->use_first_nan, &env->fp_status);
+    xtensa_use_first_nan(env, env->config->use_first_nan);
     return float32_muladd(b, c, a, float_muladd_negate_product,
                           &env->fp_status);
 }
 
 float64 HELPER(mkdadj_d)(CPUXtensaState *env, float64 a, float64 b)
 {
-    set_use_first_nan(true, &env->fp_status);
+    xtensa_use_first_nan(env, true);
     return float64_div(b, a, &env->fp_status);
 }
 
 float32 HELPER(mkdadj_s)(CPUXtensaState *env, float32 a, float32 b)
 {
-    set_use_first_nan(env->config->use_first_nan, &env->fp_status);
+    xtensa_use_first_nan(env, env->config->use_first_nan);
     return float32_div(b, a, &env->fp_status);
 }
 
 float64 HELPER(mksadj_d)(CPUXtensaState *env, float64 v)
 {
-    set_use_first_nan(true, &env->fp_status);
+    xtensa_use_first_nan(env, true);
     return float64_sqrt(v, &env->fp_status);
 }
 
 float32 HELPER(mksadj_s)(CPUXtensaState *env, float32 v)
 {
-    set_use_first_nan(env->config->use_first_nan, &env->fp_status);
+    xtensa_use_first_nan(env, env->config->use_first_nan);
     return float32_sqrt(v, &env->fp_status);
 }
 

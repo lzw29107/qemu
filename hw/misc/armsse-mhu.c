@@ -20,10 +20,10 @@
 #include "qemu/module.h"
 #include "trace.h"
 #include "qapi/error.h"
-#include "hw/sysbus.h"
+#include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
-#include "hw/registerfields.h"
-#include "hw/irq.h"
+#include "hw/core/registerfields.h"
+#include "hw/core/irq.h"
 #include "hw/misc/armsse-mhu.h"
 
 REG32(CPU0INTR_STAT, 0x0)
@@ -176,11 +176,11 @@ static void armsse_mhu_init(Object *obj)
     sysbus_init_irq(sbd, &s->cpu1irq);
 }
 
-static void armsse_mhu_class_init(ObjectClass *klass, void *data)
+static void armsse_mhu_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->reset = armsse_mhu_reset;
+    device_class_set_legacy_reset(dc, armsse_mhu_reset);
     dc->vmsd = &armsse_mhu_vmstate;
 }
 

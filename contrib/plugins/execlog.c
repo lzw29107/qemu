@@ -91,10 +91,13 @@ static void insn_check_regs(CPU *cpu)
 {
     for (int n = 0; n < cpu->registers->len; n++) {
         Register *reg = cpu->registers->pdata[n];
-        int sz;
+        bool success = false;
+        int sz = 0;
 
         g_byte_array_set_size(reg->new, 0);
-        sz = qemu_plugin_read_register(reg->handle, reg->new);
+        success = qemu_plugin_read_register(reg->handle, reg->new);
+        g_assert(success);
+        sz = reg->new->len;
         g_assert(sz == reg->last->len);
 
         if (memcmp(reg->last->data, reg->new->data, sz)) {
@@ -174,15 +177,15 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata)
  * QEMU convert code by translation block (TB). By hooking here we can then hook
  * a callback on each instruction and memory access.
  */
-static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
+static void vcpu_tb_trans(struct qemu_plugin_tb *tb, void *userdata)
 {
     struct qemu_plugin_insn *insn;
     bool skip = (imatches || amatches);
     bool check_regs_this = rmatches;
     bool check_regs_next = false;
 
-    size_t n = qemu_plugin_tb_n_insns(tb);
-    for (size_t i = 0; i < n; i++) {
+    size_t n_insns = qemu_plugin_tb_n_insns(tb);
+    for (size_t i = 0; i < n_insns; i++) {
         char *insn_disas;
         uint64_t insn_vaddr;
 
@@ -232,12 +235,15 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
          */
         if (disas_assist && rmatches) {
             check_regs_next = false;
-            gchar *args = g_strstr_len(insn_disas, -1, " ");
-            for (int n = 0; n < all_reg_names->len; n++) {
-                gchar *reg = g_ptr_array_index(all_reg_names, n);
-                if (g_strrstr(args, reg)) {
-                    check_regs_next = true;
-                    skip = false;
+            g_auto(GStrv) args = g_strsplit_set(insn_disas, " \t", 2);
+            if (args && args[1]) {
+                for (int n = 0; n < all_reg_names->len; n++) {
+                    const gchar *reg = g_ptr_array_index(all_reg_names, n);
+                    if (g_strrstr(args[1], reg)) {
+                        check_regs_next = true;
+                        skip = false;
+                        break;
+                    }
                 }
             }
         }
@@ -299,7 +305,7 @@ static Register *init_vcpu_register(qemu_plugin_reg_descriptor *desc)
 {
     Register *reg = g_new0(Register, 1);
     g_autofree gchar *lower = g_utf8_strdown(desc->name, -1);
-    int r;
+    bool success = false;
 
     reg->handle = desc->handle;
     reg->name = g_intern_string(lower);
@@ -307,8 +313,8 @@ static Register *init_vcpu_register(qemu_plugin_reg_descriptor *desc)
     reg->new = g_byte_array_new();
 
     /* read the initial value */
-    r = qemu_plugin_read_register(reg->handle, reg->last);
-    g_assert(r > 0);
+    success = qemu_plugin_read_register(reg->handle, reg->last);
+    g_assert(success);
     return reg;
 }
 
@@ -376,7 +382,7 @@ static GPtrArray *registers_init(int vcpu_index)
  * As we could have multiple threads trying to do this we need to
  * serialise the expansion under a lock.
  */
-static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index)
+static void vcpu_init(unsigned int vcpu_index, void *userdata)
 {
     CPU *c;
 
@@ -394,7 +400,7 @@ static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index)
 /**
  * On plugin exit, print last instruction in cache
  */
-static void plugin_exit(qemu_plugin_id_t id, void *p)
+static void plugin_exit(void *p)
 {
     guint i;
     g_rw_lock_reader_lock(&expand_array_lock);
@@ -475,8 +481,8 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
     }
 
     /* Register init, translation block and exit callbacks */
-    qemu_plugin_register_vcpu_init_cb(id, vcpu_init);
-    qemu_plugin_register_vcpu_tb_trans_cb(id, vcpu_tb_trans);
+    qemu_plugin_register_vcpu_init_cb(id, vcpu_init, NULL);
+    qemu_plugin_register_vcpu_tb_trans_cb(id, vcpu_tb_trans, NULL);
     qemu_plugin_register_atexit_cb(id, plugin_exit, NULL);
 
     return 0;

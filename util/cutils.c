@@ -173,7 +173,7 @@ HRESULT WINAPI PathCchSkipRoot2(const WCHAR* path, const WCHAR** root_end)
 
 void strpadcpy(char *buf, int buf_size, const char *str, char pad)
 {
-    int len = qemu_strnlen(str, buf_size);
+    size_t len = strnlen(str, buf_size);
     memcpy(buf, str, len);
     memset(buf + len, pad, buf_size - len);
 }
@@ -235,19 +235,6 @@ int stristart(const char *str, const char *val, const char **ptr)
     if (ptr)
         *ptr = p;
     return 1;
-}
-
-/* XXX: use host strnlen if available ? */
-int qemu_strnlen(const char *s, int max_len)
-{
-    int i;
-
-    for(i = 0; i < max_len; i++) {
-        if (s[i] == '\0') {
-            break;
-        }
-    }
-    return i;
 }
 
 char *qemu_strsep(char **input, const char *delim)
@@ -1263,11 +1250,6 @@ void qemu_init_exec_dir(const char *argv0)
 #endif
 }
 
-const char *qemu_get_exec_dir(void)
-{
-    return exec_dir;
-}
-
 char *get_relocated_path(const char *dir)
 {
     size_t prefix_len = strlen(CONFIG_PREFIX);
@@ -1289,9 +1271,10 @@ char *get_relocated_path(const char *dir)
 
         PCWSTR wdir_skipped_root;
         if (PathCchSkipRoot2(wdir, &wdir_skipped_root) == S_OK) {
+            char *cursor;
             size = wcsrtombs(NULL, &wdir_skipped_root, 0, &(mbstate_t){0});
-            char *cursor = result->str + result->len;
             g_string_set_size(result, result->len + size);
+            cursor = result->str + result->len - size;
             wcsrtombs(cursor, &wdir_skipped_root, size + 1, &(mbstate_t){0});
         } else {
             g_string_append(result, dir);

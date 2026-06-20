@@ -6,7 +6,6 @@
 #endif
 
 #include "exec/cpu-defs.h"
-#include "exec/tswap.h"
 #include "user/tswap-target.h"
 
 #ifdef TARGET_ABI32
@@ -21,16 +20,9 @@
 #define ABI_LLONG_ALIGNMENT 2
 #endif
 
-#ifdef TARGET_CRIS
-#define ABI_SHORT_ALIGNMENT 1
-#define ABI_INT_ALIGNMENT 1
-#define ABI_LONG_ALIGNMENT 1
-#define ABI_LLONG_ALIGNMENT 1
-#endif
-
 #if (defined(TARGET_I386) && !defined(TARGET_X86_64)) \
     || defined(TARGET_SH4) \
-    || defined(TARGET_OPENRISC) \
+    || defined(TARGET_OR1K) \
     || defined(TARGET_MICROBLAZE)
 #define ABI_LLONG_ALIGNMENT 4
 #endif

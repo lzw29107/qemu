@@ -126,6 +126,7 @@ typedef struct DBusChardev {
 
     bool exported;
     QemuDBusDisplay1Chardev *iface;
+    QemuDBusDisplay1ChardevVCEncoding *iface_vc_encoding;
 } DBusChardev;
 
 DECLARE_INSTANCE_CHECKER(DBusChardev, DBUS_CHARDEV, TYPE_CHARDEV_DBUS)
@@ -150,5 +151,6 @@ void dbus_display_notify(DBusDisplayEvent *event);
 void dbus_chardev_init(DBusDisplay *dpy);
 
 void dbus_clipboard_init(DBusDisplay *dpy);
+void dbus_clipboard_fini(DBusDisplay *dpy);
 
 #endif /* UI_DBUS_H */

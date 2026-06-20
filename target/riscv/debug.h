@@ -23,8 +23,7 @@
 #define RISCV_DEBUG_H
 
 #include "exec/breakpoint.h"
-
-#define RV_MAX_TRIGGERS         2
+#include "exec/target_long.h"
 
 /* register index of tdata CSRs */
 enum {
@@ -130,6 +129,9 @@ enum {
 #define ITRIGGER_HIT          BIT(24)
 #define ITRIGGER_VU           BIT(25)
 #define ITRIGGER_VS           BIT(26)
+
+#define MHSELECT_IGNORE       0
+#define MHSELECT_MCONTEXT     4
 
 bool tdata_available(CPURISCVState *env, int tdata_index);
 

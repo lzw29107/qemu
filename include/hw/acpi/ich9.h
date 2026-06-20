@@ -22,12 +22,12 @@
 #define HW_ACPI_ICH9_H
 
 #include "hw/acpi/acpi.h"
-#include "hw/acpi/cpu_hotplug.h"
 #include "hw/acpi/cpu.h"
 #include "hw/acpi/pcihp.h"
 #include "hw/acpi/memory_hotplug.h"
 #include "hw/acpi/acpi_dev_interface.h"
 #include "hw/acpi/ich9_tco.h"
+#include "hw/acpi/cpu.h"
 
 #define ACPI_PCIHP_ADDR_ICH9 0x0cc0
 
@@ -46,14 +46,13 @@ typedef struct ICH9LPCPMRegs {
     uint32_t smi_en;
     uint32_t smi_en_wmask;
     uint32_t smi_sts;
+    uint32_t smi_sts_wmask;
 
     qemu_irq irq;      /* SCI */
 
     uint32_t pm_io_base;
     Notifier powerdown_notifier;
 
-    bool cpu_hotplug_legacy;
-    AcpiCpuHotplug gpe_cpu;
     CPUHotplugState cpuhp_state;
 
     bool keep_pci_slot_hpc;
@@ -68,6 +67,11 @@ typedef struct ICH9LPCPMRegs {
     bool smm_compat;
     bool enable_tco;
     TCOIORegs tco_regs;
+
+    bool swsmi_timer_enabled;
+    bool periodic_timer_enabled;
+    QEMUTimer *swsmi_timer;
+    QEMUTimer *periodic_timer;
 } ICH9LPCPMRegs;
 
 #define ACPI_PM_PROP_TCO_ENABLED "enable_tco"

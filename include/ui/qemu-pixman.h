@@ -8,9 +8,12 @@
 
 #ifdef CONFIG_PIXMAN
 #include <pixman.h>
+#include "qemu-pixman-helpers.h"
 #else
 #include "pixman-minimal.h"
 #endif
+
+#include "qapi/error.h"
 
 /*
  * pixman image formats are defined to be native endian,
@@ -71,14 +74,22 @@ typedef struct PixelFormat {
 
 PixelFormat qemu_pixelformat_from_pixman(pixman_format_code_t format);
 pixman_format_code_t qemu_default_pixman_format(int bpp, bool native_endian);
+
+static inline PixelFormat qemu_default_pixelformat(int bpp)
+{
+    pixman_format_code_t fmt = qemu_default_pixman_format(bpp, true);
+    PixelFormat pf = qemu_pixelformat_from_pixman(fmt);
+    return pf;
+}
+
 pixman_format_code_t qemu_drm_format_to_pixman(uint32_t drm_format);
 uint32_t qemu_pixman_to_drm_format(pixman_format_code_t pixman);
-int qemu_pixman_get_type(int rshift, int gshift, int bshift);
+int qemu_pixman_get_type(int rshift, int gshift, int bshift, int endian);
 bool qemu_pixman_check_format(DisplayChangeListener *dcl,
                               pixman_format_code_t format);
 
 #ifdef CONFIG_PIXMAN
-pixman_format_code_t qemu_pixman_get_format(PixelFormat *pf);
+pixman_format_code_t qemu_pixman_get_format(PixelFormat *pf, int endian);
 pixman_image_t *qemu_pixman_linebuf_create(pixman_format_code_t format,
                                            int width);
 void qemu_pixman_linebuf_fill(pixman_image_t *linebuf, pixman_image_t *fb,
@@ -96,6 +107,28 @@ void qemu_pixman_glyph_render(pixman_image_t *glyph,
 #endif
 
 void qemu_pixman_image_unref(pixman_image_t *image);
+
+#ifdef WIN32
+typedef HANDLE qemu_pixman_shareable;
+#define SHAREABLE_NONE (NULL)
+#define SHAREABLE_TO_PTR(handle) (handle)
+#define PTR_TO_SHAREABLE(ptr) (ptr)
+#else
+typedef int qemu_pixman_shareable;
+#define SHAREABLE_NONE (-1)
+#define SHAREABLE_TO_PTR(handle) GINT_TO_POINTER(handle)
+#define PTR_TO_SHAREABLE(ptr) GPOINTER_TO_INT(ptr)
+#endif
+
+bool qemu_pixman_image_new_shareable(
+    pixman_image_t **image,
+    qemu_pixman_shareable *handle,
+    const char *name,
+    pixman_format_code_t format,
+    int width,
+    int height,
+    int rowstride_bytes,
+    Error **errp);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(pixman_image_t, qemu_pixman_image_unref)
 

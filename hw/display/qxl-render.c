@@ -21,7 +21,7 @@
 
 #include "qemu/osdep.h"
 #include "qxl.h"
-#include "sysemu/runstate.h"
+#include "system/runstate.h"
 #include "trace.h"
 
 static void qxl_blit(PCIQXLDevice *qxl, QXLRect *rect)
@@ -135,7 +135,7 @@ static void qxl_render_update_area_unlocked(PCIQXLDevice *qxl)
                 (width,
                  height);
         }
-        dpy_gfx_replace_surface(vga->con, surface);
+        qemu_console_set_surface(vga->con, surface);
     }
 
     if (!qxl->guest_primary.data) {
@@ -154,16 +154,16 @@ static void qxl_render_update_area_unlocked(PCIQXLDevice *qxl)
             continue;
         }
         qxl_blit(qxl, qxl->dirty+i);
-        dpy_gfx_update(vga->con,
-                       qxl->dirty[i].left, qxl->dirty[i].top,
-                       qxl->dirty[i].right - qxl->dirty[i].left,
-                       qxl->dirty[i].bottom - qxl->dirty[i].top);
+        qemu_console_update(vga->con,
+                            qxl->dirty[i].left, qxl->dirty[i].top,
+                            qxl->dirty[i].right - qxl->dirty[i].left,
+                            qxl->dirty[i].bottom - qxl->dirty[i].top);
     }
     qxl->num_dirty_rects = 0;
 
 end:
     if (qxl->render_update_cookie_num == 0) {
-        graphic_hw_update_done(qxl->ssd.dcl.con);
+        qemu_console_hw_update_done(qxl->ssd.dcl.con);
     }
 }
 
@@ -173,7 +173,7 @@ end:
  * callbacks are called by spice_server thread, deferring to bh called from the
  * io thread.
  */
-void qxl_render_update(PCIQXLDevice *qxl)
+bool qxl_render_update(PCIQXLDevice *qxl)
 {
     QXLCookie *cookie;
 
@@ -183,8 +183,7 @@ void qxl_render_update(PCIQXLDevice *qxl)
         qxl->mode == QXL_MODE_UNDEFINED) {
         qxl_render_update_area_unlocked(qxl);
         qemu_mutex_unlock(&qxl->ssd.lock);
-        graphic_hw_update_done(qxl->ssd.dcl.con);
-        return;
+        return true;
     }
 
     qxl->guest_primary.commands = 0;
@@ -195,6 +194,7 @@ void qxl_render_update(PCIQXLDevice *qxl)
     qxl_set_rect_to_surface(qxl, &cookie->u.render.area);
     qxl_spice_update_area(qxl, 0, &cookie->u.render.area, NULL,
                           0, 1 /* clear_dirty_region */, QXL_ASYNC, cookie);
+    return false;
 }
 
 void qxl_render_update_area_bh(void *opaque)
@@ -222,6 +222,7 @@ static void qxl_unpack_chunks(void *dest, size_t size, PCIQXLDevice *qxl,
     uint32_t max_chunks = 32;
     size_t offset = 0;
     size_t bytes;
+    QXLPHYSICAL next_chunk_phys = 0;
 
     for (;;) {
         bytes = MIN(size - offset, chunk->data_size);
@@ -230,7 +231,15 @@ static void qxl_unpack_chunks(void *dest, size_t size, PCIQXLDevice *qxl,
         if (offset == size) {
             return;
         }
-        chunk = qxl_phys2virt(qxl, chunk->next_chunk, group_id,
+        next_chunk_phys = chunk->next_chunk;
+        /* fist time, only get the next chunk's data size */
+        chunk = qxl_phys2virt(qxl, next_chunk_phys, group_id,
+                              sizeof(QXLDataChunk));
+        if (!chunk) {
+            return;
+        }
+        /* second time, check data size and get data */
+        chunk = qxl_phys2virt(qxl, next_chunk_phys, group_id,
                               sizeof(QXLDataChunk) + chunk->data_size);
         if (!chunk) {
             return;

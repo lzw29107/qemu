@@ -23,8 +23,10 @@
  */
 
 #include "qemu/osdep.h"
+#include "standard-headers/linux/input-event-codes.h"
 #include "ui/console.h"
-#include "hw/qdev-core.h"
+#include "ui/vgafont.h"
+#include "hw/core/qdev.h"
 #include "qapi/error.h"
 #include "qapi/qapi-commands-ui.h"
 #include "qapi/visitor.h"
@@ -35,8 +37,11 @@
 #include "qemu/option.h"
 #include "chardev/char.h"
 #include "trace.h"
-#include "exec/memory.h"
+#include "system/memory.h"
 #include "qom/object.h"
+#include "qemu/memfd.h"
+#include "ui/vt100.h"
+#include "vgafont.h"
 
 #include "console-priv.h"
 
@@ -125,31 +130,26 @@ static void gui_setup_refresh(DisplayState *ds)
     }
 }
 
-void graphic_hw_update_done(QemuConsole *con)
+void qemu_console_hw_update_done(QemuConsole *con)
 {
     if (con) {
         qemu_co_enter_all(&con->dump_queue, NULL);
     }
 }
 
-void graphic_hw_update(QemuConsole *con)
+void qemu_console_hw_update(QemuConsole *con)
 {
-    bool async = false;
     if (!con) {
         return;
     }
-    if (con->hw_ops->gfx_update) {
-        con->hw_ops->gfx_update(con->hw);
-        async = con->hw_ops->gfx_update_async;
-    }
-    if (!async) {
-        graphic_hw_update_done(con);
+    if (!con->hw_ops->gfx_update || con->hw_ops->gfx_update(con->hw)) {
+        qemu_console_hw_update_done(con);
     }
 }
 
-static void graphic_hw_update_bh(void *con)
+static void console_hw_update_bh(void *con)
 {
-    graphic_hw_update(con);
+    qemu_console_hw_update(con);
 }
 
 void qemu_console_co_wait_update(QemuConsole *con)
@@ -157,18 +157,18 @@ void qemu_console_co_wait_update(QemuConsole *con)
     if (qemu_co_queue_empty(&con->dump_queue)) {
         /* Defer the update, it will restart the pending coroutines */
         aio_bh_schedule_oneshot(qemu_get_aio_context(),
-                                graphic_hw_update_bh, con);
+                                console_hw_update_bh, con);
     }
     qemu_co_queue_wait(&con->dump_queue, NULL);
 
 }
 
-static void graphic_hw_gl_unblock_timer(void *opaque)
+static void console_hw_gl_unblock_timer(void *opaque)
 {
     warn_report("console: no gl-unblock within one second");
 }
 
-void graphic_hw_gl_block(QemuConsole *con, bool block)
+void qemu_console_hw_gl_block(QemuConsole *con, bool block)
 {
     uint64_t timeout;
     assert(con != NULL);
@@ -206,14 +206,14 @@ void qemu_console_set_window_id(QemuConsole *con, int window_id)
     con->window_id = window_id;
 }
 
-void graphic_hw_invalidate(QemuConsole *con)
+void qemu_console_hw_invalidate(QemuConsole *con)
 {
     if (con && con->hw_ops->invalidate) {
         con->hw_ops->invalidate(con->hw);
     }
 }
 
-void graphic_hw_text_update(QemuConsole *con, console_ch_t *chardata)
+void qemu_console_hw_text_update(QemuConsole *con, uint32_t *chardata)
 {
     if (con && con->hw_ops->text_update) {
         con->hw_ops->text_update(con->hw, chardata);
@@ -303,36 +303,51 @@ void qemu_text_console_put_keysym(QemuTextConsole *s, int keysym)
     qemu_text_console_handle_keysym(s, keysym);
 }
 
-static const int qcode_to_keysym[Q_KEY_CODE__MAX] = {
-    [Q_KEY_CODE_UP]     = QEMU_KEY_UP,
-    [Q_KEY_CODE_DOWN]   = QEMU_KEY_DOWN,
-    [Q_KEY_CODE_RIGHT]  = QEMU_KEY_RIGHT,
-    [Q_KEY_CODE_LEFT]   = QEMU_KEY_LEFT,
-    [Q_KEY_CODE_HOME]   = QEMU_KEY_HOME,
-    [Q_KEY_CODE_END]    = QEMU_KEY_END,
-    [Q_KEY_CODE_PGUP]   = QEMU_KEY_PAGEUP,
-    [Q_KEY_CODE_PGDN]   = QEMU_KEY_PAGEDOWN,
-    [Q_KEY_CODE_DELETE] = QEMU_KEY_DELETE,
-    [Q_KEY_CODE_TAB]    = QEMU_KEY_TAB,
-    [Q_KEY_CODE_BACKSPACE] = QEMU_KEY_BACKSPACE,
+static const int linux_to_keysym[] = {
+    [KEY_UP]     = QEMU_KEY_UP,
+    [KEY_DOWN]   = QEMU_KEY_DOWN,
+    [KEY_RIGHT]  = QEMU_KEY_RIGHT,
+    [KEY_LEFT]   = QEMU_KEY_LEFT,
+    [KEY_HOME]   = QEMU_KEY_HOME,
+    [KEY_END]    = QEMU_KEY_END,
+    [KEY_PAGEUP]   = QEMU_KEY_PAGEUP,
+    [KEY_PAGEDOWN]   = QEMU_KEY_PAGEDOWN,
+    [KEY_DELETE] = QEMU_KEY_DELETE,
+    [KEY_TAB]    = QEMU_KEY_TAB,
+    [KEY_BACKSPACE] = QEMU_KEY_BACKSPACE,
 };
 
-static const int ctrl_qcode_to_keysym[Q_KEY_CODE__MAX] = {
-    [Q_KEY_CODE_UP]     = QEMU_KEY_CTRL_UP,
-    [Q_KEY_CODE_DOWN]   = QEMU_KEY_CTRL_DOWN,
-    [Q_KEY_CODE_RIGHT]  = QEMU_KEY_CTRL_RIGHT,
-    [Q_KEY_CODE_LEFT]   = QEMU_KEY_CTRL_LEFT,
-    [Q_KEY_CODE_HOME]   = QEMU_KEY_CTRL_HOME,
-    [Q_KEY_CODE_END]    = QEMU_KEY_CTRL_END,
-    [Q_KEY_CODE_PGUP]   = QEMU_KEY_CTRL_PAGEUP,
-    [Q_KEY_CODE_PGDN]   = QEMU_KEY_CTRL_PAGEDOWN,
+static const int ctrl_linux_to_keysym[] = {
+    [KEY_UP]     = QEMU_KEY_CTRL_UP,
+    [KEY_DOWN]   = QEMU_KEY_CTRL_DOWN,
+    [KEY_RIGHT]  = QEMU_KEY_CTRL_RIGHT,
+    [KEY_LEFT]   = QEMU_KEY_CTRL_LEFT,
+    [KEY_HOME]   = QEMU_KEY_CTRL_HOME,
+    [KEY_END]    = QEMU_KEY_CTRL_END,
+    [KEY_PAGEUP]   = QEMU_KEY_CTRL_PAGEUP,
+    [KEY_PAGEDOWN]   = QEMU_KEY_CTRL_PAGEDOWN,
 };
 
-bool qemu_text_console_put_qcode(QemuTextConsole *s, int qcode, bool ctrl)
+bool qemu_text_console_put_linux(QemuTextConsole *s, unsigned int lnx,
+                                 bool ctrl)
 {
+    size_t maplen;
+    const int *map;
     int keysym;
 
-    keysym = ctrl ? ctrl_qcode_to_keysym[qcode] : qcode_to_keysym[qcode];
+    if (ctrl) {
+        maplen = ARRAY_SIZE(ctrl_linux_to_keysym);
+        map = ctrl_linux_to_keysym;
+    } else {
+        maplen = ARRAY_SIZE(linux_to_keysym);
+        map = linux_to_keysym;
+    }
+
+    if (lnx >= maplen) {
+        return false;
+    }
+
+    keysym = map[lnx];
     if (keysym == 0) {
         return false;
     }
@@ -393,14 +408,17 @@ qemu_console_finalize(Object *obj)
 {
     QemuConsole *c = QEMU_CONSOLE(obj);
 
-    /* TODO: check this code path, and unregister from consoles */
+    /* TODO: fix hot-unplug support of consoles */
+    assert(c->gl_block == 0);
+    assert(qemu_co_queue_empty(&c->dump_queue));
     g_clear_pointer(&c->surface, qemu_free_displaysurface);
     g_clear_pointer(&c->gl_unblock_timer, timer_free);
     g_clear_pointer(&c->ui_timer, timer_free);
+    QTAILQ_REMOVE(&consoles, c, next);
 }
 
 static void
-qemu_console_class_init(ObjectClass *oc, void *data)
+qemu_console_class_init(ObjectClass *oc, const void *data)
 {
 }
 
@@ -435,9 +453,58 @@ qemu_graphic_console_prop_get_head(Object *obj, Visitor *v, const char *name,
     visit_type_uint32(v, name, &c->head, errp);
 }
 
-static void
-qemu_graphic_console_class_init(ObjectClass *oc, void *data)
+static bool
+qemu_graphic_console_is_multihead(QemuGraphicConsole *c)
 {
+    QemuConsole *con;
+
+    QTAILQ_FOREACH(con, &consoles, next) {
+        QemuGraphicConsole *candidate;
+
+        if (!QEMU_IS_GRAPHIC_CONSOLE(con)) {
+            continue;
+        }
+
+        candidate = QEMU_GRAPHIC_CONSOLE(con);
+        if (candidate->device != c->device) {
+            continue;
+        }
+
+        if (candidate->head != c->head) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static char *
+qemu_graphic_console_get_label(const QemuConsole *con)
+{
+    QemuGraphicConsole *c = QEMU_GRAPHIC_CONSOLE(con);
+
+    if (c->device) {
+        DeviceState *dev;
+        bool multihead;
+
+        dev = DEVICE(c->device);
+        multihead = qemu_graphic_console_is_multihead(c);
+        if (multihead) {
+            return g_strdup_printf("%s.%d", dev->id ?
+                                   dev->id :
+                                   object_get_typename(c->device),
+                                   c->head);
+        } else {
+            return g_strdup(dev->id ? : object_get_typename(c->device));
+        }
+    }
+    return g_strdup("VGA");
+}
+
+static void
+qemu_graphic_console_class_init(ObjectClass *oc, const void *data)
+{
+    QemuConsoleClass *cc = QEMU_CONSOLE_CLASS(oc);
+
     object_class_property_add_link(oc, "device", TYPE_DEVICE,
                                    offsetof(QemuGraphicConsole, device),
                                    object_property_allow_set_link,
@@ -445,6 +512,8 @@ qemu_graphic_console_class_init(ObjectClass *oc, void *data)
     object_class_property_add(oc, "head", "uint32",
                               qemu_graphic_console_prop_get_head,
                               NULL, NULL, NULL);
+
+    cc->get_label = qemu_graphic_console_get_label;
 }
 
 static void
@@ -452,126 +521,7 @@ qemu_graphic_console_init(Object *obj)
 {
 }
 
-#ifdef WIN32
-void qemu_displaysurface_win32_set_handle(DisplaySurface *surface,
-                                          HANDLE h, uint32_t offset)
-{
-    assert(!surface->handle);
-
-    surface->handle = h;
-    surface->handle_offset = offset;
-}
-
-static void
-win32_pixman_image_destroy(pixman_image_t *image, void *data)
-{
-    DisplaySurface *surface = data;
-
-    if (!surface->handle) {
-        return;
-    }
-
-    assert(surface->handle_offset == 0);
-
-    qemu_win32_map_free(
-        pixman_image_get_data(surface->image),
-        surface->handle,
-        &error_warn
-    );
-}
-#endif
-
-DisplaySurface *qemu_create_displaysurface(int width, int height)
-{
-    DisplaySurface *surface;
-    void *bits = NULL;
-#ifdef WIN32
-    HANDLE handle = NULL;
-#endif
-
-    trace_displaysurface_create(width, height);
-
-#ifdef WIN32
-    bits = qemu_win32_map_alloc(width * height * 4, &handle, &error_abort);
-#endif
-
-    surface = qemu_create_displaysurface_from(
-        width, height,
-        PIXMAN_x8r8g8b8,
-        width * 4, bits
-    );
-    surface->flags = QEMU_ALLOCATED_FLAG;
-
-#ifdef WIN32
-    qemu_displaysurface_win32_set_handle(surface, handle, 0);
-#endif
-    return surface;
-}
-
-DisplaySurface *qemu_create_displaysurface_from(int width, int height,
-                                                pixman_format_code_t format,
-                                                int linesize, uint8_t *data)
-{
-    DisplaySurface *surface = g_new0(DisplaySurface, 1);
-
-    trace_displaysurface_create_from(surface, width, height, format);
-    surface->image = pixman_image_create_bits(format,
-                                              width, height,
-                                              (void *)data, linesize);
-    assert(surface->image != NULL);
-#ifdef WIN32
-    pixman_image_set_destroy_function(surface->image,
-                                      win32_pixman_image_destroy, surface);
-#endif
-
-    return surface;
-}
-
-DisplaySurface *qemu_create_displaysurface_pixman(pixman_image_t *image)
-{
-    DisplaySurface *surface = g_new0(DisplaySurface, 1);
-
-    trace_displaysurface_create_pixman(surface);
-    surface->image = pixman_image_ref(image);
-
-    return surface;
-}
-
-DisplaySurface *qemu_create_placeholder_surface(int w, int h,
-                                                const char *msg)
-{
-    DisplaySurface *surface = qemu_create_displaysurface(w, h);
-#ifdef CONFIG_PIXMAN
-    pixman_color_t bg = QEMU_PIXMAN_COLOR_BLACK;
-    pixman_color_t fg = QEMU_PIXMAN_COLOR_GRAY;
-    pixman_image_t *glyph;
-    int len, x, y, i;
-
-    len = strlen(msg);
-    x = (w / FONT_WIDTH  - len) / 2;
-    y = (h / FONT_HEIGHT - 1)   / 2;
-    for (i = 0; i < len; i++) {
-        glyph = qemu_pixman_glyph_from_vgafont(FONT_HEIGHT, vgafont16, msg[i]);
-        qemu_pixman_glyph_render(glyph, surface->image, &fg, &bg,
-                                 x+i, y, FONT_WIDTH, FONT_HEIGHT);
-        qemu_pixman_image_unref(glyph);
-    }
-#endif
-    surface->flags |= QEMU_PLACEHOLDER_FLAG;
-    return surface;
-}
-
-void qemu_free_displaysurface(DisplaySurface *surface)
-{
-    if (surface == NULL) {
-        return;
-    }
-    trace_displaysurface_free(surface);
-    qemu_pixman_image_unref(surface->image);
-    g_free(surface);
-}
-
-bool console_has_gl(QemuConsole *con)
+bool qemu_console_has_gl(QemuConsole *con)
 {
     return con->gl != NULL;
 }
@@ -596,7 +546,7 @@ static bool console_compatible_with(QemuConsole *con,
 
     flags = con->hw_ops->get_flags ? con->hw_ops->get_flags(con->hw) : 0;
 
-    if (console_has_gl(con) &&
+    if (qemu_console_has_gl(con) &&
         !con->gl->ops->dpy_gl_ctx_is_compatible_dcl(con->gl, dcl)) {
         error_setg(errp, "Display %s is incompatible with the GL context",
                    dcl->ops->dpy_name);
@@ -604,7 +554,7 @@ static bool console_compatible_with(QemuConsole *con,
     }
 
     if (flags & GRAPHIC_FLAGS_GL &&
-        !console_has_gl(con)) {
+        !qemu_console_has_gl(con)) {
         error_setg(errp, "The console requires a GL context.");
         return false;
 
@@ -617,71 +567,6 @@ static bool console_compatible_with(QemuConsole *con,
     }
 
     return true;
-}
-
-void console_handle_touch_event(QemuConsole *con,
-                                struct touch_slot touch_slots[INPUT_EVENT_SLOTS_MAX],
-                                uint64_t num_slot,
-                                int width, int height,
-                                double x, double y,
-                                InputMultiTouchType type,
-                                Error **errp)
-{
-    struct touch_slot *slot;
-    bool needs_sync = false;
-    int update;
-    int i;
-
-    if (num_slot >= INPUT_EVENT_SLOTS_MAX) {
-        error_setg(errp,
-                   "Unexpected touch slot number: % " PRId64" >= %d",
-                   num_slot, INPUT_EVENT_SLOTS_MAX);
-        return;
-    }
-
-    slot = &touch_slots[num_slot];
-    slot->x = x;
-    slot->y = y;
-
-    if (type == INPUT_MULTI_TOUCH_TYPE_BEGIN) {
-        slot->tracking_id = num_slot;
-    }
-
-    for (i = 0; i < INPUT_EVENT_SLOTS_MAX; ++i) {
-        if (i == num_slot) {
-            update = type;
-        } else {
-            update = INPUT_MULTI_TOUCH_TYPE_UPDATE;
-        }
-
-        slot = &touch_slots[i];
-
-        if (slot->tracking_id == -1) {
-            continue;
-        }
-
-        if (update == INPUT_MULTI_TOUCH_TYPE_END) {
-            slot->tracking_id = -1;
-            qemu_input_queue_mtt(con, update, i, slot->tracking_id);
-            needs_sync = true;
-        } else {
-            qemu_input_queue_mtt(con, update, i, slot->tracking_id);
-            qemu_input_queue_btn(con, INPUT_BUTTON_TOUCH, true);
-            qemu_input_queue_mtt_abs(con,
-                                    INPUT_AXIS_X, (int) slot->x,
-                                    0, width,
-                                    i, slot->tracking_id);
-            qemu_input_queue_mtt_abs(con,
-                                    INPUT_AXIS_Y, (int) slot->y,
-                                    0, height,
-                                    i, slot->tracking_id);
-            needs_sync = true;
-        }
-    }
-
-    if (needs_sync) {
-        qemu_input_event_sync();
-    }
 }
 
 void qemu_console_set_display_gl_ctx(QemuConsole *con, DisplayGLCtx *gl)
@@ -706,28 +591,41 @@ dcl_set_graphic_cursor(DisplayChangeListener *dcl, QemuGraphicConsole *con)
     }
 }
 
-void register_displaychangelistener(DisplayChangeListener *dcl)
+/*
+ * qemu_console_register_listener:
+ * @con: the console to attach the listener to
+ * @dcl: the display change listener to register
+ * @ops: the listener operations (callbacks for display updates)
+ *
+ * Register a display change listener on a console. The listener
+ * must not already be registered (i.e. @dcl->ds must be NULL).
+ * This sets up the listener, adds it to the display state, triggers
+ * an initial display update, and setup the cursor.
+ */
+void qemu_console_register_listener(QemuConsole *con,
+                                    DisplayChangeListener *dcl,
+                                    const DisplayChangeListenerOps *ops)
 {
     assert(!dcl->ds);
+
+    dcl->con = con;
+    dcl->ops = ops;
 
     trace_displaychangelistener_register(dcl, dcl->ops->dpy_name);
     dcl->ds = get_alloc_displaystate();
     QLIST_INSERT_HEAD(&dcl->ds->listeners, dcl, next);
     gui_setup_refresh(dcl->ds);
-    if (dcl->con) {
-        dcl->con->dcls++;
-    }
     displaychangelistener_display_console(dcl, &error_fatal);
     if (QEMU_IS_GRAPHIC_CONSOLE(dcl->con)) {
         dcl_set_graphic_cursor(dcl, QEMU_GRAPHIC_CONSOLE(dcl->con));
     } else if (QEMU_IS_TEXT_CONSOLE(dcl->con)) {
         qemu_text_console_update_size(QEMU_TEXT_CONSOLE(dcl->con));
     }
-    qemu_text_console_update_cursor();
+    vt100_update_cursor();
 }
 
-void update_displaychangelistener(DisplayChangeListener *dcl,
-                                  uint64_t interval)
+void qemu_console_listener_set_refresh(DisplayChangeListener *dcl,
+                                       uint64_t interval)
 {
     DisplayState *ds = dcl->ds;
 
@@ -737,12 +635,21 @@ void update_displaychangelistener(DisplayChangeListener *dcl,
     }
 }
 
-void unregister_displaychangelistener(DisplayChangeListener *dcl)
+/*
+ * qemu_console_unregister_listener:
+ * @dcl: the display change listener to unregister
+ *
+ * Unregister a display change listener, removing it from the
+ * display state's listener list. If the listener is not currently
+ * registered (@dcl->ds is NULL), this is a no-op. After unregistering,
+ * the display refresh timer is recalculated.
+ */
+void qemu_console_unregister_listener(DisplayChangeListener *dcl)
 {
     DisplayState *ds = dcl->ds;
-    trace_displaychangelistener_unregister(dcl, dcl->ops->dpy_name);
-    if (dcl->con) {
-        dcl->con->dcls--;
+    trace_displaychangelistener_unregister(dcl, dcl->ops ? dcl->ops->dpy_name : NULL);
+    if (!ds) {
+        return;
     }
     QLIST_REMOVE(dcl, next);
     dcl->ds = NULL;
@@ -757,7 +664,7 @@ static void dpy_set_ui_info_timer(void *opaque)
     con->hw_ops->ui_info(con->hw, head, &con->ui_info);
 }
 
-bool dpy_ui_info_supported(const QemuConsole *con)
+bool qemu_console_ui_info_supported(const QemuConsole *con)
 {
     if (con == NULL) {
         return false;
@@ -766,16 +673,16 @@ bool dpy_ui_info_supported(const QemuConsole *con)
     return con->hw_ops->ui_info != NULL;
 }
 
-const QemuUIInfo *dpy_get_ui_info(const QemuConsole *con)
+const QemuUIInfo *qemu_console_get_ui_info(const QemuConsole *con)
 {
-    assert(dpy_ui_info_supported(con));
+    assert(qemu_console_ui_info_supported(con));
 
     return &con->ui_info;
 }
 
-int dpy_set_ui_info(QemuConsole *con, QemuUIInfo *info, bool delay)
+int qemu_console_set_ui_info(QemuConsole *con, QemuUIInfo *info, bool delay)
 {
-    if (!dpy_ui_info_supported(con)) {
+    if (!qemu_console_ui_info_supported(con)) {
         return -1;
     }
     if (memcmp(&con->ui_info, info, sizeof(con->ui_info)) == 0) {
@@ -794,7 +701,7 @@ int dpy_set_ui_info(QemuConsole *con, QemuUIInfo *info, bool delay)
     return 0;
 }
 
-void dpy_gfx_update(QemuConsole *con, int x, int y, int w, int h)
+void qemu_console_update(QemuConsole *con, int x, int y, int w, int h)
 {
     DisplayState *s = con->ds;
     DisplayChangeListener *dcl;
@@ -808,9 +715,6 @@ void dpy_gfx_update(QemuConsole *con, int x, int y, int w, int h)
     w = MIN(w, width - x);
     h = MIN(h, height - y);
 
-    if (!qemu_console_is_visible(con)) {
-        return;
-    }
     dpy_gfx_update_texture(con, con->surface, x, y, w, h);
     QLIST_FOREACH(dcl, &s->listeners, next) {
         if (con != dcl->con) {
@@ -822,15 +726,15 @@ void dpy_gfx_update(QemuConsole *con, int x, int y, int w, int h)
     }
 }
 
-void dpy_gfx_update_full(QemuConsole *con)
+void qemu_console_update_full(QemuConsole *con)
 {
     int w = qemu_console_get_width(con, 0);
     int h = qemu_console_get_height(con, 0);
 
-    dpy_gfx_update(con, 0, 0, w, h);
+    qemu_console_update(con, 0, 0, w, h);
 }
 
-void dpy_gfx_replace_surface(QemuConsole *con,
+void qemu_console_set_surface(QemuConsole *con,
                              DisplaySurface *surface)
 {
     static const char placeholder_msg[] = "Display output is not active.";
@@ -868,8 +772,8 @@ void dpy_gfx_replace_surface(QemuConsole *con,
     qemu_free_displaysurface(old_surface);
 }
 
-bool dpy_gfx_check_format(QemuConsole *con,
-                          pixman_format_code_t format)
+bool qemu_console_check_format(QemuConsole *con,
+                               pixman_format_code_t format)
 {
     DisplayChangeListener *dcl;
     DisplayState *s = con->ds;
@@ -904,14 +808,11 @@ static void dpy_refresh(DisplayState *s)
     }
 }
 
-void dpy_text_cursor(QemuConsole *con, int x, int y)
+void qemu_console_text_set_cursor(QemuConsole *con, int x, int y)
 {
     DisplayState *s = con->ds;
     DisplayChangeListener *dcl;
 
-    if (!qemu_console_is_visible(con)) {
-        return;
-    }
     QLIST_FOREACH(dcl, &s->listeners, next) {
         if (con != dcl->con) {
             continue;
@@ -922,14 +823,11 @@ void dpy_text_cursor(QemuConsole *con, int x, int y)
     }
 }
 
-void dpy_text_update(QemuConsole *con, int x, int y, int w, int h)
+void qemu_console_text_update(QemuConsole *con, int x, int y, int w, int h)
 {
     DisplayState *s = con->ds;
     DisplayChangeListener *dcl;
 
-    if (!qemu_console_is_visible(con)) {
-        return;
-    }
     QLIST_FOREACH(dcl, &s->listeners, next) {
         if (con != dcl->con) {
             continue;
@@ -940,14 +838,11 @@ void dpy_text_update(QemuConsole *con, int x, int y, int w, int h)
     }
 }
 
-void dpy_text_resize(QemuConsole *con, int w, int h)
+void qemu_console_text_resize(QemuConsole *con, int w, int h)
 {
     DisplayState *s = con->ds;
     DisplayChangeListener *dcl;
 
-    if (!qemu_console_is_visible(con)) {
-        return;
-    }
     QLIST_FOREACH(dcl, &s->listeners, next) {
         if (con != dcl->con) {
             continue;
@@ -958,7 +853,7 @@ void dpy_text_resize(QemuConsole *con, int w, int h)
     }
 }
 
-void dpy_mouse_set(QemuConsole *c, int x, int y, bool on)
+void qemu_console_set_mouse(QemuConsole *c, int x, int y, bool on)
 {
     QemuGraphicConsole *con = QEMU_GRAPHIC_CONSOLE(c);
     DisplayState *s = c->ds;
@@ -967,9 +862,6 @@ void dpy_mouse_set(QemuConsole *c, int x, int y, bool on)
     con->cursor_x = x;
     con->cursor_y = y;
     con->cursor_on = on;
-    if (!qemu_console_is_visible(c)) {
-        return;
-    }
     QLIST_FOREACH(dcl, &s->listeners, next) {
         if (c != dcl->con) {
             continue;
@@ -980,7 +872,7 @@ void dpy_mouse_set(QemuConsole *c, int x, int y, bool on)
     }
 }
 
-void dpy_cursor_define(QemuConsole *c, QEMUCursor *cursor)
+void qemu_console_set_cursor(QemuConsole *c, QEMUCursor *cursor)
 {
     QemuGraphicConsole *con = QEMU_GRAPHIC_CONSOLE(c);
     DisplayState *s = c->ds;
@@ -988,9 +880,6 @@ void dpy_cursor_define(QemuConsole *c, QEMUCursor *cursor)
 
     cursor_unref(con->cursor);
     con->cursor = cursor_ref(cursor);
-    if (!qemu_console_is_visible(c)) {
-        return;
-    }
     QLIST_FOREACH(dcl, &s->listeners, next) {
         if (c != dcl->con) {
             continue;
@@ -1001,26 +890,26 @@ void dpy_cursor_define(QemuConsole *c, QEMUCursor *cursor)
     }
 }
 
-QEMUGLContext dpy_gl_ctx_create(QemuConsole *con,
-                                struct QEMUGLParams *qparams)
+QEMUGLContext qemu_console_gl_ctx_create(QemuConsole *con,
+                                         QEMUGLParams *qparams)
 {
     assert(con->gl);
     return con->gl->ops->dpy_gl_ctx_create(con->gl, qparams);
 }
 
-void dpy_gl_ctx_destroy(QemuConsole *con, QEMUGLContext ctx)
+void qemu_console_gl_ctx_destroy(QemuConsole *con, QEMUGLContext ctx)
 {
     assert(con->gl);
     con->gl->ops->dpy_gl_ctx_destroy(con->gl, ctx);
 }
 
-int dpy_gl_ctx_make_current(QemuConsole *con, QEMUGLContext ctx)
+int qemu_console_gl_ctx_make_current(QemuConsole *con, QEMUGLContext ctx)
 {
     assert(con->gl);
     return con->gl->ops->dpy_gl_ctx_make_current(con->gl, ctx);
 }
 
-void dpy_gl_scanout_disable(QemuConsole *con)
+void qemu_console_gl_scanout_disable(QemuConsole *con)
 {
     DisplayState *s = con->ds;
     DisplayChangeListener *dcl;
@@ -1038,14 +927,14 @@ void dpy_gl_scanout_disable(QemuConsole *con)
     }
 }
 
-void dpy_gl_scanout_texture(QemuConsole *con,
-                            uint32_t backing_id,
-                            bool backing_y_0_top,
-                            uint32_t backing_width,
-                            uint32_t backing_height,
-                            uint32_t x, uint32_t y,
-                            uint32_t width, uint32_t height,
-                            void *d3d_tex2d)
+void qemu_console_gl_scanout_texture(QemuConsole *con,
+                                     uint32_t backing_id,
+                                     bool backing_y_0_top,
+                                     uint32_t backing_width,
+                                     uint32_t backing_height,
+                                     uint32_t x, uint32_t y,
+                                     uint32_t width, uint32_t height,
+                                     void *d3d_tex2d)
 {
     DisplayState *s = con->ds;
     DisplayChangeListener *dcl;
@@ -1069,8 +958,8 @@ void dpy_gl_scanout_texture(QemuConsole *con,
     }
 }
 
-void dpy_gl_scanout_dmabuf(QemuConsole *con,
-                           QemuDmaBuf *dmabuf)
+void qemu_console_gl_scanout_dmabuf(QemuConsole *con,
+                                    QemuDmaBuf *dmabuf)
 {
     DisplayState *s = con->ds;
     DisplayChangeListener *dcl;
@@ -1087,8 +976,8 @@ void dpy_gl_scanout_dmabuf(QemuConsole *con,
     }
 }
 
-void dpy_gl_cursor_dmabuf(QemuConsole *con, QemuDmaBuf *dmabuf,
-                          bool have_hot, uint32_t hot_x, uint32_t hot_y)
+void qemu_console_gl_cursor_dmabuf(QemuConsole *con, QemuDmaBuf *dmabuf,
+                                   bool have_hot, uint32_t hot_x, uint32_t hot_y)
 {
     DisplayState *s = con->ds;
     DisplayChangeListener *dcl;
@@ -1104,8 +993,8 @@ void dpy_gl_cursor_dmabuf(QemuConsole *con, QemuDmaBuf *dmabuf,
     }
 }
 
-void dpy_gl_cursor_position(QemuConsole *con,
-                            uint32_t pos_x, uint32_t pos_y)
+void qemu_console_gl_cursor_position(QemuConsole *con,
+                                     uint32_t pos_x, uint32_t pos_y)
 {
     DisplayState *s = con->ds;
     DisplayChangeListener *dcl;
@@ -1120,8 +1009,8 @@ void dpy_gl_cursor_position(QemuConsole *con,
     }
 }
 
-void dpy_gl_release_dmabuf(QemuConsole *con,
-                          QemuDmaBuf *dmabuf)
+void qemu_console_gl_release_dmabuf(QemuConsole *con,
+                                    QemuDmaBuf *dmabuf)
 {
     DisplayState *s = con->ds;
     DisplayChangeListener *dcl;
@@ -1136,15 +1025,15 @@ void dpy_gl_release_dmabuf(QemuConsole *con,
     }
 }
 
-void dpy_gl_update(QemuConsole *con,
-                   uint32_t x, uint32_t y, uint32_t w, uint32_t h)
+void qemu_console_gl_update(QemuConsole *con,
+                            uint32_t x, uint32_t y, uint32_t w, uint32_t h)
 {
     DisplayState *s = con->ds;
     DisplayChangeListener *dcl;
 
     assert(con->gl);
 
-    graphic_hw_gl_block(con, true);
+    qemu_console_hw_gl_block(con, true);
     QLIST_FOREACH(dcl, &s->listeners, next) {
         if (con != dcl->con) {
             continue;
@@ -1153,7 +1042,7 @@ void dpy_gl_update(QemuConsole *con,
             dcl->ops->dpy_gl_update(dcl, x, y, w, h);
         }
     }
-    graphic_hw_gl_block(con, false);
+    qemu_console_hw_gl_block(con, false);
 }
 
 /***********************************************************/
@@ -1182,7 +1071,7 @@ DisplayState *init_displaystate(void)
          * all QemuConsoles are created and the order / numbering
          * doesn't change any more */
         name = g_strdup_printf("console[%d]", con->index);
-        object_property_add_child(container_get(object_get_root(), "/backend"),
+        object_property_add_child(object_get_container("backend"),
                                   name, OBJECT(con));
         g_free(name);
     }
@@ -1190,17 +1079,17 @@ DisplayState *init_displaystate(void)
     return display_state;
 }
 
-void graphic_console_set_hwops(QemuConsole *con,
-                               const GraphicHwOps *hw_ops,
-                               void *opaque)
+void qemu_graphic_console_set_hwops(QemuConsole *con,
+                                    const GraphicHwOps *hw_ops,
+                                    void *opaque)
 {
     con->hw_ops = hw_ops;
     con->hw = opaque;
 }
 
-QemuConsole *graphic_console_init(DeviceState *dev, uint32_t head,
-                                  const GraphicHwOps *hw_ops,
-                                  void *opaque)
+QemuConsole *qemu_graphic_console_create(DeviceState *dev, uint32_t head,
+                                         const GraphicHwOps *hw_ops,
+                                         void *opaque)
 {
     static const char noinit[] =
         "Guest has not initialized the display (yet).";
@@ -1219,16 +1108,16 @@ QemuConsole *graphic_console_init(DeviceState *dev, uint32_t head,
         s = (QemuConsole *)object_new(TYPE_QEMU_GRAPHIC_CONSOLE);
     }
     QEMU_GRAPHIC_CONSOLE(s)->head = head;
-    graphic_console_set_hwops(s, hw_ops, opaque);
+    qemu_graphic_console_set_hwops(s, hw_ops, opaque);
     if (dev) {
         object_property_set_link(OBJECT(s), "device", OBJECT(dev),
                                  &error_abort);
     }
 
     surface = qemu_create_placeholder_surface(width, height, noinit);
-    dpy_gfx_replace_surface(s, surface);
+    qemu_console_set_surface(s, surface);
     s->gl_unblock_timer = timer_new_ms(QEMU_CLOCK_REALTIME,
-                                       graphic_hw_gl_unblock_timer, s);
+                                       console_hw_gl_unblock_timer, s);
     return s;
 }
 
@@ -1236,7 +1125,7 @@ static const GraphicHwOps unused_ops = {
     /* no callbacks */
 };
 
-void graphic_console_close(QemuConsole *con)
+void qemu_graphic_console_close(QemuConsole *con)
 {
     static const char unplugged[] =
         "Guest display has been unplugged";
@@ -1246,13 +1135,13 @@ void graphic_console_close(QemuConsole *con)
 
     trace_console_gfx_close(con->index);
     object_property_set_link(OBJECT(con), "device", NULL, &error_abort);
-    graphic_console_set_hwops(con, &unused_ops, NULL);
+    qemu_graphic_console_set_hwops(con, &unused_ops, NULL);
 
     if (con->gl) {
-        dpy_gl_scanout_disable(con);
+        qemu_console_gl_scanout_disable(con);
     }
     surface = qemu_create_placeholder_surface(width, height, unplugged);
-    dpy_gfx_replace_surface(con, surface);
+    qemu_console_set_surface(con, surface);
 }
 
 QemuConsole *qemu_console_lookup_default(void)
@@ -1348,11 +1237,6 @@ QEMUCursor *qemu_console_get_cursor(QemuConsole *con)
     return QEMU_IS_GRAPHIC_CONSOLE(con) ? QEMU_GRAPHIC_CONSOLE(con)->cursor : NULL;
 }
 
-bool qemu_console_is_visible(QemuConsole *con)
-{
-    return con->dcls > 0;
-}
-
 bool qemu_console_is_graphic(QemuConsole *con)
 {
     return con && QEMU_IS_GRAPHIC_CONSOLE(con);
@@ -1369,58 +1253,12 @@ bool qemu_console_is_gl_blocked(QemuConsole *con)
     return con->gl_block;
 }
 
-static bool qemu_graphic_console_is_multihead(QemuGraphicConsole *c)
-{
-    QemuConsole *con;
-
-    QTAILQ_FOREACH(con, &consoles, next) {
-        QemuGraphicConsole *candidate;
-
-        if (!QEMU_IS_GRAPHIC_CONSOLE(con)) {
-            continue;
-        }
-
-        candidate = QEMU_GRAPHIC_CONSOLE(con);
-        if (candidate->device != c->device) {
-            continue;
-        }
-
-        if (candidate->head != c->head) {
-            return true;
-        }
-    }
-    return false;
-}
-
 char *qemu_console_get_label(QemuConsole *con)
 {
-    if (QEMU_IS_GRAPHIC_CONSOLE(con)) {
-        QemuGraphicConsole *c = QEMU_GRAPHIC_CONSOLE(con);
-        if (c->device) {
-            DeviceState *dev;
-            bool multihead;
-
-            dev = DEVICE(c->device);
-            multihead = qemu_graphic_console_is_multihead(c);
-            if (multihead) {
-                return g_strdup_printf("%s.%d", dev->id ?
-                                       dev->id :
-                                       object_get_typename(c->device),
-                                       c->head);
-            } else {
-                return g_strdup_printf("%s", dev->id ?
-                                       dev->id :
-                                       object_get_typename(c->device));
-            }
-        }
-        return g_strdup("VGA");
-    } else if (QEMU_IS_TEXT_CONSOLE(con)) {
-        const char *label = qemu_text_console_get_label(QEMU_TEXT_CONSOLE(con));
-        if (label) {
-            return g_strdup(label);
-        }
+    char *label = QEMU_CONSOLE_GET_CLASS(con)->get_label(con);
+    if (label) {
+        return label;
     }
-
     return g_strdup_printf("vc%d", con->index);
 }
 
@@ -1474,23 +1312,6 @@ int qemu_console_get_height(QemuConsole *con, int fallback)
     }
 }
 
-int qemu_invalidate_text_consoles(void)
-{
-    QemuConsole *s;
-    int count = 0;
-
-    QTAILQ_FOREACH(s, &consoles, next) {
-        if (qemu_console_is_graphic(s) ||
-            !qemu_console_is_visible(s)) {
-            continue;
-        }
-        count++;
-        graphic_hw_invalidate(s);
-    }
-
-    return count;
-}
-
 void qemu_console_resize(QemuConsole *s, int width, int height)
 {
     DisplaySurface *surface = qemu_console_surface(s);
@@ -1506,7 +1327,7 @@ void qemu_console_resize(QemuConsole *s, int width, int height)
     }
 
     surface = qemu_create_displaysurface(width, height);
-    dpy_gfx_replace_surface(s, surface);
+    qemu_console_set_surface(s, surface);
 }
 
 DisplaySurface *qemu_console_surface(QemuConsole *console)
@@ -1517,13 +1338,6 @@ DisplaySurface *qemu_console_surface(QemuConsole *console)
     default:
         return NULL;
     }
-}
-
-PixelFormat qemu_default_pixelformat(int bpp)
-{
-    pixman_format_code_t fmt = qemu_default_pixman_format(bpp, true);
-    PixelFormat pf = qemu_pixelformat_from_pixman(fmt);
-    return pf;
 }
 
 static QemuDisplay *dpys[DISPLAY_TYPE__MAX];
@@ -1632,4 +1446,9 @@ void qemu_display_help(void)
             printf("%s\n",  DisplayType_str(dpys[idx]->type));
         }
     }
+    printf("\n"
+           "Some display backends support suboptions, which can be set with\n"
+           "   -display backend,option=value,option=value...\n"
+           "For a short list of the suboptions for each display, see the "
+           "top-level -help output; more detail is in the documentation.\n");
 }

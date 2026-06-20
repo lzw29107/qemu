@@ -39,20 +39,19 @@
 #include "qemu/osdep.h"
 #include "hw/block/block.h"
 #include "hw/block/flash.h"
-#include "hw/qdev-properties.h"
-#include "hw/qdev-properties-system.h"
-#include "sysemu/block-backend.h"
+#include "hw/core/qdev-properties.h"
+#include "hw/core/qdev-properties-system.h"
+#include "system/block-backend.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qemu/bitops.h"
 #include "qemu/host-utils.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
 #include "qemu/option.h"
-#include "hw/sysbus.h"
+#include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
-#include "sysemu/blockdev.h"
-#include "sysemu/runstate.h"
+#include "system/blockdev.h"
+#include "system/runstate.h"
 #include "trace.h"
 
 #define PFLASH_BE          0
@@ -85,7 +84,6 @@ struct PFlashCFI01 {
     char *name;
     void *storage;
     VMChangeStateEntry *vmstate;
-    bool old_multiple_chip_handling;
 
     /* block update buffer */
     unsigned char *blk_bytes;
@@ -614,6 +612,7 @@ static void pflash_write(PFlashCFI01 *pfl, hwaddr offset,
             if (!pfl->counter) {
                 trace_pflash_write(pfl->name, "block write finished");
                 pfl->wcycle++;
+                break;
             }
 
             pfl->counter--;
@@ -703,13 +702,8 @@ static void pflash_cfi01_fill_cfi_table(PFlashCFI01 *pfl)
      * in the cfi_table[].
      */
     num_devices = pfl->device_width ? (pfl->bank_width / pfl->device_width) : 1;
-    if (pfl->old_multiple_chip_handling) {
-        blocks_per_device = pfl->nb_blocs / num_devices;
-        sector_len_per_device = pfl->sector_len;
-    } else {
-        blocks_per_device = pfl->nb_blocs;
-        sector_len_per_device = pfl->sector_len / num_devices;
-    }
+    blocks_per_device = pfl->nb_blocs;
+    sector_len_per_device = pfl->sector_len / num_devices;
     device_len = sector_len_per_device * blocks_per_device;
 
     /* Hardcoded CFI table */
@@ -765,7 +759,7 @@ static void pflash_cfi01_fill_cfi_table(PFlashCFI01 *pfl)
         pfl->cfi_table[0x2A] = 0x0B;
     }
     pfl->writeblock_size = 1 << pfl->cfi_table[0x2A];
-    if (!pfl->old_multiple_chip_handling && num_devices > 1) {
+    if (num_devices > 1) {
         pfl->writeblock_size *= num_devices;
     }
 
@@ -895,7 +889,7 @@ static void pflash_cfi01_system_reset(DeviceState *dev)
     pfl->blk_offset = -1;
 }
 
-static Property pflash_cfi01_properties[] = {
+static const Property pflash_cfi01_properties[] = {
     DEFINE_PROP_DRIVE("drive", PFlashCFI01, blk),
     /* num-blocks is the number of blocks actually visible to the guest,
      * ie the total size of the device divided by the sector length.
@@ -930,36 +924,29 @@ static Property pflash_cfi01_properties[] = {
     DEFINE_PROP_UINT16("id2", PFlashCFI01, ident2, 0),
     DEFINE_PROP_UINT16("id3", PFlashCFI01, ident3, 0),
     DEFINE_PROP_STRING("name", PFlashCFI01, name),
-    DEFINE_PROP_BOOL("old-multiple-chip-handling", PFlashCFI01,
-                     old_multiple_chip_handling, false),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
-static void pflash_cfi01_class_init(ObjectClass *klass, void *data)
+static void pflash_cfi01_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->reset = pflash_cfi01_system_reset;
+    device_class_set_legacy_reset(dc, pflash_cfi01_system_reset);
     dc->realize = pflash_cfi01_realize;
     device_class_set_props(dc, pflash_cfi01_properties);
     dc->vmsd = &vmstate_pflash;
     set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
 }
 
-
-static const TypeInfo pflash_cfi01_info = {
-    .name           = TYPE_PFLASH_CFI01,
-    .parent         = TYPE_SYS_BUS_DEVICE,
-    .instance_size  = sizeof(PFlashCFI01),
-    .class_init     = pflash_cfi01_class_init,
+static const TypeInfo pflash_cfi01_types[] = {
+    {
+        .name           = TYPE_PFLASH_CFI01,
+        .parent         = TYPE_SYS_BUS_DEVICE,
+        .instance_size  = sizeof(PFlashCFI01),
+        .class_init     = pflash_cfi01_class_init,
+    },
 };
 
-static void pflash_cfi01_register_types(void)
-{
-    type_register_static(&pflash_cfi01_info);
-}
-
-type_init(pflash_cfi01_register_types)
+DEFINE_TYPES(pflash_cfi01_types)
 
 PFlashCFI01 *pflash_cfi01_register(hwaddr base,
                                    const char *name,

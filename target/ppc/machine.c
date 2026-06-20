@@ -1,15 +1,15 @@
 #include "qemu/osdep.h"
 #include "cpu.h"
-#include "exec/exec-all.h"
-#include "sysemu/kvm.h"
-#include "sysemu/tcg.h"
+#include "system/kvm.h"
+#include "system/tcg.h"
 #include "helper_regs.h"
 #include "mmu-hash64.h"
 #include "migration/cpu.h"
+#include "migration/qemu-file-types.h"
 #include "qapi/error.h"
 #include "kvm_ppc.h"
 #include "power8-pmu.h"
-#include "sysemu/replay.h"
+#include "system/replay.h"
 
 static void post_load_update_msr(CPUPPCState *env)
 {
@@ -118,43 +118,11 @@ static const VMStateInfo vmstate_info_vsr = {
 #define VMSTATE_VSR_ARRAY(_f, _s, _n)                             \
     VMSTATE_VSR_ARRAY_V(_f, _s, _n, 0)
 
-static bool cpu_pre_2_8_migration(void *opaque, int version_id)
-{
-    PowerPCCPU *cpu = opaque;
-
-    return cpu->pre_2_8_migration;
-}
-
-#if defined(TARGET_PPC64)
-static bool cpu_pre_3_0_migration(void *opaque, int version_id)
-{
-    PowerPCCPU *cpu = opaque;
-
-    return cpu->pre_3_0_migration;
-}
-#endif
-
 static int cpu_pre_save(void *opaque)
 {
     PowerPCCPU *cpu = opaque;
     CPUPPCState *env = &cpu->env;
     int i;
-    uint64_t insns_compat_mask =
-        PPC_INSNS_BASE | PPC_ISEL | PPC_STRING | PPC_MFTB
-        | PPC_FLOAT | PPC_FLOAT_FSEL | PPC_FLOAT_FRES
-        | PPC_FLOAT_FSQRT | PPC_FLOAT_FRSQRTE | PPC_FLOAT_FRSQRTES
-        | PPC_FLOAT_STFIWX | PPC_FLOAT_EXT
-        | PPC_CACHE | PPC_CACHE_ICBI | PPC_CACHE_DCBZ
-        | PPC_MEM_SYNC | PPC_MEM_EIEIO | PPC_MEM_TLBIE | PPC_MEM_TLBSYNC
-        | PPC_64B | PPC_64BX | PPC_ALTIVEC
-        | PPC_SEGMENT_64B | PPC_SLBI | PPC_POPCNTB | PPC_POPCNTWD;
-    uint64_t insns_compat_mask2 = PPC2_VSX | PPC2_VSX207 | PPC2_DFP | PPC2_DBRX
-        | PPC2_PERM_ISA206 | PPC2_DIVE_ISA206
-        | PPC2_ATOMIC_ISA206 | PPC2_FP_CVT_ISA206
-        | PPC2_FP_TST_ISA206 | PPC2_BCTAR_ISA207
-        | PPC2_LSQ_ISA207 | PPC2_ALTIVEC_207
-        | PPC2_ISA205 | PPC2_ISA207S | PPC2_FP_CVT_S64 | PPC2_TM
-        | PPC2_MEM_LWSYNC;
 
     env->spr[SPR_LR] = env->lr;
     env->spr[SPR_CTR] = env->ctr;
@@ -175,35 +143,6 @@ static int cpu_pre_save(void *opaque)
         env->spr[SPR_DBAT4U + 2 * i + 1] = env->DBAT[1][i + 4];
         env->spr[SPR_IBAT4U + 2 * i] = env->IBAT[0][i + 4];
         env->spr[SPR_IBAT4U + 2 * i + 1] = env->IBAT[1][i + 4];
-    }
-
-    /* Hacks for migration compatibility between 2.6, 2.7 & 2.8 */
-    if (cpu->pre_2_8_migration) {
-        /*
-         * Mask out bits that got added to msr_mask since the versions
-         * which stupidly included it in the migration stream.
-         */
-        target_ulong metamask = 0
-#if defined(TARGET_PPC64)
-            | (1ULL << MSR_TS0)
-            | (1ULL << MSR_TS1)
-#endif
-            ;
-        cpu->mig_msr_mask = env->msr_mask & ~metamask;
-        cpu->mig_insns_flags = env->insns_flags & insns_compat_mask;
-        /*
-         * CPU models supported by old machines all have
-         * PPC_MEM_TLBIE, so we set it unconditionally to allow
-         * backward migration from a POWER9 host to a POWER8 host.
-         */
-        cpu->mig_insns_flags |= PPC_MEM_TLBIE;
-        cpu->mig_insns_flags2 = env->insns_flags2 & insns_compat_mask2;
-        cpu->mig_nb_BATs = env->nb_BATs;
-    }
-    if (cpu->pre_3_0_migration) {
-        if (cpu->hash64_opts) {
-            cpu->mig_slb_nr = cpu->hash64_opts->slb_size;
-        }
     }
 
     /* Used to retain migration compatibility for pre 6.0 for 601 machines. */
@@ -319,13 +258,53 @@ static int cpu_post_load(void *opaque, int version_id)
         ppc_store_sdr1(env, env->spr[SPR_SDR1]);
     }
 
+    if (!cpu->rtas_stopped_state) {
+        /*
+         * The source QEMU doesn't have fb802acdc8 and still uses halt +
+         * PM bits in LPCR to implement RTAS stopped state. The new (this)
+         * QEMU will have put the secondary vcpus in stopped state,
+         * waiting for the start-cpu RTAS call. That call will never come
+         * if the source cpus were already running. Try to infer the cpus
+         * state and set env->quiesced accordingly.
+         *
+         * env->quiesced = true  ==> the cpu is waiting to start
+         * env->quiesced = false ==> the cpu is running (unless halted)
+         */
+
+        /*
+         * Halted _could_ mean quiesced, but it could also be cede,
+         * confer_self, power management, etc.
+         */
+        if (CPU(cpu)->halted) {
+            PowerPCCPUClass *pcc = POWERPC_CPU_GET_CLASS(cpu);
+            /*
+             * Both the PSSCR_EC bit and LPCR PM bits set at cpu reset
+             * and rtas_stop and cleared at rtas_start, it's a good
+             * heuristic.
+             */
+            if ((env->spr[SPR_PSSCR] & PSSCR_EC) &&
+                (env->spr[SPR_LPCR] & pcc->lpcr_pm)) {
+                env->quiesced = true;
+            } else {
+                env->quiesced = false;
+            }
+        } else {
+            /*
+             * Old QEMU sets halted during rtas_stop_self. Not halted,
+             * therefore definitely not quiesced.
+             */
+            env->quiesced = false;
+        }
+    }
+
     post_load_update_msr(env);
 
     if (tcg_enabled()) {
         /* Re-set breaks based on regs */
 #if defined(TARGET_PPC64)
         ppc_update_ciabr(env);
-        ppc_update_daw0(env);
+        ppc_update_daw(env, 0);
+        ppc_update_daw(env, 1);
 #endif
         /*
          * TCG needs to re-start the decrementer timer and/or raise the
@@ -549,12 +528,11 @@ static int slb_post_load(void *opaque, int version_id)
 
 static const VMStateDescription vmstate_slb = {
     .name = "cpu/slb",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .needed = slb_needed,
     .post_load = slb_post_load,
     .fields = (const VMStateField[]) {
-        VMSTATE_INT32_TEST(mig_slb_nr, PowerPCCPU, cpu_pre_3_0_migration),
         VMSTATE_SLB_ARRAY(env.slb, PowerPCCPU, MAX_SLB_ENTRIES),
         VMSTATE_END_OF_LIST()
     }
@@ -587,7 +565,7 @@ static const VMStateDescription vmstate_tlb6xx = {
     .minimum_version_id = 1,
     .needed = tlb6xx_needed,
     .fields = (const VMStateField[]) {
-        VMSTATE_INT32_EQUAL(env.nb_tlb, PowerPCCPU, NULL),
+        VMSTATE_INT32_EQUAL(env.nb_tlb, PowerPCCPU),
         VMSTATE_STRUCT_VARRAY_POINTER_INT32(env.tlb.tlb6, PowerPCCPU,
                                             env.nb_tlb,
                                             vmstate_tlb6xx_entry,
@@ -621,12 +599,12 @@ static bool tlbemb_needed(void *opaque)
 }
 
 static const VMStateDescription vmstate_tlbemb = {
-    .name = "cpu/tlb6xx",
+    .name = "cpu/tlbemb",
     .version_id = 1,
     .minimum_version_id = 1,
     .needed = tlbemb_needed,
     .fields = (const VMStateField[]) {
-        VMSTATE_INT32_EQUAL(env.nb_tlb, PowerPCCPU, NULL),
+        VMSTATE_INT32_EQUAL(env.nb_tlb, PowerPCCPU),
         VMSTATE_STRUCT_VARRAY_POINTER_INT32(env.tlb.tlbe, PowerPCCPU,
                                             env.nb_tlb,
                                             vmstate_tlbemb_entry,
@@ -662,7 +640,7 @@ static const VMStateDescription vmstate_tlbmas = {
     .minimum_version_id = 1,
     .needed = tlbmas_needed,
     .fields = (const VMStateField[]) {
-        VMSTATE_INT32_EQUAL(env.nb_tlb, PowerPCCPU, NULL),
+        VMSTATE_INT32_EQUAL(env.nb_tlb, PowerPCCPU),
         VMSTATE_STRUCT_VARRAY_POINTER_INT32(env.tlb.tlbm, PowerPCCPU,
                                             env.nb_tlb,
                                             vmstate_tlbmas_entry,
@@ -676,7 +654,7 @@ static bool compat_needed(void *opaque)
     PowerPCCPU *cpu = opaque;
 
     assert(!(cpu->compat_pvr && !cpu->vhyp));
-    return !cpu->pre_2_10_migration && cpu->compat_pvr != 0;
+    return cpu->compat_pvr != 0;
 }
 
 static const VMStateDescription vmstate_compat = {
@@ -707,6 +685,28 @@ static const VMStateDescription vmstate_reservation = {
 #if defined(TARGET_PPC64)
         VMSTATE_UINTTL(env.reserve_val2, PowerPCCPU),
 #endif
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+static bool rtas_stopped_needed(void *opaque)
+{
+    PowerPCCPU *cpu = opaque;
+
+    return cpu->rtas_stopped_state;
+}
+
+static const VMStateDescription vmstate_rtas_stopped = {
+    .name = "cpu/rtas_stopped",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = rtas_stopped_needed,
+    .fields = (const VMStateField[]) {
+        /*
+         * "RTAS stopped" state, independent of halted state. For QEMU
+         * < 10.0, this is taken from cpu->halted at cpu_post_load()
+         */
+        VMSTATE_BOOL(env.quiesced, PowerPCCPU),
         VMSTATE_END_OF_LIST()
     }
 };
@@ -760,12 +760,6 @@ const VMStateDescription vmstate_ppc_cpu = {
         /* Backward compatible internal state */
         VMSTATE_UINTTL(env.hflags_compat_nmsr, PowerPCCPU),
 
-        /* Sanity checking */
-        VMSTATE_UINTTL_TEST(mig_msr_mask, PowerPCCPU, cpu_pre_2_8_migration),
-        VMSTATE_UINT64_TEST(mig_insns_flags, PowerPCCPU, cpu_pre_2_8_migration),
-        VMSTATE_UINT64_TEST(mig_insns_flags2, PowerPCCPU,
-                            cpu_pre_2_8_migration),
-        VMSTATE_UINT32_TEST(mig_nb_BATs, PowerPCCPU, cpu_pre_2_8_migration),
         VMSTATE_END_OF_LIST()
     },
     .subsections = (const VMStateDescription * const []) {
@@ -783,6 +777,7 @@ const VMStateDescription vmstate_ppc_cpu = {
         &vmstate_tlbmas,
         &vmstate_compat,
         &vmstate_reservation,
+        &vmstate_rtas_stopped,
         NULL
     }
 };

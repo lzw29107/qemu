@@ -1,9 +1,10 @@
 #include "qemu/osdep.h"
 #include "cpu.h"
-#include "exec/exec-all.h"
+#include "qemu/target-info.h"
 #include "qemu/timer.h"
 
 #include "migration/cpu.h"
+#include "migration/qemu-file-types.h"
 
 #ifdef TARGET_SPARC64
 static const VMStateDescription vmstate_cpu_timer = {
@@ -87,9 +88,13 @@ static int get_fsr(QEMUFile *f, void *opaque, size_t size,
                    const VMStateField *field)
 {
     SPARCCPU *cpu = opaque;
-    target_ulong val = qemu_get_betl(f);
 
-    cpu_put_fsr(&cpu->env, val);
+    if (target_long_bits() == 64) {
+        cpu_put_fsr(&cpu->env, qemu_get_be64(f));
+    } else {
+        cpu_put_fsr(&cpu->env, qemu_get_be32(f));
+    }
+
     return 0;
 }
 
@@ -97,9 +102,12 @@ static int put_fsr(QEMUFile *f, void *opaque, size_t size,
                    const VMStateField *field, JSONWriter *vmdesc)
 {
     SPARCCPU *cpu = opaque;
-    target_ulong val = cpu_get_fsr(&cpu->env);
 
-    qemu_put_betl(f, val);
+    if (target_long_bits() == 64) {
+        qemu_put_be64(f, cpu_get_fsr(&cpu->env));
+    } else {
+        qemu_put_be32(f, cpu_get_fsr(&cpu->env));
+    }
     return 0;
 }
 
@@ -143,6 +151,24 @@ static const VMStateInfo vmstate_xcc = {
     .get = get_xcc,
     .put = put_xcc,
 };
+#else
+static bool fq_needed(void *opaque)
+{
+    SPARCCPU *cpu = opaque;
+    return cpu->env.fsr_qne;
+}
+
+static const VMStateDescription vmstate_fq = {
+    .name = "cpu/fq",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = fq_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32(env.fq.s.addr, SPARCCPU),
+        VMSTATE_UINT32(env.fq.s.insn, SPARCCPU),
+        VMSTATE_END_OF_LIST()
+    },
+};
 #endif
 
 static int cpu_pre_save(void *opaque)
@@ -163,9 +189,9 @@ static int cpu_pre_save(void *opaque)
  * versions are different.
  */
 #ifndef TARGET_SPARC64
-#define SPARC_VMSTATE_VER 7
+#define SPARC_VMSTATE_VER 8
 #else
-#define SPARC_VMSTATE_VER 9
+#define SPARC_VMSTATE_VER 10
 #endif
 
 const VMStateDescription vmstate_sparc_cpu = {
@@ -176,8 +202,7 @@ const VMStateDescription vmstate_sparc_cpu = {
     .fields = (const VMStateField[]) {
         VMSTATE_UINTTL_ARRAY(env.gregs, SPARCCPU, 8),
         VMSTATE_UINT32(env.nwindows, SPARCCPU),
-        VMSTATE_VARRAY_MULTIPLY(env.regbase, SPARCCPU, env.nwindows, 16,
-                                vmstate_info_uinttl, target_ulong),
+        VMSTATE_UINTTL_ARRAY(env.regbase, SPARCCPU, MAX_NWINDOWS * 16 + 8),
         VMSTATE_CPUDOUBLE_ARRAY(env.fpr, SPARCCPU, TARGET_DPREGS),
         VMSTATE_UINTTL(env.pc, SPARCCPU),
         VMSTATE_UINTTL(env.npc, SPARCCPU),
@@ -265,4 +290,11 @@ const VMStateDescription vmstate_sparc_cpu = {
 #endif
         VMSTATE_END_OF_LIST()
     },
+#ifndef TARGET_SPARC64
+    .subsections = (const VMStateDescription * const []) {
+        &vmstate_fq,
+        NULL
+    },
+#endif
+
 };
