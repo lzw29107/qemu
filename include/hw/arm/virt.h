@@ -82,6 +82,8 @@ enum {
     VIRT_UART0,
     VIRT_EHCI_XHCI,
     VIRT_SDHCI,
+    VIRT_SMPBOOT,
+    VIRT_MAILBOX,
     VIRT_MMIO,
     VIRT_RTC,
     VIRT_FW_CFG,
@@ -218,6 +220,8 @@ struct VirtMachineState {
     MemoryRegion *secure_sysmem;
     bool pci_preserve_config;
     GPtrArray *smmuv3_devices;
+    MemoryRegion smpboot_ram;
+    MemoryRegion mailbox_ram;
 };
 
 #define VIRT_ECAM_ID(high) (high ? VIRT_HIGH_PCIE_ECAM : VIRT_PCIE_ECAM)

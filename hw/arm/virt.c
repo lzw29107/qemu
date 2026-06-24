@@ -213,8 +213,10 @@ static const MemMapEntry base_memmap[] = {
     [VIRT_PVTIME] =             { 0x090a0000, 0x00010000 },
     [VIRT_SECURE_GPIO] =        { 0x090b0000, 0x00001000 },
     [VIRT_ACPI_PCIHP] =         { 0x090c0000, ACPI_PCIHP_SIZE },
-    [VIRT_EHCI_XHCI] =               { 0x090d0000, XHCI_LEN_REGS },
+    [VIRT_EHCI_XHCI] =          { 0x090d0000, XHCI_LEN_REGS },
     [VIRT_SDHCI] =              { 0x090e0000, 0x00010000 },
+    [VIRT_SMPBOOT] =            { 0x09ff0000, 0x00008000 },
+    [VIRT_MAILBOX] =            { 0x09ff8000, 0x00008000 },
     [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
     [VIRT_PLATFORM_BUS] =       { 0x0c000000, 0x02000000 },
@@ -1488,6 +1490,36 @@ static void create_gic(VirtMachineState *vms, MemoryRegion *mem)
     default:
         g_assert_not_reached();
     }
+}
+
+static void create_smpboot(VirtMachineState *vms, MemoryRegion *mem)
+{
+    memory_region_init_ram(
+        &vms->smpboot_ram,
+        NULL,
+        "virt.smpboot",
+        vms->memmap[VIRT_SMPBOOT].size,
+        &error_abort);
+
+    memory_region_add_subregion(
+        mem,
+        vms->memmap[VIRT_SMPBOOT].base,
+        &vms->smpboot_ram);
+}
+
+static void create_mailbox(VirtMachineState *vms, MemoryRegion *mem)
+{
+    memory_region_init_ram(
+        &vms->mailbox_ram,
+        NULL,
+        "virt.mailbox",
+        vms->memmap[VIRT_MAILBOX].size,
+        &error_abort);
+
+    memory_region_add_subregion(
+        mem,
+        vms->memmap[VIRT_MAILBOX].base,
+        &vms->mailbox_ram);
 }
 
 static void create_msi_controller(VirtMachineState *vms)
@@ -2976,6 +3008,78 @@ static void virt_post_cpus_gic_realized(VirtMachineState *vms,
     }
 }
 
+static void write_smpboot(ARMCPU *cpu,
+                           const struct arm_boot_info *info)
+{
+    static const ARMInsnFixup smpboot[] = {
+        { 0xee100fb0 },      /* mrc p15,0,r0,c0,c0,5 */
+        { 0xe20000ff },      /* and r0,r0,#0xff */
+
+        { 0xe59f5064 },      /* ldr r5, mailbox */
+        { 0xe0855600 },      /* add r5,r5,r0,lsl #12 */
+
+        { 0xe59f1058 },      /* ldr r1, gic cpu interface */
+
+        { 0xe3a02001 },      /* mov r2,#1 */
+        { 0xe5812000 },      /* str r2,[r1,#0] */
+
+        { 0xe3a020ff },      /* mov r2,#0xff */
+        { 0xe5812004 },      /* str r2,[r1,#4] */
+
+        { 0xe320f003 },      /* wfi */
+
+        { 0xe5953000 },      /* ldr r3,[r5,#0] */
+        { 0xe1530000 },      /* cmp r3,r0 */
+        { 0x1afffffa },      /* bne wait */
+
+        { 0xe5953008 },      /* ldr r3,[r5,#8] */
+        { 0xe3530000 },      /* cmp r3,#0 */
+        { 0x0afffff5 },      /* beq wait */
+
+        { 0xe3a04000 },      /* mov r4,#0 */
+        { 0xe5854008 },      /* str r4,[r5,#8] */
+
+        { 0xee110f10 },      /* mrc p15,0,r0,c1,c0,0 */
+        { 0xe3c00001 },      /* bic r0,r0,#1 */
+        { 0xe3c00004 },      /* bic r0,r0,#4 */
+        { 0xe3c00a01 },      /* bic r0,r0,#0x1000 */
+        { 0xee010f10 },      /* mcr p15,0,r0,c1,c0,0 */
+
+        { 0xee070f9a },      /* dsb */
+        { 0xee070f95 },      /* isb */
+
+        { 0xe321f0d3 },      /* msr cpsr_c,#0xd3 */
+
+        { 0xe1a00005 },      /* mov r0,r5 */
+
+        { 0xe12fff13 },      /* bx r3 */
+
+        { 0, FIXUP_GIC_CPU_IF },
+        { 0, FIXUP_MAILBOX },
+        { 0, FIXUP_TERMINATOR }
+    };
+
+    uint32_t fixupcontext[FIXUP_MAX];
+
+    fixupcontext[FIXUP_GIC_CPU_IF] = info->gic_cpu_if_addr;
+    fixupcontext[FIXUP_MAILBOX] = info->mailbox_addr;
+
+    arm_write_bootloader(
+        "virt_smpboot",
+        arm_boot_address_space(cpu, info),
+        info->smp_loader_start,
+        smpboot,
+        fixupcontext);
+}
+
+static void reset_secondary(ARMCPU *cpu,
+                            const struct arm_boot_info *info)
+{
+    CPUState *cs = CPU(cpu);
+
+    cpu_set_pc(cs, info->smp_loader_start);
+}
+
 static void machvirt_init(MachineState *machine)
 {
     VirtMachineState *vms = VIRT_MACHINE(machine);
@@ -3257,6 +3361,9 @@ static void machvirt_init(MachineState *machine)
     create_gic(vms, sysmem);
     create_msi_controller(vms);
 
+    create_smpboot(vms, sysmem);
+    create_mailbox(vms, sysmem);
+
     virt_post_cpus_gic_realized(vms, sysmem);
 
     fdt_add_pmu_nodes(vms);
@@ -3368,6 +3475,16 @@ static void machvirt_init(MachineState *machine)
     vms->bootinfo.firmware_loaded = firmware_loaded;
     vms->bootinfo.psci_conduit = vms->psci_conduit;
     vms->bootinfo.force_psci = vms->force_psci;
+
+    if (!aarch64 && vms->force_el3 && !vms->force_psci)
+    {
+        vms->bootinfo.gic_cpu_if_addr = vms->memmap[VIRT_GIC_CPU].base;
+        vms->bootinfo.mailbox_addr = vms->memmap[VIRT_MAILBOX].base;
+        vms->bootinfo.smp_loader_start = vms->memmap[VIRT_SMPBOOT].base;
+        vms->bootinfo.write_secondary_boot = write_smpboot;
+        vms->bootinfo.secondary_cpu_reset_hook = reset_secondary;
+    }
+
     arm_load_kernel(ARM_CPU(first_cpu), machine, &vms->bootinfo);
 
     vms->machine_done.notify = virt_machine_done;

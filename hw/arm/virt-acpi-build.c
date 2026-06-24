@@ -1141,6 +1141,7 @@ build_madt(GArray *table_data, BIOSLinker *linker, VirtMachineState *vms)
     for (i = 0; i < MACHINE(vms)->smp.cpus; i++) {
         ARMCPU *armcpu = ARM_CPU(qemu_get_cpu(i));
         uint64_t physical_base_address = 0, gich = 0, gicv = 0;
+        uint64_t mailbox_address = 0;
         uint32_t vgic_interrupt = vms->virt ? ARCH_GIC_MAINT_IRQ : 0;
         uint32_t pmu_interrupt = arm_feature(&armcpu->env, ARM_FEATURE_PMU) ?
                                              VIRTUAL_PMU_IRQ : 0;
@@ -1149,6 +1150,7 @@ build_madt(GArray *table_data, BIOSLinker *linker, VirtMachineState *vms)
             physical_base_address = memmap[VIRT_GIC_CPU].base;
             gicv = memmap[VIRT_GIC_VCPU].base;
             gich = memmap[VIRT_GIC_HYP].base;
+            mailbox_address = memmap[VIRT_MAILBOX].base + (i * 0x1000);
         }
 
         /* 5.2.12.14 GIC Structure */
@@ -1160,10 +1162,10 @@ build_madt(GArray *table_data, BIOSLinker *linker, VirtMachineState *vms)
         /* Flags */
         build_append_int_noprefix(table_data, 1, 4);    /* Enabled */
         /* Parking Protocol Version */
-        build_append_int_noprefix(table_data, 0, 4);
+        build_append_int_noprefix(table_data, 1, 4);
         /* Performance Interrupt GSIV */
         build_append_int_noprefix(table_data, pmu_interrupt, 4);
-        build_append_int_noprefix(table_data, 0, 8); /* Parked Address */
+        build_append_int_noprefix(table_data, mailbox_address, 8); /* Parked Address */
         /* Physical Base Address */
         build_append_int_noprefix(table_data, physical_base_address, 8);
         build_append_int_noprefix(table_data, gicv, 8); /* GICV */
