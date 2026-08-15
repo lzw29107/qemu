@@ -26,8 +26,8 @@
 #define HW_VGA_INT_H
 
 #include "ui/console.h"
-#include "exec/ioport.h"
-#include "exec/memory.h"
+#include "system/ioport.h"
+#include "system/memory.h"
 
 #include "hw/display/bochs-vbe.h"
 #include "hw/acpi/acpi_aml_interface.h"
@@ -130,6 +130,8 @@ typedef struct VGACommonState {
     uint8_t cursor_start, cursor_end;
     bool cursor_visible_phase;
     int64_t cursor_blink_time;
+    bool blink_visible_phase;
+    int64_t blink_time;
     uint32_t cursor_offset;
     const GraphicHwOps *hw_ops;
     bool full_update_text;

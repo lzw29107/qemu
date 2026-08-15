@@ -34,6 +34,14 @@ struct QCryptoCipherDriver {
                         const uint8_t *iv, size_t niv,
                         Error **errp);
 
+    int (*cipher_setaad)(QCryptoCipher *cipher,
+                         const uint8_t *aad, size_t len,
+                         Error **errp);
+
+    int (*cipher_gettag)(QCryptoCipher *cipher,
+                         uint8_t *tag, size_t len,
+                         Error **errp);
+
     void (*cipher_free)(QCryptoCipher *cipher);
 };
 
@@ -42,7 +50,7 @@ struct QCryptoCipherDriver {
 #include "afalgpriv.h"
 
 extern QCryptoCipher *
-qcrypto_afalg_cipher_ctx_new(QCryptoCipherAlgorithm alg,
+qcrypto_afalg_cipher_ctx_new(QCryptoCipherAlgo alg,
                              QCryptoCipherMode mode,
                              const uint8_t *key,
                              size_t nkey, Error **errp);

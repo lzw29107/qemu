@@ -25,6 +25,10 @@ config PL110
     bool
     select FRAMEBUFFER
 
+config IMX6UL_LCDIF
+    bool
+    select FRAMEBUFFER
+
 config SII9022
     bool
     depends on I2C
@@ -66,9 +70,6 @@ config BOCHS_DISPLAY
     select VGA
     select EDID
 
-config BLIZZARD
-    bool
-
 config FRAMEBUFFER
     bool
 
@@ -76,7 +77,7 @@ config SM501
     bool
     select I2C
     select DDC
-    select SERIAL
+    select SERIAL_MM
     select USB_OHCI_SYSBUS
 
 config TCX
@@ -143,3 +144,12 @@ config XLNX_DISPLAYPORT
 
 config DM163
     bool
+
+config MAC_PVG_MMIO
+    bool
+    depends on MAC_PVG && AARCH64
+
+config MAC_PVG_PCI
+    bool
+    depends on MAC_PVG && PCI
+    default y if PCI_DEVICES

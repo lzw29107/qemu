@@ -9,10 +9,14 @@
  * directory.
  */
 
-#include "libc.h"
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include "s390-ccw.h"
 #include "sclp.h"
 #include "s390-time.h"
+#include "helper.h"
 
 #define KEYCODE_NO_INP '\0'
 #define KEYCODE_ESCAPE '\033'
@@ -22,6 +26,9 @@
 /* Offsets from zipl fields to zipl banner start */
 #define ZIPL_TIMEOUT_OFFSET 138
 #define ZIPL_FLAG_OFFSET    140
+
+/* Max printable chars for a zipl boot menu entry */
+#define ZIPL_ENTRY_MAX 80
 
 #define TOD_CLOCK_MILLISECOND   0x3e8000
 
@@ -93,7 +100,7 @@ static int read_prompt(char *buf, size_t len)
         case KEYCODE_BACKSP:
             if (idx > 0) {
                 buf[--idx] = 0;
-                sclp_print("\b \b");
+                printf("\b \b");
             }
             continue;
         case KEYCODE_ENTER:
@@ -103,7 +110,7 @@ static int read_prompt(char *buf, size_t len)
             /* Echo input and add to buffer */
             if (idx < len) {
                 buf[idx++] = inp[0];
-                sclp_print(inp);
+                printf("%s", inp);
             }
         }
     }
@@ -140,30 +147,26 @@ static int get_index(void)
         }
     }
 
-    return atoui(buf);
+    return atoi(buf);
 }
 
 static void boot_menu_prompt(bool retry)
 {
-    char tmp[11];
-
     if (retry) {
-        sclp_print("\nError: undefined configuration"
+        printf("\nError: undefined configuration"
                    "\nPlease choose:\n");
     } else if (timeout > 0) {
-        sclp_print("Please choose (default will boot in ");
-        sclp_print(uitoa(timeout / 1000, tmp, sizeof(tmp)));
-        sclp_print(" seconds):\n");
+        printf("Please choose (default will boot in %d seconds):\n",
+               (int)(timeout / 1000));
     } else {
-        sclp_print("Please choose:\n");
+        puts("Please choose:");
     }
 }
 
-static int get_boot_index(bool *valid_entries)
+int menu_get_boot_index(bool *valid_entries)
 {
     int boot_index;
     bool retry = false;
-    char tmp[5];
 
     do {
         boot_menu_prompt(retry);
@@ -172,27 +175,36 @@ static int get_boot_index(bool *valid_entries)
     } while (boot_index < 0 || boot_index >= MAX_BOOT_ENTRIES ||
              !valid_entries[boot_index]);
 
-    sclp_print("\nBooting entry #");
-    sclp_print(uitoa(boot_index, tmp, sizeof(tmp)));
+    printf("\nBooting entry #%d", boot_index);
 
     return boot_index;
 }
 
-/* Returns the entry number that was printed */
+/* Returns the entry number that was printed, or -1 on invalid entry */
 static int zipl_print_entry(const char *data, size_t len)
 {
-    char buf[len + 2];
+    char buf[ZIPL_ENTRY_MAX + 2];
+    const char *p;
+
+    if (len > ZIPL_ENTRY_MAX) {
+        len = ZIPL_ENTRY_MAX;
+    }
 
     ebcdic_to_ascii(data, buf, len);
     buf[len] = '\n';
     buf[len + 1] = '\0';
 
-    sclp_print(buf);
+    p = (buf[0] == ' ') ? buf + 1 : buf;
+    if (!isdigit((unsigned char)*p)) {
+        return -1;
+    }
 
-    return buf[0] == ' ' ? atoui(buf + 1) : atoui(buf);
+    printf("%s", buf);
+
+    return atoi(p);
 }
 
-int menu_get_zipl_boot_index(const char *menu_data)
+int menu_get_zipl_boot_index(const char *menu_data, const char *menu_data_end)
 {
     size_t len;
     int entry;
@@ -208,51 +220,60 @@ int menu_get_zipl_boot_index(const char *menu_data)
         timeout = zipl_timeout * 1000;
     }
 
-    /* Print banner */
-    sclp_print("s390-ccw zIPL Boot Menu\n\n");
-    menu_data += strlen(menu_data) + 1;
+    if (menu_data >= menu_data_end) {
+        return 0; /* Boot default */
+    }
+
+    /* Skip banner */
+    len = strnlen(menu_data, menu_data_end - menu_data);
+    menu_data += len + 1;
+    if (menu_data >= menu_data_end || !(*menu_data)) {
+        return 0; /* No entries, boot default */
+    }
+
+    puts("s390-ccw zIPL Boot Menu\n");
 
     /* Print entries */
-    while (*menu_data) {
-        len = strlen(menu_data);
+    while (menu_data < menu_data_end && *menu_data) {
+        len = strnlen(menu_data, menu_data_end - menu_data);
         entry = zipl_print_entry(menu_data, len);
         menu_data += len + 1;
 
+        if (entry < 0 || entry >= MAX_BOOT_ENTRIES) {
+            continue;
+        }
         valid_entries[entry] = true;
 
         if (entry == 0) {
-            sclp_print("\n");
+            printf("\n");
         }
     }
 
-    sclp_print("\n");
-    return get_boot_index(valid_entries);
+    printf("\n");
+    return menu_get_boot_index(valid_entries);
 }
 
 int menu_get_enum_boot_index(bool *valid_entries)
 {
-    char tmp[3];
     int i;
 
-    sclp_print("s390-ccw Enumerated Boot Menu.\n\n");
+    puts("s390-ccw Enumerated Boot Menu.\n");
 
     for (i = 0; i < MAX_BOOT_ENTRIES; i++) {
         if (valid_entries[i]) {
             if (i < 10) {
-                sclp_print(" ");
+                printf(" ");
             }
-            sclp_print("[");
-            sclp_print(uitoa(i, tmp, sizeof(tmp)));
-            sclp_print("]");
+            printf("[%d]", i);
             if (i == 0) {
-                sclp_print(" default\n");
+                printf(" default\n");
             }
-            sclp_print("\n");
+            printf("\n");
         }
     }
 
-    sclp_print("\n");
-    return get_boot_index(valid_entries);
+    printf("\n");
+    return menu_get_boot_index(valid_entries);
 }
 
 void menu_set_parms(uint8_t boot_menu_flag, uint32_t boot_menu_timeout)

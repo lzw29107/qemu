@@ -14,10 +14,19 @@ virtualization capabilities.
 Supported devices
 =================
 
- * Multi processor support for many Power processors generations: POWER7,
-   POWER7+, POWER8, POWER8NVL, POWER9, and Power10. Support for POWER5+ exists,
-   but its state is unknown.
- * Interrupt Controller, XICS (POWER8) and XIVE (POWER9 and Power10)
+ * Multi processor support for many Power processors generations:
+   - POWER7, POWER7+
+   - POWER8
+   - POWER9
+   - Power10
+   - Power11
+   - Support for POWER5+ also exists, works with correct kernel/userspace
+ * Interrupt Controller
+    - XICS (POWER8)
+    - XIVE (Supported by below:)
+        - POWER9
+        - Power10
+        - Power11
  * vPHB PCIe Host bridge.
  * vscsi and vnet devices, compatible with the same devices available on a
    PowerVM hypervisor with VIOS managing LPARs.
@@ -34,7 +43,7 @@ Firmware
 
 The pSeries platform in QEMU comes with 2 firmwares:
 
-`SLOF <https://github.com/aik/SLOF>`_ (Slimline Open Firmware) is an
+`SLOF <https://gitlab.com/slof/slof>`_ (Slimline Open Firmware) is an
 implementation of the `IEEE 1275-1994, Standard for Boot (Initialization
 Configuration) Firmware: Core Requirements and Practices
 <https://standards.ieee.org/standard/1275-1994.html>`_.

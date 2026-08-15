@@ -12,7 +12,8 @@
 #include "qemu/osdep.h"
 
 #include "qapi/error.h"
-#include "qapi/qapi-commands-misc-target.h"
+#include "monitor/monitor.h"
+#include "monitor/hmp.h"
 
 #include "xen_evtchn.h"
 #include "xen_primary_console.h"
@@ -38,15 +39,13 @@ void xen_primary_console_create(void)
 void xen_primary_console_set_be_port(uint16_t port)
 {
 }
-#ifdef TARGET_I386
-EvtchnInfoList *qmp_xen_event_list(Error **errp)
+
+void hmp_xen_event_list(Monitor *mon, const QDict *qdict)
 {
-    error_setg(errp, "Xen event channel emulation not enabled");
-    return NULL;
+    monitor_printf(mon, "XEN emulation is not available in this QEMU\n");
 }
 
-void qmp_xen_event_inject(uint32_t port, Error **errp)
+void hmp_xen_event_inject(Monitor *mon, const QDict *qdict)
 {
-    error_setg(errp, "Xen event channel emulation not enabled");
+    monitor_printf(mon, "XEN emulation is not available in this QEMU\n");
 }
-#endif
