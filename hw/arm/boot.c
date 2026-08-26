@@ -172,7 +172,6 @@ void arm_write_bootloader(const char *name,
         case FIXUP_GIC_CPU_IF:
         case FIXUP_BOOTREG:
         case FIXUP_DSB:
-        case FIXUP_MAILBOX:
             insn = fixupcontext[fixup];
             break;
         default:
@@ -691,11 +690,7 @@ static void do_cpu_reset(void *opaque)
                 g_assert_not_reached();
             }
 
-            if (cpu == info->primary_cpu) {
-                cpu_set_pc(cs, entry);
-            } else if (info->secondary_cpu_reset_hook) {
-                info->secondary_cpu_reset_hook(cpu, info);
-            }
+            cpu_set_pc(cs, entry);
         } else {
             /*
              * If we are booting Linux then we might need to do so at:
@@ -1119,7 +1114,6 @@ static void arm_setup_direct_kernel_boot(ARMCPU *cpu,
 
 static void arm_setup_firmware_boot(ARMCPU *cpu, struct arm_boot_info *info)
 {
-    CPUState *cs;
     /* Set up for booting firmware (which might load a kernel via fw_cfg) */
 
     if (have_dtb(info)) {
@@ -1174,9 +1168,11 @@ static void arm_setup_firmware_boot(ARMCPU *cpu, struct arm_boot_info *info)
         }
     }
 
-    for (cs = first_cpu; cs; cs = CPU_NEXT(cs)) {
-        ARM_CPU(cs)->env.boot_info = info;
-    }
+    /*
+     * We will start from address 0 (typically a boot ROM image) in the
+     * same way as hardware. Leave env->boot_info NULL, so that
+     * do_cpu_reset() knows it does not need to alter the PC on reset.
+     */
 }
 
 void arm_load_kernel(ARMCPU *cpu, MachineState *ms, struct arm_boot_info *info)
@@ -1272,7 +1268,8 @@ void arm_load_kernel(ARMCPU *cpu, MachineState *ms, struct arm_boot_info *info)
         }
     }
 
-    if (info->psci_conduit == QEMU_PSCI_CONDUIT_DISABLED && nb_cpus > 1) {
+    if (info->psci_conduit == QEMU_PSCI_CONDUIT_DISABLED &&
+        info->is_linux && nb_cpus > 1) {
         /*
          * We're booting Linux but not using PSCI, so for SMP we need
          * to write a custom secondary CPU boot loader stub, and arrange

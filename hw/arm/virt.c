@@ -215,7 +215,6 @@ static const MemMapEntry base_memmap[] = {
     [VIRT_ACPI_PCIHP] =         { 0x090c0000, ACPI_PCIHP_SIZE },
     [VIRT_EHCI_XHCI] =          { 0x090d0000, XHCI_LEN_REGS },
     [VIRT_SDHCI] =              { 0x090e0000, 0x00010000 },
-    [VIRT_SMPBOOT] =            { 0x09ff0000, 0x00008000 },
     [VIRT_MAILBOX] =            { 0x09ff8000, 0x00008000 },
     [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
@@ -714,6 +713,7 @@ static void fdt_add_cpu_nodes(VirtMachineState *vms)
         ARMCPU *armcpu = ARM_CPU(qemu_get_cpu(cpu));
         CPUState *cs = CPU(armcpu);
         const char *prefix = NULL;
+        const char *enable_method = NULL;
         uint32_t phandle;
 
         qemu_fdt_add_subnode(ms->fdt, nodename);
@@ -721,9 +721,17 @@ static void fdt_add_cpu_nodes(VirtMachineState *vms)
         qemu_fdt_setprop_string(ms->fdt, nodename, "compatible",
                                     armcpu->dtb_compatible);
 
-        if (vms->psci_conduit != QEMU_PSCI_CONDUIT_DISABLED && smp_cpus > 1) {
+        if (smp_cpus > 1) {
+            if (vms->smp_method == VIRT_SMP_METHOD_PARKING) {
+                enable_method = "parking-protocol";
+            } else if (vms->psci_conduit != QEMU_PSCI_CONDUIT_DISABLED) {
+                enable_method = "psci";
+            } else {
+                error_setg(&error_fatal, "No SMP boot method available");
+                return;
+            }
             qemu_fdt_setprop_string(ms->fdt, nodename,
-                                        "enable-method", "psci");
+                                        "enable-method", enable_method);
         }
 
         if (addr_cells == 2) {
@@ -1492,34 +1500,14 @@ static void create_gic(VirtMachineState *vms, MemoryRegion *mem)
     }
 }
 
-static void create_smpboot(VirtMachineState *vms, MemoryRegion *mem)
-{
-    memory_region_init_ram(
-        &vms->smpboot_ram,
-        NULL,
-        "virt.smpboot",
-        vms->memmap[VIRT_SMPBOOT].size,
-        &error_abort);
-
-    memory_region_add_subregion(
-        mem,
-        vms->memmap[VIRT_SMPBOOT].base,
-        &vms->smpboot_ram);
-}
-
 static void create_mailbox(VirtMachineState *vms, MemoryRegion *mem)
 {
-    memory_region_init_ram(
-        &vms->mailbox_ram,
-        NULL,
-        "virt.mailbox",
-        vms->memmap[VIRT_MAILBOX].size,
-        &error_abort);
+    hwaddr base = vms->memmap[VIRT_MAILBOX].base;
+    hwaddr size = vms->memmap[VIRT_MAILBOX].size;
 
-    memory_region_add_subregion(
-        mem,
-        vms->memmap[VIRT_MAILBOX].base,
-        &vms->mailbox_ram);
+    memory_region_init_ram(&vms->mailbox_ram, NULL, "virt.mailbox", size,
+                       &error_abort);
+    memory_region_add_subregion(mem, base, &vms->mailbox_ram);
 }
 
 static void create_msi_controller(VirtMachineState *vms)
@@ -3008,78 +2996,6 @@ static void virt_post_cpus_gic_realized(VirtMachineState *vms,
     }
 }
 
-static void write_smpboot(ARMCPU *cpu,
-                           const struct arm_boot_info *info)
-{
-    static const ARMInsnFixup smpboot[] = {
-        { 0xee100fb0 },      /* mrc p15,0,r0,c0,c0,5 */
-        { 0xe20000ff },      /* and r0,r0,#0xff */
-
-        { 0xe59f5064 },      /* ldr r5, mailbox */
-        { 0xe0855600 },      /* add r5,r5,r0,lsl #12 */
-
-        { 0xe59f1058 },      /* ldr r1, gic cpu interface */
-
-        { 0xe3a02001 },      /* mov r2,#1 */
-        { 0xe5812000 },      /* str r2,[r1,#0] */
-
-        { 0xe3a020ff },      /* mov r2,#0xff */
-        { 0xe5812004 },      /* str r2,[r1,#4] */
-
-        { 0xe320f003 },      /* wfi */
-
-        { 0xe5953000 },      /* ldr r3,[r5,#0] */
-        { 0xe1530000 },      /* cmp r3,r0 */
-        { 0x1afffffa },      /* bne wait */
-
-        { 0xe5953008 },      /* ldr r3,[r5,#8] */
-        { 0xe3530000 },      /* cmp r3,#0 */
-        { 0x0afffff5 },      /* beq wait */
-
-        { 0xe3a04000 },      /* mov r4,#0 */
-        { 0xe5854008 },      /* str r4,[r5,#8] */
-
-        { 0xee110f10 },      /* mrc p15,0,r0,c1,c0,0 */
-        { 0xe3c00001 },      /* bic r0,r0,#1 */
-        { 0xe3c00004 },      /* bic r0,r0,#4 */
-        { 0xe3c00a01 },      /* bic r0,r0,#0x1000 */
-        { 0xee010f10 },      /* mcr p15,0,r0,c1,c0,0 */
-
-        { 0xee070f9a },      /* dsb */
-        { 0xee070f95 },      /* isb */
-
-        { 0xe321f0d3 },      /* msr cpsr_c,#0xd3 */
-
-        { 0xe1a00005 },      /* mov r0,r5 */
-
-        { 0xe12fff13 },      /* bx r3 */
-
-        { 0, FIXUP_GIC_CPU_IF },
-        { 0, FIXUP_MAILBOX },
-        { 0, FIXUP_TERMINATOR }
-    };
-
-    uint32_t fixupcontext[FIXUP_MAX];
-
-    fixupcontext[FIXUP_GIC_CPU_IF] = info->gic_cpu_if_addr;
-    fixupcontext[FIXUP_MAILBOX] = info->mailbox_addr;
-
-    arm_write_bootloader(
-        "virt_smpboot",
-        arm_boot_address_space(cpu, info),
-        info->smp_loader_start,
-        smpboot,
-        fixupcontext);
-}
-
-static void reset_secondary(ARMCPU *cpu,
-                            const struct arm_boot_info *info)
-{
-    CPUState *cs = CPU(cpu);
-
-    cpu_set_pc(cs, info->smp_loader_start);
-}
-
 static void machvirt_init(MachineState *machine)
 {
     VirtMachineState *vms = VIRT_MACHINE(machine);
@@ -3361,7 +3277,6 @@ static void machvirt_init(MachineState *machine)
     create_gic(vms, sysmem);
     create_msi_controller(vms);
 
-    create_smpboot(vms, sysmem);
     create_mailbox(vms, sysmem);
 
     virt_post_cpus_gic_realized(vms, sysmem);
@@ -3474,16 +3389,7 @@ static void machvirt_init(MachineState *machine)
     vms->bootinfo.skip_dtb_autoload = true;
     vms->bootinfo.firmware_loaded = firmware_loaded;
     vms->bootinfo.psci_conduit = vms->psci_conduit;
-    vms->bootinfo.force_psci = vms->force_psci;
-
-    if (!aarch64 && vms->force_el3 && !vms->force_psci)
-    {
-        vms->bootinfo.gic_cpu_if_addr = vms->memmap[VIRT_GIC_CPU].base;
-        vms->bootinfo.mailbox_addr = vms->memmap[VIRT_MAILBOX].base;
-        vms->bootinfo.smp_loader_start = vms->memmap[VIRT_SMPBOOT].base;
-        vms->bootinfo.write_secondary_boot = write_smpboot;
-        vms->bootinfo.secondary_cpu_reset_hook = reset_secondary;
-    }
+    vms->bootinfo.force_psci = vms->smp_method == VIRT_SMP_METHOD_PSCI;
 
     arm_load_kernel(ARM_CPU(first_cpu), machine, &vms->bootinfo);
 
@@ -3970,20 +3876,6 @@ static void virt_set_force_el3(Object *obj, bool value, Error **errp)
     vms->force_el3 = value;
 }
 
-static bool virt_get_force_psci(Object *obj, Error **errp)
-{
-    VirtMachineState *vms = VIRT_MACHINE(obj);
-
-    return vms->force_psci;
-}
-
-static void virt_set_force_psci(Object *obj, bool value, Error **errp)
-{
-    VirtMachineState *vms = VIRT_MACHINE(obj);
-
-    vms->force_psci = value;
-}
-
 static bool virt_get_xhci(Object *obj, Error **errp)
 {
     VirtMachineState *vms = VIRT_MACHINE(obj);
@@ -3993,6 +3885,38 @@ static void virt_set_xhci(Object *obj, bool value, Error **errp)
 {
     VirtMachineState *vms = VIRT_MACHINE(obj);
     vms->xhci = value;
+}
+
+static char *virt_get_smp_method(Object *obj, Error **errp)
+{
+    VirtMachineState *vms = VIRT_MACHINE(obj);
+
+    switch (vms->smp_method) {
+    case VIRT_SMP_METHOD_AUTO:
+        return g_strdup("auto");
+    case VIRT_SMP_METHOD_PSCI:
+        return g_strdup("psci");
+    case VIRT_SMP_METHOD_PARKING:
+        return g_strdup("parking");
+    default:
+        g_assert_not_reached();
+    }
+}
+
+static void virt_set_smp_method(Object *obj, const char *value, Error **errp)
+{
+    VirtMachineState *vms = VIRT_MACHINE(obj);
+
+    if (!strcmp(value, "psci")) {
+        vms->smp_method = VIRT_SMP_METHOD_PSCI;
+    } else if (!strcmp(value, "parking")) {
+        vms->smp_method = VIRT_SMP_METHOD_PARKING;
+    } else if (!strcmp(value, "auto")) {
+        vms->smp_method = VIRT_SMP_METHOD_AUTO;
+    } else {
+        error_setg(errp, "Invalid iommu value");
+        error_append_hint(errp, "Valid values are psci, parking, auto.\n");
+    }
 }
 
 static CpuInstanceProperties
@@ -4671,11 +4595,12 @@ static void virt_machine_class_init(ObjectClass *oc, const void *data)
                                           "Force enable EL3 even when secure is false");
  
  
-    object_class_property_add_bool(oc, "force-psci",
-                                   virt_get_force_psci,
-                                   virt_set_force_psci);
-    object_class_property_set_description(oc, "force-psci",
-                                          "Enable QEMU's builtin PSCI emulation even when EL3 is enabled");
+    object_class_property_add_str(oc, "smp-method",
+                                  virt_get_smp_method,
+                                  virt_set_smp_method);
+    object_class_property_set_description(oc, "smp-method",
+                                          "Set the SMP method. "
+                                          "Valid values are psci, parking and auto");
 }
 
 static void virt_instance_init(Object *obj)
@@ -4731,7 +4656,7 @@ static void virt_instance_init(Object *obj)
     vms->xhci = false;
     vms->madt = true;
     vms->force_el3 = false;
-    vms->force_psci = false;
+    vms->smp_method = VIRT_SMP_METHOD_AUTO;
 
     vms->oem_id = g_strndup(ACPI_BUILD_APPNAME6, 6);
     vms->oem_table_id = g_strndup(ACPI_BUILD_APPNAME8, 8);

@@ -60,7 +60,6 @@ struct arm_boot_info {
     hwaddr smp_loader_start;
     hwaddr smp_bootreg_addr;
     hwaddr gic_cpu_if_addr;
-    hwaddr mailbox_addr;
     int board_id;
     /* ARM machines that support the ARM Security Extensions use this field to
      * control whether Linux is booted as secure(true) or non-secure(false).
@@ -204,7 +203,6 @@ typedef enum {
     FIXUP_GIC_CPU_IF,   /* overwrite with GIC CPU interface address */
     FIXUP_BOOTREG,      /* overwrite with boot register address */
     FIXUP_DSB,          /* overwrite with correct DSB insn for cpu */
-    FIXUP_MAILBOX,          /* overwrite with mailbox base address */
     FIXUP_MAX,
 } FixupType;
 
