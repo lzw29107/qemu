@@ -13,6 +13,7 @@
 #include "qemu/osdep.h"
 #include <sys/eventfd.h>
 
+#include "qemu/bswap.h"
 #include "qapi/error.h"
 #include "block/export.h"
 #include "qemu/error-report.h"
@@ -266,6 +267,7 @@ static const BlockDevOps vduse_block_ops = {
 };
 
 static int vduse_blk_exp_create(BlockExport *exp, BlockExportOptions *opts,
+                                AioContext *const *multithread, size_t mt_count,
                                 Error **errp)
 {
     VduseBlkExport *vblk_exp = container_of(exp, VduseBlkExport, export);
@@ -273,7 +275,6 @@ static int vduse_blk_exp_create(BlockExport *exp, BlockExportOptions *opts,
     uint64_t logical_block_size = VIRTIO_BLK_SECTOR_SIZE;
     uint16_t num_queues = VDUSE_DEFAULT_NUM_QUEUE;
     uint16_t queue_size = VDUSE_DEFAULT_QUEUE_SIZE;
-    Error *local_err = NULL;
     struct virtio_blk_config config = { 0 };
     uint64_t features;
     int i, ret;
@@ -297,13 +298,17 @@ static int vduse_blk_exp_create(BlockExport *exp, BlockExportOptions *opts,
 
     if (vblk_opts->has_logical_block_size) {
         logical_block_size = vblk_opts->logical_block_size;
-        check_block_size(exp->id, "logical-block-size", logical_block_size,
-                         &local_err);
-        if (local_err) {
-            error_propagate(errp, local_err);
+        if (!check_block_size("logical-block-size", logical_block_size,
+                              errp)) {
             return -EINVAL;
         }
     }
+
+    if (multithread) {
+        error_setg(errp, "vduse-blk export does not support multi-threading");
+        return -EINVAL;
+    }
+
     vblk_exp->num_queues = num_queues;
     vblk_exp->handler.blk = exp->blk;
     vblk_exp->handler.serial = g_strdup(vblk_opts->serial ?: "");

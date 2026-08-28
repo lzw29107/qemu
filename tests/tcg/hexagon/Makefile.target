@@ -50,14 +50,16 @@ HEX_TESTS += vector_add_int
 HEX_TESTS += scatter_gather
 HEX_TESTS += hvx_misc
 HEX_TESTS += hvx_histogram
+HEX_TESTS += fp_hvx
+HEX_TESTS += fp_hvx_cvt
+HEX_TESTS += fp_hvx_cmp
+HEX_TESTS += fp_hvx_disabled
 HEX_TESTS += invalid-slots
+HEX_TESTS += valid-slots
+HEX_TESTS += invalid-encoding
+HEX_TESTS += multiple-writes
 HEX_TESTS += unaligned_pc
-
-run-and-check-exception = $(call run-test,$2,$3 2>$2.stderr; \
-	test $$? -eq 1 && grep -q "exception $(strip $1)" $2.stderr)
-
-run-invalid-slots: invalid-slots
-	$(call run-and-check-exception, 0x15, $@, $(QEMU) $(QEMU_OPTS) $<)
+HEX_TESTS += unaligned_data
 
 HEX_TESTS += test_abs
 HEX_TESTS += test_bitcnt
@@ -85,6 +87,9 @@ HEX_TESTS += test_vminh
 HEX_TESTS += test_vpmpyh
 HEX_TESTS += test_vspliceb
 
+HEX_TESTS += check_rev_gating
+HEX_TESTS += test_pnew_jump_loads
+
 HEX_TESTS += v68_scalar
 HEX_TESTS += v68_hvx
 HEX_TESTS += v69_hvx
@@ -108,7 +113,15 @@ overflow: overflow.c hex_test.h
 preg_alias: preg_alias.c hex_test.h
 read_write_overlap: read_write_overlap.c hex_test.h
 reg_mut: reg_mut.c hex_test.h
+test_pnew_jump_loads: test_pnew_jump_loads.c hex_test.h
+unaligned_data: unaligned_data.c hex_test.h
 unaligned_pc: unaligned_pc.c
+
+# Compile for v66 so that the ELF selects a v66 CPU; the test then
+# exercises revision gating by executing a v68 .word instruction.
+run-check_rev_gating: QEMU_OPTS += -cpu v66
+check_rev_gating: check_rev_gating.c
+	$(CC) $(CFLAGS) -mv66 -O2 $< -o $@ $(LDFLAGS)
 
 # This test has to be compiled for the -mv67t target
 usr: usr.c hex_test.h
@@ -127,6 +140,24 @@ v68_hvx: CFLAGS += -mhvx -Wno-unused-function
 v69_hvx: v69_hvx.c hvx_misc.h
 v69_hvx: CFLAGS += -mhvx -Wno-unused-function
 v73_scalar: CFLAGS += -Wno-unused-function
+fp_hvx: fp_hvx.c hvx_misc.h hex_test.h
+fp_hvx: CFLAGS += -mhvx -mhvx-ieee-fp
+fp_hvx_disabled: fp_hvx_disabled.c hvx_misc.h hex_test.h
+fp_hvx_disabled: CFLAGS += -mhvx -mhvx-ieee-fp
+fp_hvx_cvt: fp_hvx_cvt.c hvx_misc.h hex_test.h
+fp_hvx_cvt: CFLAGS += -mhvx -mhvx-ieee-fp
+fp_hvx_cmp: fp_hvx_cmp.c hvx_misc.h hex_test.h
+fp_hvx_cmp: CFLAGS += -mhvx -mhvx-ieee-fp
+
+run-fp_hvx_disabled: QEMU_OPTS += -cpu v73,ieee-fp=false
 
 hvx_histogram: hvx_histogram.c hvx_histogram_row.S
 	$(CC) $(CFLAGS) $(CROSS_CC_GUEST_CFLAGS) $^ -o $@ $(LDFLAGS)
+
+ifeq ($(CONFIG_PLUGIN),y)
+# LLVM is way too aggressive with inlining and dead code elimination even at
+# -O0, which interferes with the test. What looks like dead code in this test
+# to the compiler isn't actually dead code, so we need to disable all potential
+# LLVM optimization passes.
+test-plugin-set-pc: CFLAGS += -Xclang -disable-llvm-passes
+endif

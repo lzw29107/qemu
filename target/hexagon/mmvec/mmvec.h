@@ -18,6 +18,9 @@
 #ifndef HEXAGON_MMVEC_H
 #define HEXAGON_MMVEC_H
 
+#include "exec/target_long.h"
+#include "qemu/bitmap.h"
+
 #define MAX_VEC_SIZE_LOGBYTES 7
 #define MAX_VEC_SIZE_BYTES  (1 << MAX_VEC_SIZE_LOGBYTES)
 
@@ -38,6 +41,9 @@ typedef union {
     int16_t   h[MAX_VEC_SIZE_BYTES / 2];
     uint8_t  ub[MAX_VEC_SIZE_BYTES / 1];
     int8_t    b[MAX_VEC_SIZE_BYTES / 1];
+    float32  sf[MAX_VEC_SIZE_BYTES / 4];
+    float16  hf[MAX_VEC_SIZE_BYTES / 2];
+    bfloat16 bf[MAX_VEC_SIZE_BYTES / 2];
 } MMVector;
 
 typedef union {

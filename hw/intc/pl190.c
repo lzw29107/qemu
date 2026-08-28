@@ -8,8 +8,8 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/irq.h"
-#include "hw/sysbus.h"
+#include "hw/core/irq.h"
+#include "hw/core/sysbus.h"
 #include "migration/vmstate.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
@@ -273,11 +273,11 @@ static const VMStateDescription vmstate_pl190 = {
     }
 };
 
-static void pl190_class_init(ObjectClass *klass, void *data)
+static void pl190_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->reset = pl190_reset;
+    device_class_set_legacy_reset(dc, pl190_reset);
     dc->vmsd = &vmstate_pl190;
 }
 
