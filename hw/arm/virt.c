@@ -213,8 +213,9 @@ static const MemMapEntry base_memmap[] = {
     [VIRT_PVTIME] =             { 0x090a0000, 0x00010000 },
     [VIRT_SECURE_GPIO] =        { 0x090b0000, 0x00001000 },
     [VIRT_ACPI_PCIHP] =         { 0x090c0000, ACPI_PCIHP_SIZE },
-    [VIRT_EHCI_XHCI] =               { 0x090d0000, XHCI_LEN_REGS },
+    [VIRT_EHCI_XHCI] =          { 0x090d0000, XHCI_LEN_REGS },
     [VIRT_SDHCI] =              { 0x090e0000, 0x00010000 },
+    [VIRT_MAILBOX] =            { 0x09ff8000, 0x00008000 },
     [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
     [VIRT_PLATFORM_BUS] =       { 0x0c000000, 0x02000000 },
@@ -712,6 +713,7 @@ static void fdt_add_cpu_nodes(VirtMachineState *vms)
         ARMCPU *armcpu = ARM_CPU(qemu_get_cpu(cpu));
         CPUState *cs = CPU(armcpu);
         const char *prefix = NULL;
+        const char *enable_method = NULL;
         uint32_t phandle;
 
         qemu_fdt_add_subnode(ms->fdt, nodename);
@@ -719,9 +721,20 @@ static void fdt_add_cpu_nodes(VirtMachineState *vms)
         qemu_fdt_setprop_string(ms->fdt, nodename, "compatible",
                                     armcpu->dtb_compatible);
 
-        if (vms->psci_conduit != QEMU_PSCI_CONDUIT_DISABLED && smp_cpus > 1) {
-            qemu_fdt_setprop_string(ms->fdt, nodename,
-                                        "enable-method", "psci");
+        if (smp_cpus > 1) {
+            if (vms->smp_method == VIRT_SMP_METHOD_PARKING) {
+                enable_method = "parking-protocol";
+            } else if (vms->psci_conduit != QEMU_PSCI_CONDUIT_DISABLED) {
+                enable_method = "psci";
+            } else if (vms->smp_method == VIRT_SMP_METHOD_PSCI) {
+                error_setg(&error_fatal, "smp-method=psci requires PSCI support");
+                return;
+            }
+
+            if (enable_method) {
+                qemu_fdt_setprop_string(ms->fdt, nodename,
+                                        "enable-method", enable_method);
+            }
         }
 
         if (addr_cells == 2) {
@@ -1488,6 +1501,16 @@ static void create_gic(VirtMachineState *vms, MemoryRegion *mem)
     default:
         g_assert_not_reached();
     }
+}
+
+static void create_mailbox(VirtMachineState *vms, MemoryRegion *mem)
+{
+    hwaddr base = vms->memmap[VIRT_MAILBOX].base;
+    hwaddr size = vms->memmap[VIRT_MAILBOX].size;
+
+    memory_region_init_ram(&vms->mailbox_ram, NULL, "virt.mailbox", size,
+                       &error_abort);
+    memory_region_add_subregion(mem, base, &vms->mailbox_ram);
 }
 
 static void create_msi_controller(VirtMachineState *vms)
@@ -3052,7 +3075,9 @@ static void machvirt_init(MachineState *machine)
      * and otherwise we will use HVC (for backwards compatibility and
      * because if we're using KVM then we must use HVC).
      */
-    if (vms->secure && firmware_loaded) {
+    if (vms->smp_method == VIRT_SMP_METHOD_PARKING ||
+    (vms->smp_method == VIRT_SMP_METHOD_AUTO &&
+    vms->secure && firmware_loaded)) {
         vms->psci_conduit = QEMU_PSCI_CONDUIT_DISABLED;
     } else if (vms->virt) {
         vms->psci_conduit = QEMU_PSCI_CONDUIT_SMC;
@@ -3257,6 +3282,8 @@ static void machvirt_init(MachineState *machine)
     create_gic(vms, sysmem);
     create_msi_controller(vms);
 
+    create_mailbox(vms, sysmem);
+
     virt_post_cpus_gic_realized(vms, sysmem);
 
     fdt_add_pmu_nodes(vms);
@@ -3367,7 +3394,8 @@ static void machvirt_init(MachineState *machine)
     vms->bootinfo.skip_dtb_autoload = true;
     vms->bootinfo.firmware_loaded = firmware_loaded;
     vms->bootinfo.psci_conduit = vms->psci_conduit;
-    vms->bootinfo.force_psci = vms->force_psci;
+    vms->bootinfo.force_psci = vms->smp_method == VIRT_SMP_METHOD_PSCI;
+
     arm_load_kernel(ARM_CPU(first_cpu), machine, &vms->bootinfo);
 
     vms->machine_done.notify = virt_machine_done;
@@ -3853,20 +3881,6 @@ static void virt_set_force_el3(Object *obj, bool value, Error **errp)
     vms->force_el3 = value;
 }
 
-static bool virt_get_force_psci(Object *obj, Error **errp)
-{
-    VirtMachineState *vms = VIRT_MACHINE(obj);
-
-    return vms->force_psci;
-}
-
-static void virt_set_force_psci(Object *obj, bool value, Error **errp)
-{
-    VirtMachineState *vms = VIRT_MACHINE(obj);
-
-    vms->force_psci = value;
-}
-
 static bool virt_get_xhci(Object *obj, Error **errp)
 {
     VirtMachineState *vms = VIRT_MACHINE(obj);
@@ -3876,6 +3890,38 @@ static void virt_set_xhci(Object *obj, bool value, Error **errp)
 {
     VirtMachineState *vms = VIRT_MACHINE(obj);
     vms->xhci = value;
+}
+
+static char *virt_get_smp_method(Object *obj, Error **errp)
+{
+    VirtMachineState *vms = VIRT_MACHINE(obj);
+
+    switch (vms->smp_method) {
+    case VIRT_SMP_METHOD_AUTO:
+        return g_strdup("auto");
+    case VIRT_SMP_METHOD_PSCI:
+        return g_strdup("psci");
+    case VIRT_SMP_METHOD_PARKING:
+        return g_strdup("parking");
+    default:
+        g_assert_not_reached();
+    }
+}
+
+static void virt_set_smp_method(Object *obj, const char *value, Error **errp)
+{
+    VirtMachineState *vms = VIRT_MACHINE(obj);
+
+    if (!strcmp(value, "psci")) {
+        vms->smp_method = VIRT_SMP_METHOD_PSCI;
+    } else if (!strcmp(value, "parking")) {
+        vms->smp_method = VIRT_SMP_METHOD_PARKING;
+    } else if (!strcmp(value, "auto")) {
+        vms->smp_method = VIRT_SMP_METHOD_AUTO;
+    } else {
+        error_setg(errp, "Invalid smp-method value");
+        error_append_hint(errp, "Valid values are psci, parking, auto.\n");
+    }
 }
 
 static CpuInstanceProperties
@@ -4554,11 +4600,12 @@ static void virt_machine_class_init(ObjectClass *oc, const void *data)
                                           "Force enable EL3 even when secure is false");
  
  
-    object_class_property_add_bool(oc, "force-psci",
-                                   virt_get_force_psci,
-                                   virt_set_force_psci);
-    object_class_property_set_description(oc, "force-psci",
-                                          "Enable QEMU's builtin PSCI emulation even when EL3 is enabled");
+    object_class_property_add_str(oc, "smp-method",
+                                  virt_get_smp_method,
+                                  virt_set_smp_method);
+    object_class_property_set_description(oc, "smp-method",
+                                          "Set the SMP method. "
+                                          "Valid values are psci, parking and auto");
 }
 
 static void virt_instance_init(Object *obj)
@@ -4614,7 +4661,7 @@ static void virt_instance_init(Object *obj)
     vms->xhci = false;
     vms->madt = true;
     vms->force_el3 = false;
-    vms->force_psci = false;
+    vms->smp_method = VIRT_SMP_METHOD_AUTO;
 
     vms->oem_id = g_strndup(ACPI_BUILD_APPNAME6, 6);
     vms->oem_table_id = g_strndup(ACPI_BUILD_APPNAME8, 8);

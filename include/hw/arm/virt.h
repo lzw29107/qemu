@@ -82,6 +82,7 @@ enum {
     VIRT_UART0,
     VIRT_EHCI_XHCI,
     VIRT_SDHCI,
+    VIRT_MAILBOX,
     VIRT_MMIO,
     VIRT_RTC,
     VIRT_FW_CFG,
@@ -145,6 +146,12 @@ typedef enum VirtGICType {
 #define VIRT_GIC_VERSION_4_MASK BIT(VIRT_GIC_VERSION_4)
 #define VIRT_GIC_VERSION_5_MASK BIT(VIRT_GIC_VERSION_5)
 
+typedef enum VirtSMPMethodType {
+    VIRT_SMP_METHOD_AUTO,
+    VIRT_SMP_METHOD_PSCI,
+    VIRT_SMP_METHOD_PARKING,
+} VirtSMPMethodType;
+
 struct VirtMachineClass {
     MachineClass parent;
     bool no_tcg_its;
@@ -188,6 +195,7 @@ struct VirtMachineState {
     OnOffAuto acpi;
     VirtGICType gic_version;
     VirtIOMMUType iommu;
+    VirtSMPMethodType smp_method;
     bool default_bus_bypass_iommu;
     VirtMSIControllerType msi_controller;
     uint16_t virtio_iommu_bdf;
@@ -218,6 +226,7 @@ struct VirtMachineState {
     MemoryRegion *secure_sysmem;
     bool pci_preserve_config;
     GPtrArray *smmuv3_devices;
+    MemoryRegion mailbox_ram;
 };
 
 #define VIRT_ECAM_ID(high) (high ? VIRT_HIGH_PCIE_ECAM : VIRT_PCIE_ECAM)

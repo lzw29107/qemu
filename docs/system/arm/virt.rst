@@ -268,11 +268,18 @@ xhci
 madt
   Set ``on``/``off`` to enable/disable ACPI MADT (Multiple APIC Description Table). The default is ``on``
 
-force_el3
+force-el3
   Set ``on``/``off`` to enable/disable EL3 without secure. The default is ``off``
 
-force_psci
-  Set ``on``/``off`` to enable/disable builtin PSCI emulation even when EL3 is enabled. The default is ``off``
+smp-method
+  Set the SMP method. Valid values are:
+
+  ``auto``
+    Automatically select the SMP method. This is the default.
+  ``psci``
+    Use PSCI for secondary CPU boot.
+  ``parking``
+    Use the parking protocol for secondary CPU boot.
 
 SMMU configuration
 """"""""""""""""""
