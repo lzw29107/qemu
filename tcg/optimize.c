@@ -2222,6 +2222,7 @@ static bool fold_multiply2(OptContext *ctx, TCGOp *op)
         TCGArg rl = op->args[0];
         TCGArg rh = op->args[1];
         TCGOp *op2;
+        TempOptInfo *ti;
 
         if (arg_is_const(op->args[2])) {
             uint64_t a = arg_const_val(op->args[2]);
@@ -2277,7 +2278,9 @@ static bool fold_multiply2(OptContext *ctx, TCGOp *op)
                 op->args[1] = rl;
                 op->args[2] =
                     arg_new_constant(ctx, tcg_type_size(ctx->type) * 8 - 1);
-                break;
+
+                ti = arg_info(rl);
+                return fold_masks_s(ctx, op, ti->s_mask);
             default:
                 g_assert_not_reached();
             }
