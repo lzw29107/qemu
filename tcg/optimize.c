@@ -2272,6 +2272,7 @@ static bool fold_multiply2(OptContext *ctx, TCGOp *op)
                 tcg_opt_gen_movi(ctx, op, rh, 0);
                 break;
             case INDEX_op_muls2:
+                return finish_folding(ctx, op);
                 op->opc = INDEX_op_sar;
                 op->args[0] = rh;
                 op->args[1] = rl;
