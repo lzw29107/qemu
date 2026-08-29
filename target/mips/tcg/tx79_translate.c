@@ -241,8 +241,8 @@ static bool trans_parallel_compare(DisasContext *ctx, arg_r *a,
         return true;
     }
 
-    c0 = tcg_constant_tl(0);
-    c1 = tcg_constant_tl(0xffffffff);
+    c0 = tcg_constant_i64(0);
+    c1 = tcg_constant_i64(0xffffffff);
     ax = tcg_temp_new_i64();
     bx = tcg_temp_new_i64();
     t0 = tcg_temp_new_i64();
@@ -322,7 +322,7 @@ static bool trans_PCEQW(DisasContext *ctx, arg_r *a)
 static bool trans_LQ(DisasContext *ctx, arg_i *a)
 {
     TCGv_i64 t0;
-    TCGv addr;
+    TCGv_i64 addr;
 
     if (a->rt == 0) {
         /* nop */
@@ -330,22 +330,22 @@ static bool trans_LQ(DisasContext *ctx, arg_i *a)
     }
 
     t0 = tcg_temp_new_i64();
-    addr = tcg_temp_new();
+    addr = tcg_temp_new_i64();
 
     gen_base_offset_addr(ctx, addr, a->base, a->offset);
     /*
      * Clear least-significant four bits of the effective
      * address, effectively creating an aligned address.
      */
-    tcg_gen_andi_tl(addr, addr, ~0xf);
+    tcg_gen_andi_i64(addr, addr, ~0xf);
 
     /* Lower half */
-    tcg_gen_qemu_ld_i64(t0, addr, ctx->mem_idx, MO_TEUQ);
+    tcg_gen_qemu_ld_i64(t0, addr, ctx->mem_idx, mo_endian(ctx) | MO_UQ);
     gen_store_gpr(t0, a->rt);
 
     /* Upper half */
     tcg_gen_addi_i64(addr, addr, 8);
-    tcg_gen_qemu_ld_i64(t0, addr, ctx->mem_idx, MO_TEUQ);
+    tcg_gen_qemu_ld_i64(t0, addr, ctx->mem_idx, mo_endian(ctx) | MO_UQ);
     gen_store_gpr_hi(t0, a->rt);
     return true;
 }
@@ -353,23 +353,23 @@ static bool trans_LQ(DisasContext *ctx, arg_i *a)
 static bool trans_SQ(DisasContext *ctx, arg_i *a)
 {
     TCGv_i64 t0 = tcg_temp_new_i64();
-    TCGv addr = tcg_temp_new();
+    TCGv_i64 addr = tcg_temp_new_i64();
 
     gen_base_offset_addr(ctx, addr, a->base, a->offset);
     /*
      * Clear least-significant four bits of the effective
      * address, effectively creating an aligned address.
      */
-    tcg_gen_andi_tl(addr, addr, ~0xf);
+    tcg_gen_andi_i64(addr, addr, ~0xf);
 
     /* Lower half */
     gen_load_gpr(t0, a->rt);
-    tcg_gen_qemu_st_i64(t0, addr, ctx->mem_idx, MO_TEUQ);
+    tcg_gen_qemu_st_i64(t0, addr, ctx->mem_idx, mo_endian(ctx) | MO_UQ);
 
     /* Upper half */
     tcg_gen_addi_i64(addr, addr, 8);
     gen_load_gpr_hi(t0, a->rt);
-    tcg_gen_qemu_st_i64(t0, addr, ctx->mem_idx, MO_TEUQ);
+    tcg_gen_qemu_st_i64(t0, addr, ctx->mem_idx, mo_endian(ctx) | MO_UQ);
     return true;
 }
 

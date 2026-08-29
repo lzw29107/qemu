@@ -54,11 +54,11 @@ Data Register
 -------------
 
 * Read/Write (writes ignored as of QEMU v2.4, but see the DMA interface)
-* Location: platform dependent (IOport [#]_ or MMIO)
+* Location: platform dependent (IOport\ [#placement]_ or MMIO)
 * Width: 8-bit (if IOport), 8/16/32/64-bit (if MMIO)
 * Endianness: string-preserving
 
-.. [#]
+.. [#placement]
     On platforms where the data register is exposed as an IOport, its
     port number will always be one greater than the port number of the
     selector register. In other words, the two ports overlap, and can not
@@ -84,15 +84,35 @@ increasing address order, similar to memcpy().
 Register Locations
 ------------------
 
+For a memory-mapped fw_cfg device, the standard register layout is:
+
+    * base address : Data Register (64 bit)
+    * base address + 8 : Selector Register (16 bit)
+    * base address + 16 : DMA Address Register (64 bit)
+
+Some architectures or machines have a different layout for historical reasons:
+
 x86, x86_64
     * Selector Register IOport: 0x510
     * Data Register IOport:     0x511
     * DMA Address IOport:       0x514
 
-Arm
-    * Selector Register address: Base + 8 (2 bytes)
-    * Data Register address:     Base + 0 (8 bytes)
-    * DMA Address address:       Base + 16 (8 bytes)
+PA-RISC:
+    * base address : Selector Register (16 bit)
+    * base address + 4 : Data Register (8 bit)
+
+32-bit SPARC, PPC ``g3beige``, ``mac99``, ``prep``:
+   * base address : Selector Register (16 bit)
+   * base address + 2 : Data Register (8 bit)
+
+64-bit SPARC:
+    * base address : Selector Register (16 bit)
+    * base address + 1 : Data Register (8 bit)
+
+MIPS ``loongson3-virt`` machine:
+    * base address : Selector Register (16 bit)
+    * base address + 8 : Data Register (64 bit)
+
 
 ACPI Interface
 --------------

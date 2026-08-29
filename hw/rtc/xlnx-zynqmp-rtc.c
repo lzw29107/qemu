@@ -25,15 +25,15 @@
  */
 
 #include "qemu/osdep.h"
-#include "hw/sysbus.h"
-#include "hw/register.h"
+#include "hw/core/sysbus.h"
+#include "hw/core/register.h"
 #include "qemu/bitops.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
-#include "hw/irq.h"
+#include "hw/core/irq.h"
 #include "qemu/cutils.h"
-#include "sysemu/sysemu.h"
-#include "sysemu/rtc.h"
+#include "system/system.h"
+#include "system/rtc.h"
 #include "trace.h"
 #include "hw/rtc/xlnx-zynqmp-rtc.h"
 #include "migration/vmstate.h"
@@ -251,11 +251,11 @@ static const VMStateDescription vmstate_rtc = {
     }
 };
 
-static void rtc_class_init(ObjectClass *klass, void *data)
+static void rtc_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->reset = rtc_reset;
+    device_class_set_legacy_reset(dc, rtc_reset);
     dc->vmsd = &vmstate_rtc;
 }
 

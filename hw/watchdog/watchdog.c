@@ -26,9 +26,9 @@
 #include "qapi/error.h"
 #include "qapi/qapi-commands-run-state.h"
 #include "qapi/qapi-events-run-state.h"
-#include "sysemu/runstate.h"
-#include "sysemu/watchdog.h"
-#include "hw/nmi.h"
+#include "system/runstate.h"
+#include "system/watchdog.h"
+#include "hw/core/nmi.h"
 #include "qemu/help_option.h"
 #include "trace.h"
 
@@ -81,11 +81,11 @@ void watchdog_perform_action(void)
 
     case WATCHDOG_ACTION_INJECT_NMI:
         qapi_event_send_watchdog(WATCHDOG_ACTION_INJECT_NMI);
-        nmi_monitor_handle(0, NULL);
+        nmi_inject(NULL);
         break;
 
     default:
-        assert(0);
+        g_assert_not_reached();
     }
 }
 

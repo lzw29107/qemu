@@ -32,10 +32,10 @@
 #include "qemu/module.h"
 #include "qapi/error.h"
 #include "trace.h"
-#include "hw/sysbus.h"
-#include "hw/irq.h"
-#include "hw/registerfields.h"
-#include "hw/qdev-clock.h"
+#include "hw/core/sysbus.h"
+#include "hw/core/irq.h"
+#include "hw/core/registerfields.h"
+#include "hw/core/qdev-clock.h"
 #include "hw/timer/cmsdk-apb-timer.h"
 #include "migration/vmstate.h"
 
@@ -261,13 +261,13 @@ static const VMStateDescription cmsdk_apb_timer_vmstate = {
     }
 };
 
-static void cmsdk_apb_timer_class_init(ObjectClass *klass, void *data)
+static void cmsdk_apb_timer_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = cmsdk_apb_timer_realize;
     dc->vmsd = &cmsdk_apb_timer_vmstate;
-    dc->reset = cmsdk_apb_timer_reset;
+    device_class_set_legacy_reset(dc, cmsdk_apb_timer_reset);
 }
 
 static const TypeInfo cmsdk_apb_timer_info = {

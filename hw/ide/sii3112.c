@@ -185,7 +185,7 @@ static void sii3112_reg_write(void *opaque, hwaddr addr,
     case 0x100:
         d->regs[0].scontrol = val & 0xfff;
         if (val & 1) {
-            ide_bus_reset(&d->i.bus[0]);
+            ide_bus_reset(&d->i.bus[0], IDE_RESET_HARDWARE);
         }
         break;
     case 0x148:
@@ -194,7 +194,7 @@ static void sii3112_reg_write(void *opaque, hwaddr addr,
     case 0x180:
         d->regs[1].scontrol = val & 0xfff;
         if (val & 1) {
-            ide_bus_reset(&d->i.bus[1]);
+            ide_bus_reset(&d->i.bus[1], IDE_RESET_HARDWARE);
         }
         break;
     case 0x1c8:
@@ -243,7 +243,7 @@ static void sii3112_reset(DeviceState *dev)
 
     for (i = 0; i < 2; i++) {
         s->regs[i].confstat = 0x6515 << 16;
-        ide_bus_reset(&s->i.bus[i]);
+        ide_bus_reset(&s->i.bus[i], IDE_RESET_HARDWARE);
     }
 }
 
@@ -290,7 +290,7 @@ static void sii3112_pci_realize(PCIDevice *dev, Error **errp)
     }
 }
 
-static void sii3112_pci_class_init(ObjectClass *klass, void *data)
+static void sii3112_pci_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     PCIDeviceClass *pd = PCI_DEVICE_CLASS(klass);
@@ -300,7 +300,7 @@ static void sii3112_pci_class_init(ObjectClass *klass, void *data)
     pd->class_id = PCI_CLASS_STORAGE_RAID;
     pd->revision = 1;
     pd->realize = sii3112_pci_realize;
-    dc->reset = sii3112_reset;
+    device_class_set_legacy_reset(dc, sii3112_reset);
     dc->desc = "SiI3112A SATA controller";
     set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
 }

@@ -16,6 +16,7 @@
 
 typedef uint64_t block_number_t;
 #define NULL_BLOCK_NR 0xffffffffffffffffULL
+#define ERROR_BLOCK_NR 0xfffffffffffffffeULL
 
 #define FREE_SPACE_FILLER '\xAA'
 
@@ -87,9 +88,18 @@ typedef struct BootMapTable {
     BootMapPointer entry[];
 } __attribute__ ((packed)) BootMapTable;
 
+#define DER_SIGNATURE_FORMAT 1
+
+typedef struct SignatureInformation {
+    uint8_t format;
+    uint8_t reserved[3];
+    uint32_t sig_len;
+} SignatureInformation;
+
 typedef union ComponentEntryData {
     uint64_t load_psw;
     uint64_t load_addr;
+    SignatureInformation sig_info;
 } ComponentEntryData;
 
 typedef struct ComponentEntry {
@@ -111,6 +121,19 @@ typedef struct ScsiMbr {
     uint8_t reserved[8];
     ScsiBlockPtr pt;   /* block pointer to program table */
 } __attribute__ ((packed)) ScsiMbr;
+
+/**
+ * zipl_load_segment
+ * @blockno: block number of the first BPRS describing the segment.
+ * @address: guest physical address at which to load the segment.
+ *
+ * Walks the BPRS chain starting at @blockno, loading each data block
+ * into guest memory at @address.
+ *
+ * Returns: length of the segment on success,
+ *          negative value on error.
+ */
+int zipl_load_segment(block_number_t blockno, uint64_t address);
 
 #define ZIPL_MAGIC              "zIPL"
 #define ZIPL_MAGIC_EBCDIC       "\xa9\xc9\xd7\xd3"
@@ -336,9 +359,7 @@ static inline void print_volser(const void *volser)
 
     ebcdic_to_ascii((char *)volser, ascii, 6);
     ascii[6] = '\0';
-    sclp_print("VOLSER=[");
-    sclp_print(ascii);
-    sclp_print("]\n");
+    printf("VOLSER=[%s]\n", ascii);
 }
 
 static inline bool unused_space(const void *p, size_t size)
@@ -387,17 +408,14 @@ static inline uint32_t iso_733_to_u32(uint64_t x)
 
 #define ISO_PRIMARY_VD_SECTOR 16
 
-static inline void read_iso_sector(uint32_t block_offset, void *buf,
-                                   const char *errmsg)
-{
-    IPL_assert(virtio_read_many(block_offset, buf, 1) == 0, errmsg);
-}
-
-static inline void read_iso_boot_image(uint32_t block_offset, void *load_addr,
+static inline int read_iso_boot_image(uint32_t block_offset, void *load_addr,
                                        uint32_t blks_to_load)
 {
-    IPL_assert(virtio_read_many(block_offset, load_addr, blks_to_load) == 0,
-               "Failed to read boot image!");
+    if (virtio_read_many(block_offset, load_addr, blks_to_load)) {
+        puts("Failed to read boot image!");
+        return -1;
+    }
+    return 0;
 }
 
 #define ISO9660_MAX_DIR_DEPTH 8

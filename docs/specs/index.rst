@@ -34,4 +34,11 @@ guest hardware that is specific to QEMU.
    virt-ctlr
    vmcoreinfo
    vmgenid
+   vmlaunchupdate
    rapl-msr
+   rocker
+   riscv-iommu
+   riscv-aia
+   aspeed-intc
+   iommu-testdev
+   s390x-secure-ipl

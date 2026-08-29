@@ -23,11 +23,11 @@
 
 #include "qemu/osdep.h"
 #include "qemu/units.h"
-#include "sysemu/block-backend.h"
+#include "system/block-backend.h"
 #include "hw/block/block.h"
 #include "hw/block/flash.h"
-#include "hw/qdev-properties.h"
-#include "hw/qdev-properties-system.h"
+#include "hw/core/qdev-properties.h"
+#include "hw/core/qdev-properties-system.h"
 #include "hw/ssi/ssi.h"
 #include "migration/vmstate.h"
 #include "qemu/bitops.h"
@@ -61,7 +61,8 @@ typedef struct FlashPartInfo {
      */
     uint8_t id[SPI_NOR_MAX_ID_LEN];
     uint8_t id_len;
-    /* there is confusion between manufacturers as to what a sector is. In this
+    /*
+     * there is confusion between manufacturers as to what a sector is. In this
      * device model, a "sector" is the size that is erased by the ERASE_SECTOR
      * command (opcode 0xd8).
      */
@@ -168,7 +169,7 @@ typedef struct FlashPartInfo {
 /*
  * Spansion read mode command length in bytes,
  * the mode is currently not supported.
-*/
+ */
 
 #define SPANSION_CONTINUOUS_READ_MODE_CMD_LEN 1
 #define WINBOND_CONTINUOUS_READ_MODE_CMD_LEN 1
@@ -189,7 +190,8 @@ static const FlashPartInfo known_devices[] = {
 
     { INFO("at45db081d",  0x1f2500,      0,  64 << 10,  16, ER_4K) },
 
-    /* Atmel EEPROMS - it is assumed, that don't care bit in command
+    /*
+     * Atmel EEPROMS - it is assumed, that don't care bit in command
      * is set to 0. Block protection is not supported.
      */
     { INFO("at25128a-nonjedec", 0x0,     0,         1, 131072, EEPROM) },
@@ -215,7 +217,8 @@ static const FlashPartInfo known_devices[] = {
     /* ISSI */
     { INFO("is25lq040b",  0x9d4013,      0,  64 << 10,   8, ER_4K) },
     { INFO("is25lp080d",  0x9d6014,      0,  64 << 10,  16, ER_4K) },
-    { INFO("is25lp016d",  0x9d6015,      0,  64 << 10,  32, ER_4K) },
+    { INFO("is25lp016d",  0x9d6015,      0,  64 << 10,  32,
+           ER_4K | HAS_SR_TB) },
     { INFO("is25lp032",   0x9d6016,      0,  64 << 10,  64, ER_4K) },
     { INFO("is25lp064",   0x9d6017,      0,  64 << 10, 128, ER_4K) },
     { INFO("is25lp128",   0x9d6018,      0,  64 << 10, 256, ER_4K) },
@@ -266,7 +269,8 @@ static const FlashPartInfo known_devices[] = {
     { INFO("n25q512ax3",  0x20ba20,  0x1000,  64 << 10, 1024, ER_4K) },
     { INFO("mt25ql512ab", 0x20ba20, 0x1044, 64 << 10, 1024, ER_4K | ER_32K) },
     { INFO_STACKED("mt35xu01g", 0x2c5b1b, 0x104100, 128 << 10, 1024,
-                   ER_4K | ER_32K, 2) },
+                   ER_4K | ER_32K, 2),
+                   .sfdp_read = m25p80_sfdp_mt35xu01g },
     { INFO_STACKED("mt35xu02gbba", 0x2c5b1c, 0x104100, 128 << 10, 2048,
                    ER_4K | ER_32K, 4),
                    .sfdp_read = m25p80_sfdp_mt35xu02g },
@@ -274,10 +278,13 @@ static const FlashPartInfo known_devices[] = {
     { INFO_STACKED("n25q00a",   0x20bb21, 0x1000, 64 << 10, 2048, ER_4K, 4) },
     { INFO_STACKED("mt25ql01g", 0x20ba21, 0x1040, 64 << 10, 2048, ER_4K, 2) },
     { INFO_STACKED("mt25qu01g", 0x20bb21, 0x1040, 64 << 10, 2048, ER_4K, 2) },
-    { INFO_STACKED("mt25ql02g", 0x20ba22, 0x1040, 64 << 10, 4096, ER_4K | ER_32K, 2) },
-    { INFO_STACKED("mt25qu02g", 0x20bb22, 0x1040, 64 << 10, 4096, ER_4K | ER_32K, 2) },
+    { INFO_STACKED("mt25ql02g", 0x20ba22, 0x1040, 64 << 10, 4096,
+                   ER_4K | ER_32K, 2) },
+    { INFO_STACKED("mt25qu02g", 0x20bb22, 0x1040, 64 << 10, 4096,
+                   ER_4K | ER_32K, 2) },
 
-    /* Spansion -- single (large) sector size only, at least
+    /*
+     * Spansion -- single (large) sector size only, at least
      * for the chips listed here (without boot sectors).
      */
     { INFO("s25sl032p",   0x010215, 0x4d00,  64 << 10,  64, ER_4K) },
@@ -350,13 +357,19 @@ static const FlashPartInfo known_devices[] = {
     { INFO("w25x64",      0xef3017,      0,  64 << 10, 128, ER_4K) },
     { INFO("w25q64",      0xef4017,      0,  64 << 10, 128, ER_4K) },
     { INFO("w25q80",      0xef5014,      0,  64 << 10,  16, ER_4K) },
-    { INFO("w25q80bl",    0xef4014,      0,  64 << 10,  16, ER_4K) },
+    { INFO("w25q80bl",    0xef4014,      0,  64 << 10,  16, ER_4K),
+      .sfdp_read = m25p80_sfdp_w25q80bl },
     { INFO("w25q256",     0xef4019,      0,  64 << 10, 512, ER_4K),
       .sfdp_read = m25p80_sfdp_w25q256 },
     { INFO("w25q512jv",   0xef4020,      0,  64 << 10, 1024, ER_4K),
       .sfdp_read = m25p80_sfdp_w25q512jv },
     { INFO("w25q01jvq",   0xef4021,      0,  64 << 10, 2048, ER_4K),
       .sfdp_read = m25p80_sfdp_w25q01jvq },
+    { INFO("w25q02jvm",   0xef7022,      0,  64 << 10, 4096, ER_4K),
+      .sfdp_read = m25p80_sfdp_w25q02jvm },
+
+    /* Microchip */
+    { INFO("25csm04",      0x29cc00,      0x100,  64 << 10,  8, 0) },
 };
 
 typedef enum {
@@ -420,6 +433,11 @@ typedef enum {
      */
     RDCR_EQIO = 0x35,
     RSTQIO = 0xf5,
+
+    /*
+     * Winbond: 0x31 - write status register 2
+     */
+    WRSR2 = 0x31,
 
     RNVCR = 0xB5,
     WNVCR = 0xB1,
@@ -513,7 +531,7 @@ struct Flash {
 
 struct M25P80Class {
     SSIPeripheralClass parent_class;
-    FlashPartInfo *pi;
+    const FlashPartInfo *pi;
 };
 
 OBJECT_DECLARE_TYPE(Flash, M25P80Class, M25P80)
@@ -545,7 +563,8 @@ static void blk_sync_complete(void *opaque, int ret)
     qemu_iovec_destroy(iov);
     g_free(iov);
 
-    /* do nothing. Masters do not directly interact with the backing store,
+    /*
+     * do nothing. Masters do not directly interact with the backing store,
      * only the working copy so no mutexing required.
      */
 }
@@ -811,6 +830,15 @@ static void complete_collecting_data(Flash *s)
             s->write_enable = false;
         }
         break;
+    case WRSR2:
+        switch (get_man(s)) {
+        case MAN_WINBOND:
+            s->quad_enable = !!(s->data[0] & 0x02);
+            break;
+        default:
+            break;
+        }
+        break;
     case BRWR:
     case EXTEND_ADDR_WRITE:
         s->ear = s->data[0];
@@ -943,28 +971,107 @@ static uint8_t numonyx_mode(Flash *s)
     }
 }
 
-static uint8_t numonyx_extract_cfg_num_dummies(Flash *s)
+static uint8_t numonyx_extract_cfg_dummy_bytes(Flash *s)
 {
-    uint8_t num_dummies;
+    uint8_t dummy_bits;
     uint8_t mode;
-    assert(get_man(s) == MAN_NUMONYX);
 
     mode = numonyx_mode(s);
-    num_dummies = extract32(s->volatile_cfg, 4, 4);
+    dummy_bits = extract32(s->volatile_cfg, 4, 4);
 
-    if (num_dummies == 0x0 || num_dummies == 0xf) {
+    /*
+     * The default nubmer of dummy cycles is only related to the SPI
+     * protocol mode. For QSPI it is 10, otherwise it is 8.
+     */
+    if (dummy_bits == 0x0 || dummy_bits == 0xf) {
+        dummy_bits = (mode == MODE_QIO) ? 10 : 8;
+    }
+
+    /*
+     * Convert the number of dummy cycles to bytes.
+     *
+     * In the Dual I/O and Quad I/O protocols, all command phases use 2 or 4
+     * lines. In standard/extended SPI mode the phase width depends on the
+     * command sequence: output-only fast reads keep the dummy clocks on the
+     * single address line, while input/output fast reads use the same 2-line
+     * or 4-line phase as the address.
+     */
+
+    if (mode == MODE_QIO) {
+        dummy_bits *= 4;
+    } else if (mode == MODE_DIO) {
+        dummy_bits *= 2;
+    } else {
         switch (s->cmd_in_progress) {
         case QIOR:
         case QIOR4:
-            num_dummies = 10;
+            dummy_bits *= 4;
             break;
-        default:
-            num_dummies = (mode == MODE_QIO) ? 10 : 8;
+        case DIOR:
+        case DIOR4:
+            dummy_bits *= 2;
             break;
-        }
+         }
     }
 
-    return num_dummies;
+    /*
+     * Assert that the dummy bit count is byte-aligned
+     * as SSI core can only consume whole dummy bytes.
+     */
+    assert(dummy_bits % 8 == 0);
+
+    /* return the number of dummy bytes */
+    return dummy_bits / 8;
+}
+
+static uint8_t macronix_extract_cfg_dummy_bytes(Flash *s, uint8_t bus_width)
+{
+    static const uint8_t dummy_cycles_fast[4] = { 8, 6, 8, 10 };
+    static const uint8_t dummy_cycles_dio[4] = { 4, 6, 8, 10 };
+    static const uint8_t dummy_cycles_qio[4] = { 6, 4, 8, 10 };
+    const uint8_t *dummy_cycles = dummy_cycles_fast;
+    uint8_t dummy_bits;
+
+    switch (s->cmd_in_progress) {
+    case DIOR:
+    case DIOR4:
+        dummy_cycles = dummy_cycles_dio;
+        break;
+    case QIOR:
+    case QIOR4:
+        dummy_cycles = dummy_cycles_qio;
+        break;
+    default:
+        break;
+    }
+
+    dummy_bits = dummy_cycles[extract32(s->volatile_cfg, 6, 2)];
+    dummy_bits *= bus_width;
+
+    /*
+     * Assert that the dummy bit count is byte-aligned
+     * as SSI core can only consume whole dummy bytes.
+     */
+    assert(dummy_bits % 8 == 0);
+
+    return dummy_bits / 8;
+}
+
+static uint8_t spansion_extract_cfg_dummy_bytes(Flash *s, uint8_t bus_width)
+{
+    uint8_t dummy_bits;
+
+    dummy_bits = extract32(s->spansion_cr2v, SPANSION_DUMMY_CLK_POS,
+                            SPANSION_DUMMY_CLK_LEN);
+    dummy_bits *= bus_width;
+
+    /*
+     * Assert that the dummy bit count is byte-aligned
+     * as SSI core can only consume whole dummy bytes.
+     */
+    assert(dummy_bits % 8 == 0);
+
+    return dummy_bits / 8;
 }
 
 static void decode_fast_read_cmd(Flash *s)
@@ -976,23 +1083,16 @@ static void decode_fast_read_cmd(Flash *s)
         s->needed_bytes += 1;
         break;
     case MAN_WINBOND:
-        s->needed_bytes += 8;
+        s->needed_bytes += 1;
         break;
     case MAN_NUMONYX:
-        s->needed_bytes += numonyx_extract_cfg_num_dummies(s);
+        s->needed_bytes += numonyx_extract_cfg_dummy_bytes(s);
         break;
     case MAN_MACRONIX:
-        if (extract32(s->volatile_cfg, 6, 2) == 1) {
-            s->needed_bytes += 6;
-        } else {
-            s->needed_bytes += 8;
-        }
+        s->needed_bytes += macronix_extract_cfg_dummy_bytes(s, 1);
         break;
     case MAN_SPANSION:
-        s->needed_bytes += extract32(s->spansion_cr2v,
-                                    SPANSION_DUMMY_CLK_POS,
-                                    SPANSION_DUMMY_CLK_LEN
-                                    );
+        s->needed_bytes += spansion_extract_cfg_dummy_bytes(s, 1);
         break;
     case MAN_ISSI:
         /*
@@ -1025,26 +1125,13 @@ static void decode_dio_read_cmd(Flash *s)
         break;
     case MAN_SPANSION:
         s->needed_bytes += SPANSION_CONTINUOUS_READ_MODE_CMD_LEN;
-        s->needed_bytes += extract32(s->spansion_cr2v,
-                                    SPANSION_DUMMY_CLK_POS,
-                                    SPANSION_DUMMY_CLK_LEN
-                                    );
+        s->needed_bytes += spansion_extract_cfg_dummy_bytes(s, 2);
         break;
     case MAN_NUMONYX:
-        s->needed_bytes += numonyx_extract_cfg_num_dummies(s);
+        s->needed_bytes += numonyx_extract_cfg_dummy_bytes(s);
         break;
     case MAN_MACRONIX:
-        switch (extract32(s->volatile_cfg, 6, 2)) {
-        case 1:
-            s->needed_bytes += 6;
-            break;
-        case 2:
-            s->needed_bytes += 8;
-            break;
-        default:
-            s->needed_bytes += 4;
-            break;
-        }
+        s->needed_bytes += macronix_extract_cfg_dummy_bytes(s, 2);
         break;
     case MAN_ISSI:
         /*
@@ -1071,30 +1158,17 @@ static void decode_qio_read_cmd(Flash *s)
     switch (get_man(s)) {
     case MAN_WINBOND:
         s->needed_bytes += WINBOND_CONTINUOUS_READ_MODE_CMD_LEN;
-        s->needed_bytes += 4;
+        s->needed_bytes += 2;
         break;
     case MAN_SPANSION:
         s->needed_bytes += SPANSION_CONTINUOUS_READ_MODE_CMD_LEN;
-        s->needed_bytes += extract32(s->spansion_cr2v,
-                                    SPANSION_DUMMY_CLK_POS,
-                                    SPANSION_DUMMY_CLK_LEN
-                                    );
+        s->needed_bytes += spansion_extract_cfg_dummy_bytes(s, 4);
         break;
     case MAN_NUMONYX:
-        s->needed_bytes += numonyx_extract_cfg_num_dummies(s);
+        s->needed_bytes += numonyx_extract_cfg_dummy_bytes(s);
         break;
     case MAN_MACRONIX:
-        switch (extract32(s->volatile_cfg, 6, 2)) {
-        case 1:
-            s->needed_bytes += 4;
-            break;
-        case 2:
-            s->needed_bytes += 8;
-            break;
-        default:
-            s->needed_bytes += 6;
-            break;
-        }
+        s->needed_bytes += macronix_extract_cfg_dummy_bytes(s, 4);
         break;
     case MAN_ISSI:
         /*
@@ -1270,7 +1344,31 @@ static void decode_new_cmd(Flash *s, uint32_t value)
         }
         s->pos = 0;
         break;
+    case WRSR2:
+        /*
+         * If WP# is low and status_register_write_disabled is high,
+         * status register writes are disabled.
+         * This is also called "hardware protected mode" (HPM). All other
+         * combinations of the two states are called "software protected mode"
+         * (SPM), and status register writes are permitted.
+         */
+        if ((s->wp_level == 0 && s->status_register_write_disabled)
+            || !s->write_enable) {
+            qemu_log_mask(LOG_GUEST_ERROR,
+                          "M25P80: Status register 2 write is disabled!\n");
+            break;
+        }
 
+        switch (get_man(s)) {
+        case MAN_WINBOND:
+            s->needed_bytes = 1;
+            s->state = STATE_COLLECTING_DATA;
+            s->pos = 0;
+            break;
+        default:
+            break;
+        }
+        break;
     case WRDI:
         s->write_enable = false;
         if (get_man(s) == MAN_SST) {
@@ -1671,7 +1769,7 @@ static int m25p80_pre_save(void *opaque)
     return 0;
 }
 
-static Property m25p80_properties[] = {
+static const Property m25p80_properties[] = {
     /* This is default value for Micron flash */
     DEFINE_PROP_BOOL("write-enable", Flash, write_enable, false),
     DEFINE_PROP_UINT32("nonvolatile-cfg", Flash, nonvolatile_cfg, 0x8FFF),
@@ -1680,7 +1778,6 @@ static Property m25p80_properties[] = {
     DEFINE_PROP_UINT8("spansion-cr3nv", Flash, spansion_cr3nv, 0x2),
     DEFINE_PROP_UINT8("spansion-cr4nv", Flash, spansion_cr4nv, 0x10),
     DEFINE_PROP_DRIVE("drive", Flash, blk),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static int m25p80_pre_load(void *opaque)
@@ -1809,7 +1906,7 @@ static const VMStateDescription vmstate_m25p80 = {
     }
 };
 
-static void m25p80_class_init(ObjectClass *klass, void *data)
+static void m25p80_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     SSIPeripheralClass *k = SSI_PERIPHERAL_CLASS(klass);
@@ -1821,8 +1918,10 @@ static void m25p80_class_init(ObjectClass *klass, void *data)
     k->cs_polarity = SSI_CS_LOW;
     dc->vmsd = &vmstate_m25p80;
     device_class_set_props(dc, m25p80_properties);
-    dc->reset = m25p80_reset;
+    device_class_set_legacy_reset(dc, m25p80_reset);
+    set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
     mc->pi = data;
+    dc->desc = "Serial Flash";
 }
 
 static const TypeInfo m25p80_info = {
@@ -1839,13 +1938,13 @@ static void m25p80_register_types(void)
 
     type_register_static(&m25p80_info);
     for (i = 0; i < ARRAY_SIZE(known_devices); ++i) {
-        TypeInfo ti = {
+        const TypeInfo ti = {
             .name       = known_devices[i].part_name,
             .parent     = TYPE_M25P80,
             .class_init = m25p80_class_init,
-            .class_data = (void *)&known_devices[i],
+            .class_data = &known_devices[i],
         };
-        type_register(&ti);
+        type_register_static(&ti);
     }
 }
 

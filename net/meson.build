@@ -1,6 +1,7 @@
 system_ss.add(files(
   'announce.c',
   'checksum.c',
+  'dgram.c',
   'dump.c',
   'eth.c',
   'filter-buffer.c',
@@ -12,7 +13,7 @@ system_ss.add(files(
   'queue.c',
   'socket.c',
   'stream.c',
-  'dgram.c',
+  'stream_data.c',
   'util.c',
 ))
 
@@ -33,17 +34,21 @@ system_ss.add(when: 'CONFIG_TCG', if_true: files('filter-replay.c'))
 if have_l2tpv3
   system_ss.add(files('l2tpv3.c'))
 endif
+if enable_passt
+  system_ss.add(files('passt.c'))
+endif
 system_ss.add(when: slirp, if_true: files('slirp.c'))
 system_ss.add(when: vde, if_true: files('vde.c'))
 if have_netmap
   system_ss.add(files('netmap.c'))
 endif
 
-system_ss.add(when: libxdp, if_true: files('af-xdp.c'))
+system_ss.add(when: [libxdp, libbpf], if_true: files('af-xdp.c'))
 
 if have_vhost_net_user
-  system_ss.add(when: 'CONFIG_VIRTIO_NET', if_true: files('vhost-user.c'), if_false: files('vhost-user-stub.c'))
+  system_ss.add(when: 'CONFIG_VIRTIO_NET', if_true: files('vhost-user.c'))
 endif
+stub_ss.add(files('vhost-user-stub.c'))
 
 if host_os == 'windows'
   system_ss.add(files('tap-win32.c'))
@@ -57,8 +62,9 @@ else
   system_ss.add(files('tap.c', 'tap-stub.c'))
 endif
 if have_vhost_net_vdpa
-  system_ss.add(when: 'CONFIG_VIRTIO_NET', if_true: files('vhost-vdpa.c'), if_false: files('vhost-vdpa-stub.c'))
+  system_ss.add(when: 'CONFIG_VIRTIO_NET', if_true: files('vhost-vdpa.c'))
 endif
+stub_ss.add(files('vhost-vdpa-stub.c'))
 
 vmnet_files = files(
   'vmnet-common.m',
