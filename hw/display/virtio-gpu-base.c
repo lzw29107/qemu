@@ -106,6 +106,15 @@ static void virtio_gpu_ui_info(void *opaque, uint32_t idx, QemuUIInfo *info)
         return;
     }
 
+    /*
+     * xres/yres were given on the command line, so the resolution is
+     * pinned.  The display frontend must not override it: req_state[]
+     * is the single source for both GET_EDID and GET_DISPLAY_INFO.
+     */
+    if (g->conf.xres && g->conf.yres) {
+        return;
+    }
+
     g->req_state[idx].x = info->xoff;
     g->req_state[idx].y = info->yoff;
     g->req_state[idx].refresh_rate = info->refresh_rate;
@@ -196,6 +205,20 @@ virtio_gpu_base_device_realize(DeviceState *qdev,
     }
 
     g->enabled_output_bitmask = 1;
+
+    if ((g->conf.xres == 0) != (g->conf.yres == 0)) {
+        error_setg(errp, "must set both xres and yres");
+        return false;
+    }
+    if (g->conf.xres) {
+        /* pinned: virtio_gpu_ui_info() will not touch req_state[] */
+        g->req_state[0].width  = g->conf.xres;
+        g->req_state[0].height = g->conf.yres;
+    } else {
+        /* not specified: historical default, frontend may override */
+        g->req_state[0].width  = 1280;
+        g->req_state[0].height = 800;
+    }
 
     g->req_state[0].width = g->conf.xres;
     g->req_state[0].height = g->conf.yres;
