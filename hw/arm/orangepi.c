@@ -26,7 +26,6 @@
 #include "hw/core/qdev-properties.h"
 #include "hw/arm/allwinner-h3.h"
 #include "hw/arm/boot.h"
-#include "hw/arm/machines-qom.h"
 
 #define TYPE_ORANGEPI_MACHINE MACHINE_TYPE_NAME("orangepi-pc")
 OBJECT_DECLARE_SIMPLE_TYPE(OrangePiMachineState, ORANGEPI_MACHINE)
@@ -134,5 +133,5 @@ static void orangepi_machine_init(MachineClass *mc)
 }
 
 DEFINE_MACHINE_EXTENDED("orangepi-pc", MACHINE, OrangePiMachineState,
-                        orangepi_machine_init, false,
-                        arm_machine_interfaces)
+                        orangepi_machine_init, false, false,
+                        NULL)

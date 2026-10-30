@@ -23,46 +23,46 @@ DO_3OP(gvec_fdiv_h, float16_div, float16)
 DO_3OP(gvec_fdiv_s, float32_div, float32)
 DO_3OP(gvec_fdiv_d, float64_div, float64)
 
-DO_3OP(gvec_fmulx_h, helper_advsimd_mulxh, float16)
-DO_3OP(gvec_fmulx_s, helper_vfp_mulxs, float32)
-DO_3OP(gvec_fmulx_d, helper_vfp_mulxd, float64)
+DO_3OP(gvec_fmulx_h, HELPER(advsimd_mulxh), float16)
+DO_3OP(gvec_fmulx_s, HELPER(vfp_mulxs), float32)
+DO_3OP(gvec_fmulx_d, HELPER(vfp_mulxd), float64)
 
-DO_3OP(gvec_recps_h, helper_recpsf_f16, float16)
-DO_3OP(gvec_recps_s, helper_recpsf_f32, float32)
-DO_3OP(gvec_recps_d, helper_recpsf_f64, float64)
+DO_3OP(gvec_recps_h, HELPER(recpsf_f16), float16)
+DO_3OP(gvec_recps_s, HELPER(recpsf_f32), float32)
+DO_3OP(gvec_recps_d, HELPER(recpsf_f64), float64)
 
-DO_3OP(gvec_rsqrts_h, helper_rsqrtsf_f16, float16)
-DO_3OP(gvec_rsqrts_s, helper_rsqrtsf_f32, float32)
-DO_3OP(gvec_rsqrts_d, helper_rsqrtsf_f64, float64)
+DO_3OP(gvec_rsqrts_h, HELPER(rsqrtsf_f16), float16)
+DO_3OP(gvec_rsqrts_s, HELPER(rsqrtsf_f32), float32)
+DO_3OP(gvec_rsqrts_d, HELPER(rsqrtsf_f64), float64)
 
-DO_3OP(gvec_ah_recps_h, helper_recpsf_ah_f16, float16)
-DO_3OP(gvec_ah_recps_s, helper_recpsf_ah_f32, float32)
-DO_3OP(gvec_ah_recps_d, helper_recpsf_ah_f64, float64)
+DO_3OP(gvec_ah_recps_h, HELPER(recpsf_ah_f16), float16)
+DO_3OP(gvec_ah_recps_s, HELPER(recpsf_ah_f32), float32)
+DO_3OP(gvec_ah_recps_d, HELPER(recpsf_ah_f64), float64)
 
-DO_3OP(gvec_ah_rsqrts_h, helper_rsqrtsf_ah_f16, float16)
-DO_3OP(gvec_ah_rsqrts_s, helper_rsqrtsf_ah_f32, float32)
-DO_3OP(gvec_ah_rsqrts_d, helper_rsqrtsf_ah_f64, float64)
+DO_3OP(gvec_ah_rsqrts_h, HELPER(rsqrtsf_ah_f16), float16)
+DO_3OP(gvec_ah_rsqrts_s, HELPER(rsqrtsf_ah_f32), float32)
+DO_3OP(gvec_ah_rsqrts_d, HELPER(rsqrtsf_ah_f64), float64)
 
-DO_3OP(gvec_ah_fmax_h, helper_vfp_ah_maxh, float16)
-DO_3OP(gvec_ah_fmax_s, helper_vfp_ah_maxs, float32)
-DO_3OP(gvec_ah_fmax_d, helper_vfp_ah_maxd, float64)
+DO_3OP(gvec_ah_fmax_h, HELPER(vfp_ah_maxh), float16)
+DO_3OP(gvec_ah_fmax_s, HELPER(vfp_ah_maxs), float32)
+DO_3OP(gvec_ah_fmax_d, HELPER(vfp_ah_maxd), float64)
 
-DO_3OP(gvec_ah_fmin_h, helper_vfp_ah_minh, float16)
-DO_3OP(gvec_ah_fmin_s, helper_vfp_ah_mins, float32)
-DO_3OP(gvec_ah_fmin_d, helper_vfp_ah_mind, float64)
+DO_3OP(gvec_ah_fmin_h, HELPER(vfp_ah_minh), float16)
+DO_3OP(gvec_ah_fmin_s, HELPER(vfp_ah_mins), float32)
+DO_3OP(gvec_ah_fmin_d, HELPER(vfp_ah_mind), float64)
 
 DO_3OP(gvec_fmax_b16, bfloat16_max, bfloat16)
 DO_3OP(gvec_fmin_b16, bfloat16_min, bfloat16)
 DO_3OP(gvec_fmaxnum_b16, bfloat16_maxnum, bfloat16)
 DO_3OP(gvec_fminnum_b16, bfloat16_minnum, bfloat16)
-DO_3OP(gvec_ah_fmax_b16, helper_sme2_ah_fmax_b16, bfloat16)
-DO_3OP(gvec_ah_fmin_b16, helper_sme2_ah_fmin_b16, bfloat16)
+DO_3OP(gvec_ah_fmax_b16, HELPER(sme2_ah_fmax_b16), bfloat16)
+DO_3OP(gvec_ah_fmin_b16, HELPER(sme2_ah_fmin_b16), bfloat16)
 
 #define nop(N, M, S) (M)
 
-DO_FMUL_IDX(gvec_fmulx_idx_h, nop, helper_advsimd_mulxh, float16, H2)
-DO_FMUL_IDX(gvec_fmulx_idx_s, nop, helper_vfp_mulxs, float32, H4)
-DO_FMUL_IDX(gvec_fmulx_idx_d, nop, helper_vfp_mulxd, float64, H8)
+DO_FMUL_IDX(gvec_fmulx_idx_h, nop, HELPER(advsimd_mulxh), float16, H2)
+DO_FMUL_IDX(gvec_fmulx_idx_s, nop, HELPER(vfp_mulxs), float32, H4)
+DO_FMUL_IDX(gvec_fmulx_idx_d, nop, HELPER(vfp_mulxd), float64, H8)
 
 #undef nop
 
@@ -89,13 +89,47 @@ void HELPER(sve2_pmull_d)(void *vd, void *vn, void *vm, uint32_t desc)
     }
 }
 
-DO_3OP_PAIR(gvec_ah_fmaxp_h, helper_vfp_ah_maxh, float16, H2)
-DO_3OP_PAIR(gvec_ah_fmaxp_s, helper_vfp_ah_maxs, float32, H4)
-DO_3OP_PAIR(gvec_ah_fmaxp_d, helper_vfp_ah_maxd, float64, /**/)
+void HELPER(sve_pmull_q)(void *vd, void *vn, void *vm, uint32_t desc)
+{
+    intptr_t opr_sz = simd_oprsz(desc);
+    uint64_t *n = vn, *m = vm;
+    uint64_t *d0 = vd;
+    uint64_t *d1 = vd + sizeof(ARMVectorReg);
 
-DO_3OP_PAIR(gvec_ah_fminp_h, helper_vfp_ah_minh, float16, H2)
-DO_3OP_PAIR(gvec_ah_fminp_s, helper_vfp_ah_mins, float32, H4)
-DO_3OP_PAIR(gvec_ah_fminp_d, helper_vfp_ah_mind, float64, /**/)
+    for (intptr_t i = 0; i < opr_sz / 16; ++i) {
+        Int128 rl = clmul_64(n[2 * i + 0], m[2 * i + 0]);
+        Int128 rh = clmul_64(n[2 * i + 1], m[2 * i + 1]);
+        d0[2 * i + 0] = int128_getlo(rl);
+        d0[2 * i + 1] = int128_gethi(rl);
+        d1[2 * i + 0] = int128_getlo(rh);
+        d1[2 * i + 1] = int128_gethi(rh);
+    }
+}
+
+void HELPER(sve_pmlal_q)(void *vd, void *vn, void *vm, uint32_t desc)
+{
+    intptr_t opr_sz = simd_oprsz(desc);
+    uint64_t *n = vn, *m = vm;
+    uint64_t *d0 = vd;
+    uint64_t *d1 = vd + sizeof(ARMVectorReg);
+
+    for (intptr_t i = 0; i < opr_sz / 16; ++i) {
+        Int128 rl = clmul_64(n[2 * i + 0], m[2 * i + 0]);
+        Int128 rh = clmul_64(n[2 * i + 1], m[2 * i + 1]);
+        d0[2 * i + 0] ^= int128_getlo(rl);
+        d0[2 * i + 1] ^= int128_gethi(rl);
+        d1[2 * i + 0] ^= int128_getlo(rh);
+        d1[2 * i + 1] ^= int128_gethi(rh);
+    }
+}
+
+DO_3OP_PAIR(gvec_ah_fmaxp_h, HELPER(vfp_ah_maxh), float16, H2)
+DO_3OP_PAIR(gvec_ah_fmaxp_s, HELPER(vfp_ah_maxs), float32, H4)
+DO_3OP_PAIR(gvec_ah_fmaxp_d, HELPER(vfp_ah_maxd), float64, /**/)
+
+DO_3OP_PAIR(gvec_ah_fminp_h, HELPER(vfp_ah_minh), float16, H2)
+DO_3OP_PAIR(gvec_ah_fminp_s, HELPER(vfp_ah_mins), float32, H4)
+DO_3OP_PAIR(gvec_ah_fminp_d, HELPER(vfp_ah_mind), float64, /**/)
 
 void HELPER(simd_tblx)(void *vd, void *vm, CPUARMState *env, uint32_t desc)
 {
@@ -179,6 +213,7 @@ DO_3OP(gvec_famin_s, float32_famin, float32)
 DO_3OP(gvec_famax_d, float64_famax, float64)
 DO_3OP(gvec_famin_d, float64_famin, float64)
 
+DO_3OP(gvec_fscale_b16, bfloat16_scalbn, int16_t)
 DO_3OP(gvec_fscale_h, float16_scalbn, int16_t)
 DO_3OP(gvec_fscale_s, float32_scalbn, int32_t)
 DO_3OP(gvec_fscale_d, scalbn_d, int64_t)

@@ -317,7 +317,7 @@ class QemuSystemTest(QemuBaseTest):
         cls = type(self)
 
         if not hasattr(cls, "_machines"):
-            tmp_vm = QEMUMachine(self.qemu_bin)
+            tmp_vm = QEMUMachine(self.qemu_bin, base_temp_dir=self.workdir)
             tmp_vm.set_machine('none')
 
             try:
@@ -368,6 +368,12 @@ class QemuSystemTest(QemuBaseTest):
         if not checker(qemu_bin=self.qemu_bin):
             self.skipTest("%s accelerator does not seem to be "
                           "available" % accelerator)
+
+    def skipTestIfNoHMP(self):
+        commands = self.vm.cmd('query-commands')
+        if not any(cmd['name'] == 'human-monitor-command'
+                   for cmd in commands):
+            self.skipTest('HMP support is not available')
 
     def require_netdev(self, netdevname):
         helptxt = run([self.qemu_bin, '-M', 'none', '-netdev', 'help'],

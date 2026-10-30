@@ -19,8 +19,6 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-# creator
-owner=hreitz@redhat.com
 
 seq="$(basename $0)"
 echo "QA output created by $seq"
@@ -43,6 +41,7 @@ _require_drivers blkdebug blkverify
 # blkdebug can only inject errors on bs->file, not on the data_file,
 # so this test does not work with external data files
 _unsupported_imgopts data_file
+_require_hmp
 
 do_run_qemu()
 {
@@ -53,7 +52,7 @@ do_run_qemu()
 
 run_qemu()
 {
-    do_run_qemu "$@" 2>&1 | _filter_testdir | _filter_qemu | _filter_qmp | _filter_qemu_io
+    do_run_qemu "$@" 2>&1 | _filter_testdir | _filter_qemu | _filter_qmp | _filter_qemu_io | _filter_json_filename
 }
 
 IMG_SIZE=64M

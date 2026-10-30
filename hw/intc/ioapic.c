@@ -248,7 +248,6 @@ void ioapic_eoi_broadcast(int vector)
                 continue;
             }
 
-#ifdef CONFIG_KVM
             /*
              * When IOAPIC is in the userspace while APIC is still in
              * the kernel (i.e., split irqchip), we have a trick to
@@ -264,8 +263,9 @@ void ioapic_eoi_broadcast(int vector)
              * operations below because we don't know whether there're
              * emulated devices that are using/sharing the same IRQ.
              */
-            kvm_resample_fd_notify(n);
-#endif
+            if (kvm_enabled()) {
+                kvm_resample_fd_notify(n);
+            }
 
             if (!(entry & IOAPIC_LVT_REMOTE_IRR)) {
                 continue;
@@ -438,8 +438,9 @@ static void ioapic_machine_done_notify(Notifier *notifier, void *data)
 #ifdef ACCEL_GSI_IRQFD_POSSIBLE
     IOAPICCommonState *s = container_of(notifier, IOAPICCommonState,
                                         machine_done);
+    X86MachineState *x86ms = X86_MACHINE(qdev_get_machine());
 
-    if (accel_irqchip_is_split()) {
+    if (accel_irqchip_is_split() && x86ms->ioapic_as != &address_space_memory) {
         X86IOMMUState *iommu = x86_iommu_get_default();
         if (iommu) {
             /* Register this IOAPIC with IOMMU IEC notifier, so that

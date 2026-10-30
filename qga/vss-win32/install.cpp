@@ -61,7 +61,7 @@ static void errmsg(DWORD err, const char *text)
 
 static void errmsg_dialog(DWORD err, const char *text, const char *opt = "")
 {
-    char *msg, buf[512];
+    char *msg = NULL, buf[512] = "";
 
     FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER |
                   FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
@@ -241,16 +241,124 @@ out:
     return hr;
 }
 
+static void qga_vss_open_log(void)
+{
+    char path[MAX_PATH];
+    UINT n;
+
+    n = GetSystemWindowsDirectoryA(path, sizeof(path));
+    if (n == 0 || n >= sizeof(path)) {
+        return;
+    }
+    snprintf(path + n, sizeof(path) - n,
+             "\\Temp\\qga-vss-install.log");
+    if (freopen(path, "a", stderr)) {
+        setvbuf(stderr, NULL, _IONBF, 0);
+    }
+}
+
+/*
+ * Open the QGA VSS provider service with the requested access rights.
+ *
+ * On success, return a service handle which the caller must release with
+ * CloseServiceHandle().  On failure, return NULL and store the win32 error
+ * code in *err.  ERROR_SERVICE_DOES_NOT_EXIST just means the service is not
+ * installed, which is a normal condition for all callers, so it is not
+ * reported here; the caller decides what it means.
+ */
+static SC_HANDLE QGAProviderOpenService(DWORD access, DWORD *err)
+{
+    qga_debug_begin;
+
+    SC_HANDLE service = NULL;
+    SC_HANDLE manager = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
+
+    *err = ERROR_SUCCESS;
+
+    if (!manager) {
+        *err = GetLastError();
+        errmsg(*err, "Failed to open service manager");
+        goto out;
+    }
+
+    service = OpenService(manager, QGA_PROVIDER_NAME, access);
+    if (!service) {
+        *err = GetLastError();
+        if (*err != ERROR_SERVICE_DOES_NOT_EXIST) {
+            errmsg(*err, "Failed to open service");
+        }
+    }
+
+out:
+    if (manager) {
+        CloseServiceHandle(manager);
+    }
+    qga_debug_end;
+    return service;
+}
+
+/* Check whether the QGA VSS provider service is registered with the SCM */
+static bool QGAProviderServiceExists(void)
+{
+    qga_debug_begin;
+
+    DWORD err;
+    SC_HANDLE service = QGAProviderOpenService(SERVICE_QUERY_CONFIG, &err);
+
+    if (service) {
+        CloseServiceHandle(service);
+    }
+
+    qga_debug_end;
+    return service != NULL;
+}
+
+/* Delete a QGA VSS provider service that COM+ no longer owns */
+static HRESULT QGAProviderRemoveService(void)
+{
+    qga_debug_begin;
+
+    HRESULT hr = S_OK;
+    DWORD err;
+    SC_HANDLE service = QGAProviderOpenService(DELETE, &err);
+
+    if (!service) {
+        if (err != ERROR_SERVICE_DOES_NOT_EXIST) {
+            hr = HRESULT_FROM_WIN32(err);
+        }
+        goto out;
+    }
+
+    qga_debug("Removing service: %s", QGA_PROVIDER_NAME);
+
+    if (!DeleteService(service)) {
+        err = GetLastError();
+        if (err != ERROR_SERVICE_MARKED_FOR_DELETE) {
+            hr = HRESULT_FROM_WIN32(err);
+            errmsg(err, "Failed to delete service");
+        }
+    }
+
+out:
+    if (service) {
+        CloseServiceHandle(service);
+    }
+    qga_debug_end;
+    return hr;
+}
+
 /* Unregister this module from COM+ Applications Catalog */
 STDAPI COMUnregister(void);
 STDAPI COMUnregister(void)
 {
+    qga_vss_open_log();
     qga_debug_begin;
 
     HRESULT hr;
 
     DllUnregisterServer();
     chk(QGAProviderFind(QGAProviderRemove, NULL));
+    chk(QGAProviderRemoveService());
 out:
     qga_debug_end;
     return hr;
@@ -260,6 +368,7 @@ out:
 STDAPI COMRegister(void);
 STDAPI COMRegister(void)
 {
+    qga_vss_open_log();
     qga_debug_begin;
 
     HRESULT hr;
@@ -286,7 +395,7 @@ STDAPI COMRegister(void)
     }
 
     chk(QGAProviderFind(QGAProviderCount, (void *)&count));
-    if (count) {
+    if (count || QGAProviderServiceExists()) {
         qga_debug("QGA VSS Provider is already installed. Attempting to unregister first.");
         hr = COMUnregister();
         if (FAILED(hr)) {
@@ -313,6 +422,7 @@ STDAPI COMRegister(void)
     chk(put_Value(pObj, L"Authentication",                 short(6)));
     chk(put_Value(pObj, L"AuthenticationCapability",       short(2)));
     chk(put_Value(pObj, L"ImpersonationLevel",             short(2)));
+    /* NT-service-hosted apps have ConcurrentApps=1 enforced */
     chk(pApps->SaveChanges(&n));
 
     /* The app should be deleted if something fails after SaveChanges */
@@ -499,6 +609,7 @@ STDAPI DllRegisterServer(void)
                                      g_gProviderVersion);
     if (hr == (long int) VSS_E_PROVIDER_ALREADY_REGISTERED) {
         DllUnregisterServer();
+        QGAProviderRemoveService();
         hr = pVssAdmin->RegisterProvider(g_gProviderId, CLSID_QGAVSSProvider,
                                          const_cast<WCHAR * >
                                          (QGA_PROVIDER_LNAME),
@@ -515,6 +626,7 @@ STDAPI DllRegisterServer(void)
 out:
     if (FAILED(hr)) {
         DllUnregisterServer();
+        QGAProviderRemoveService();
     }
 
     qga_debug_end;
@@ -572,32 +684,28 @@ namespace _com_util
 /* Stop QGA VSS provider service using Winsvc API  */
 STDAPI StopService(void)
 {
+    SERVICE_STATUS status;
     qga_debug_begin;
 
     HRESULT hr = S_OK;
-    SC_HANDLE manager = OpenSCManager(NULL, NULL, SC_MANAGER_ALL_ACCESS);
-    SC_HANDLE service = NULL;
-
-    if (!manager) {
-        errmsg(E_FAIL, "Failed to open service manager");
-        hr = E_FAIL;
-        goto out;
-    }
-    service = OpenService(manager, QGA_PROVIDER_NAME, SC_MANAGER_ALL_ACCESS);
+    DWORD err;
+    SC_HANDLE service = QGAProviderOpenService(SERVICE_STOP, &err);
 
     if (!service) {
-        errmsg(E_FAIL, "Failed to open service");
-        hr =  E_FAIL;
+        hr = HRESULT_FROM_WIN32(err);
         goto out;
     }
-    if (!(ControlService(service, SERVICE_CONTROL_STOP, NULL))) {
-        errmsg(E_FAIL, "Failed to stop service");
-        hr = E_FAIL;
+
+    if (!(ControlService(service, SERVICE_CONTROL_STOP, &status))) {
+        err = GetLastError();
+        hr = HRESULT_FROM_WIN32(err);
+        errmsg(err, "Failed to stop service");
     }
 
 out:
-    CloseServiceHandle(service);
-    CloseServiceHandle(manager);
+    if (service) {
+        CloseServiceHandle(service);
+    }
     qga_debug_end;
     return hr;
 }

@@ -31,17 +31,17 @@ void restore_fp_status(CPULoongArchState *env);
 #ifndef CONFIG_USER_ONLY
 extern const VMStateDescription vmstate_loongarch_cpu;
 
-void loongarch_cpu_update_irq(LoongArchCPU *cpu, uint64_t old);
+void loongarch_cpu_update_irq(LoongArchCPU *cpu);
 void loongarch_cpu_set_irq(void *opaque, int irq, int level);
 
-void loongarch_constant_timer_cb(void *opaque);
-uint64_t cpu_loongarch_get_constant_timer_counter(LoongArchCPU *cpu);
-uint64_t cpu_loongarch_get_constant_timer_ticks(LoongArchCPU *cpu);
-void cpu_loongarch_store_constant_timer_config(LoongArchCPU *cpu,
-                                               uint64_t value);
-bool loongarch_cpu_has_work(CPUState *cs);
+void cpu_loongarch_timer_cb(void *opaque);
+uint64_t cpu_loongarch_get_timer_counter(CPUTimerState *timer);
+uint64_t cpu_loongarch_get_timer_ticks(CPUTimerState *timer);
+void cpu_loongarch_set_timer_config(CPUTimerState *timer, uint64_t value);
 bool cpu_loongarch_hw_interrupts_pending(CPULoongArchState *env);
 #endif /* !CONFIG_USER_ONLY */
+
+const char *loongarch_exception_name(int exception);
 
 uint64_t read_fcc(CPULoongArchState *env);
 void write_fcc(CPULoongArchState *env, uint64_t val);
@@ -51,5 +51,10 @@ int loongarch_cpu_gdb_write_register(CPUState *cs, uint8_t *mem_buf, int n);
 void loongarch_cpu_register_gdb_regs_for_features(CPUState *cs);
 int loongarch_cpu_write_elf64_note(WriteCoreDumpFunction f, CPUState *cpu,
                                    int cpuid, DumpState *s);
+
+void loongarch_get_dump_info(const CPUState *cs, ArchDumpInfo *info,
+                             const GuestPhysBlockList *guest_phys_blocks);
+size_t loongarch_get_note_size(const CPUState *cs, int class,
+                               int machine, int nr_cpus);
 
 #endif

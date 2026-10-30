@@ -55,6 +55,8 @@ typedef enum DisasJumpType {
  * @pc_first: Address of first guest instruction in this TB.
  * @pc_next: Address of next guest instruction in this TB (current during
  *           disassembly).
+ * @pc_second_page: Address of the beginning of the second page of this TB,
+ *                  or -1 if the TB does not yet extend to a second page.
  * @is_jmp: What instruction to disassemble next.
  * @num_insns: Number of translated instructions (including current).
  * @max_insns: Maximum number of instructions to be translated in this TB.
@@ -69,6 +71,7 @@ struct DisasContextBase {
     TranslationBlock *tb;
     vaddr pc_first;
     vaddr pc_next;
+    vaddr pc_second_page;
     DisasJumpType is_jmp;
     int num_insns;
     int max_insns;
@@ -165,9 +168,8 @@ bool translator_use_goto_tb(DisasContextBase *db, vaddr dest);
  * translator_io_start
  * @db: Disassembly context
  *
- * If icount is enabled, set cpu->can_do_io, adjust db->is_jmp to
- * DISAS_TOO_MANY if it is still DISAS_NEXT, and return true.
- * Otherwise return false.
+ * Adjust db->is_jmp to DISAS_TOO_MANY if it is still DISAS_NEXT and return
+ * true.  The instruction will then be the last instruction in the TB.
  */
 bool translator_io_start(DisasContextBase *db);
 

@@ -65,12 +65,17 @@ bool migration_thread_is_self(void);
  *    - MIG_EVENT_SETUP [-> MIG_EVENT_POSTCOPY_START] -> MIG_EVENT_DONE
  *    - MIG_EVENT_SETUP [-> MIG_EVENT_POSTCOPY_START] -> MIG_EVENT_FAILED
  *    - MIG_EVENT_FAILED
+ *
+ * MIG_EVENT_INCOMING_FAILED is currently the only event sent on the
+ * incoming side, when the incoming migration fails and before the failure
+ * is published.
  */
 typedef enum MigrationEventType {
     MIG_EVENT_SETUP,
     MIG_EVENT_POSTCOPY_START,
     MIG_EVENT_DONE,
     MIG_EVENT_FAILED,
+    MIG_EVENT_INCOMING_FAILED,
     MIG_EVENT_MAX
 } MigrationEventType;
 
@@ -160,5 +165,7 @@ void multifd_abort_device_state_save_threads(void);
 bool multifd_join_device_state_save_threads(void);
 
 void migration_request_switchover_ack_legacy(const char *requester);
+
+bool migrate_local(void);
 
 #endif

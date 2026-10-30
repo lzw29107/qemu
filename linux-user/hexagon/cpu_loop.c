@@ -39,11 +39,19 @@ void cpu_loop(CPUHexagonState *env)
         cpu_exec_end(cs);
         qemu_process_cpu_events(cs);
 
+        if (trapnr != EXCP_ATOMIC && trapnr != EXCP_YIELD) {
+            env->llsc_addr = ~0;
+        }
+
         switch (trapnr) {
         case EXCP_INTERRUPT:
             /* just indicate that signals should be handled asap */
             break;
         case HEX_EVENT_TRAP0:
+        case HEX_EVENT_TRAP2:
+            /* Exception entry ends any pending restricted-branch check. */
+            env->cfi_active = 0;
+            env->cfi_updated = 0;
             syscallnum = env->gpr[6];
             env->gpr[HEX_REG_PC] += 4;
             ret = do_syscall(env,
@@ -66,36 +74,38 @@ void cpu_loop(CPUHexagonState *env)
             case HEX_CAUSE_FETCH_NO_UPAGE:
             case HEX_CAUSE_PRIV_NO_UREAD:
             case HEX_CAUSE_PRIV_NO_UWRITE:
-            force_sig_fault(TARGET_SIGSEGV, TARGET_SEGV_MAPERR,
-                    env->gpr[HEX_REG_PC]);
-
-            break;
+                force_sig_fault(TARGET_SIGSEGV, TARGET_SEGV_MAPERR,
+                                env->gpr[HEX_REG_PC]);
+                break;
+            case HEX_CAUSE_VECTOR_STACK_OVERFLOW:
+                force_sig_fault(TARGET_SIGSEGV, TARGET_SEGV_BNDERR,
+                                env->gpr[HEX_REG_PC]);
+                break;
+            case HEX_CAUSE_CFI_VIOLATION:
+                env->cfi_active = 0;
+                env->cfi_updated = 0;
+                force_sig_fault(TARGET_SIGILL, TARGET_ILL_ILLOPC,
+                                env->gpr[HEX_REG_PC]);
+                break;
             case HEX_CAUSE_PRIV_USER_NO_GINSN:
             case HEX_CAUSE_PRIV_USER_NO_SINSN:
             case HEX_CAUSE_INVALID_PACKET:
-            force_sig_fault(TARGET_SIGILL, TARGET_ILL_ILLOPC,
-                    env->gpr[HEX_REG_PC]);
-            break;
+            case HEX_CAUSE_REG_WRITE_CONFLICT:
+                force_sig_fault(TARGET_SIGILL, TARGET_ILL_ILLOPC,
+                                env->gpr[HEX_REG_PC]);
+                break;
             case HEX_CAUSE_MISALIGNED_LOAD:
             case HEX_CAUSE_MISALIGNED_STORE:
-            force_sig_fault(TARGET_SIGBUS, TARGET_BUS_ADRALN,
-                    env->gpr[HEX_REG_PC]);
-            break;
+            case HEX_CAUSE_PC_NOT_ALIGNED:
+                force_sig_fault(TARGET_SIGBUS, TARGET_BUS_ADRALN,
+                                env->gpr[HEX_REG_PC]);
+                break;
             default:
                 EXCP_DUMP(env, "\nqemu: unhandled CPU precise exception "
                     "cause code 0x%x - aborting\n",
                     env->cause_code);
                 exit(EXIT_FAILURE);
             }
-            break;
-        case HEX_CAUSE_PC_NOT_ALIGNED:
-            force_sig_fault(TARGET_SIGBUS, TARGET_BUS_ADRALN,
-                            env->gpr[HEX_REG_R31]);
-            break;
-        case HEX_CAUSE_INVALID_PACKET:
-        case HEX_CAUSE_REG_WRITE_CONFLICT:
-            force_sig_fault(TARGET_SIGILL, TARGET_ILL_ILLOPC,
-                            env->gpr[HEX_REG_PC]);
             break;
         case EXCP_ATOMIC:
             cpu_exec_step_atomic(cs);

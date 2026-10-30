@@ -1095,6 +1095,12 @@ typedef struct TCGOutOpSubtract {
                     TCGReg a0, tcg_target_long a1, TCGReg a2);
 } TCGOutOpSubtract;
 
+typedef struct TCGOutOpLea {
+    TCGOutOp base;
+    void (*out)(TCGContext *s, TCGType type, TCGReg a0, TCGReg a1,
+                TCGReg a2, unsigned sh, tcg_target_long imm);
+} TCGOutOpLea;
+
 #include "tcg-target.c.inc"
 
 #ifndef CONFIG_TCG_INTERPRETER
@@ -1158,32 +1164,40 @@ static const TCGOutOpLoad outop_ld = {
 /* Register allocation descriptions for every TCGOpcode. */
 static const TCGOutOp * const all_outop[NB_OPS] = {
     OUTOP(INDEX_op_add, TCGOutOpBinary, outop_add),
+    /* addc1o is implemented with set_carry + addcio */
+    OUTOP(INDEX_op_addc1o, TCGOutOpBinary, outop_addcio),
     OUTOP(INDEX_op_addci, TCGOutOpAddSubCarry, outop_addci),
     OUTOP(INDEX_op_addcio, TCGOutOpBinary, outop_addcio),
     OUTOP(INDEX_op_addco, TCGOutOpBinary, outop_addco),
-    /* addc1o is implemented with set_carry + addcio */
-    OUTOP(INDEX_op_addc1o, TCGOutOpBinary, outop_addcio),
     OUTOP(INDEX_op_and, TCGOutOpBinary, outop_and),
     OUTOP(INDEX_op_andc, TCGOutOpBinary, outop_andc),
     OUTOP(INDEX_op_brcond, TCGOutOpBrcond, outop_brcond),
     OUTOP(INDEX_op_bswap16, TCGOutOpBswap, outop_bswap16),
     OUTOP(INDEX_op_bswap32, TCGOutOpBswap, outop_bswap32),
+    OUTOP(INDEX_op_bswap64, TCGOutOpUnary, outop_bswap64),
     OUTOP(INDEX_op_clz, TCGOutOpBinary, outop_clz),
     OUTOP(INDEX_op_ctpop, TCGOutOpUnary, outop_ctpop),
     OUTOP(INDEX_op_ctz, TCGOutOpBinary, outop_ctz),
     OUTOP(INDEX_op_deposit, TCGOutOpDeposit, outop_deposit),
     OUTOP(INDEX_op_divs, TCGOutOpBinary, outop_divs),
-    OUTOP(INDEX_op_divu, TCGOutOpBinary, outop_divu),
     OUTOP(INDEX_op_divs2, TCGOutOpDivRem, outop_divs2),
+    OUTOP(INDEX_op_divu, TCGOutOpBinary, outop_divu),
     OUTOP(INDEX_op_divu2, TCGOutOpDivRem, outop_divu2),
     OUTOP(INDEX_op_eqv, TCGOutOpBinary, outop_eqv),
     OUTOP(INDEX_op_extract, TCGOutOpExtract, outop_extract),
     OUTOP(INDEX_op_extract2, TCGOutOpExtract2, outop_extract2),
-    OUTOP(INDEX_op_ld8u, TCGOutOpLoad, outop_ld8u),
-    OUTOP(INDEX_op_ld8s, TCGOutOpLoad, outop_ld8s),
-    OUTOP(INDEX_op_ld16u, TCGOutOpLoad, outop_ld16u),
-    OUTOP(INDEX_op_ld16s, TCGOutOpLoad, outop_ld16s),
+    OUTOP(INDEX_op_ext_i32_i64, TCGOutOpUnary, outop_exts_i32_i64),
+    OUTOP(INDEX_op_extrh_i64_i32, TCGOutOpUnary, outop_extrh_i64_i32),
+    OUTOP(INDEX_op_extrl_i64_i32, TCGOutOpUnary, outop_extrl_i64_i32),
+    OUTOP(INDEX_op_extu_i32_i64, TCGOutOpUnary, outop_extu_i32_i64),
     OUTOP(INDEX_op_ld, TCGOutOpLoad, outop_ld),
+    OUTOP(INDEX_op_ld8s, TCGOutOpLoad, outop_ld8s),
+    OUTOP(INDEX_op_ld8u, TCGOutOpLoad, outop_ld8u),
+    OUTOP(INDEX_op_ld16s, TCGOutOpLoad, outop_ld16s),
+    OUTOP(INDEX_op_ld16u, TCGOutOpLoad, outop_ld16u),
+    OUTOP(INDEX_op_ld32s, TCGOutOpLoad, outop_ld32s),
+    OUTOP(INDEX_op_ld32u, TCGOutOpLoad, outop_ld32u),
+    OUTOP(INDEX_op_lea, TCGOutOpLea, outop_lea),
     OUTOP(INDEX_op_movcond, TCGOutOpMovcond, outop_movcond),
     OUTOP(INDEX_op_mul, TCGOutOpBinary, outop_mul),
     OUTOP(INDEX_op_muls2, TCGOutOpMul2, outop_muls2),
@@ -1203,7 +1217,9 @@ static const TCGOutOp * const all_outop[NB_OPS] = {
     OUTOP(INDEX_op_qemu_st2, TCGOutOpQemuLdSt2, outop_qemu_st2),
     OUTOP(INDEX_op_rems, TCGOutOpBinary, outop_rems),
     OUTOP(INDEX_op_remu, TCGOutOpBinary, outop_remu),
+    OUTOP(INDEX_op_revbit8, TCGOutOpUnary, outop_revbit8),
     OUTOP(INDEX_op_revbit32, TCGOutOpBswap, outop_revbit32),
+    OUTOP(INDEX_op_revbit64, TCGOutOpUnary, outop_revbit64),
     OUTOP(INDEX_op_rotl, TCGOutOpBinary, outop_rotl),
     OUTOP(INDEX_op_rotr, TCGOutOpBinary, outop_rotr),
     OUTOP(INDEX_op_sar, TCGOutOpBinary, outop_sar),
@@ -1216,28 +1232,18 @@ static const TCGOutOp * const all_outop[NB_OPS] = {
     OUTOP(INDEX_op_st, TCGOutOpStore, outop_st),
     OUTOP(INDEX_op_st8, TCGOutOpStore, outop_st8),
     OUTOP(INDEX_op_st16, TCGOutOpStore, outop_st16),
+    OUTOP(INDEX_op_st32, TCGOutOpStore, outop_st),
     OUTOP(INDEX_op_sub, TCGOutOpSubtract, outop_sub),
+    /* subb1o is implemented with set_borrow + subbio */
+    OUTOP(INDEX_op_subb1o, TCGOutOpAddSubCarry, outop_subbio),
     OUTOP(INDEX_op_subbi, TCGOutOpAddSubCarry, outop_subbi),
     OUTOP(INDEX_op_subbio, TCGOutOpAddSubCarry, outop_subbio),
     OUTOP(INDEX_op_subbo, TCGOutOpAddSubCarry, outop_subbo),
-    /* subb1o is implemented with set_borrow + subbio */
-    OUTOP(INDEX_op_subb1o, TCGOutOpAddSubCarry, outop_subbio),
     OUTOP(INDEX_op_umax, TCGOutOpBinary, outop_umax),
     OUTOP(INDEX_op_umin, TCGOutOpBinary, outop_umin),
     OUTOP(INDEX_op_xor, TCGOutOpBinary, outop_xor),
 
     [INDEX_op_goto_ptr] = &outop_goto_ptr,
-
-    OUTOP(INDEX_op_bswap64, TCGOutOpUnary, outop_bswap64),
-    OUTOP(INDEX_op_ext_i32_i64, TCGOutOpUnary, outop_exts_i32_i64),
-    OUTOP(INDEX_op_extu_i32_i64, TCGOutOpUnary, outop_extu_i32_i64),
-    OUTOP(INDEX_op_extrl_i64_i32, TCGOutOpUnary, outop_extrl_i64_i32),
-    OUTOP(INDEX_op_extrh_i64_i32, TCGOutOpUnary, outop_extrh_i64_i32),
-    OUTOP(INDEX_op_ld32u, TCGOutOpLoad, outop_ld32u),
-    OUTOP(INDEX_op_ld32s, TCGOutOpLoad, outop_ld32s),
-    OUTOP(INDEX_op_revbit8, TCGOutOpUnary, outop_revbit8),
-    OUTOP(INDEX_op_revbit64, TCGOutOpUnary, outop_revbit64),
-    OUTOP(INDEX_op_st32, TCGOutOpStore, outop_st),
 };
 
 #undef OUTOP
@@ -2202,6 +2208,10 @@ void tcg_temp_free_internal(TCGTemp *ts)
 {
     TCGContext *s = tcg_ctx;
 
+    if (ts == NULL) {
+        return;
+    }
+
     switch (ts->kind) {
     case TEMP_CONST:
     case TEMP_TB:
@@ -2252,6 +2262,10 @@ TCGTemp *tcg_constant_internal(TCGType type, int64_t val)
     if (h == NULL) {
         h = g_hash_table_new(g_int64_hash, g_int64_equal);
         s->const_table[type] = h;
+    }
+
+    if (type == TCG_TYPE_I32) {
+        val = (int32_t)val;
     }
 
     ts = g_hash_table_lookup(h, &val);
@@ -2884,11 +2898,11 @@ void tcg_dump_ops(TCGContext *s, FILE *f, bool have_prefs)
             if (def->flags & TCG_OPF_INT) {
                 col += ne_fprintf(f, " %s_i%d ",
                                   def->name,
-                                  8 * tcg_type_size(TCGOP_TYPE(op)));
+                                  tcg_type_bits(TCGOP_TYPE(op)));
             } else if (def->flags & TCG_OPF_VECTOR) {
                 col += ne_fprintf(f, "%s v%d,e%d,",
                                   def->name,
-                                  8 * tcg_type_size(TCGOP_TYPE(op)),
+                                  tcg_type_bits(TCGOP_TYPE(op)),
                                   8 << TCGOP_VECE(op));
             } else {
                 col += ne_fprintf(f, " %s ", def->name);
@@ -5786,6 +5800,21 @@ static void tcg_reg_alloc_op(TCGContext *s, const TCGOp *op)
                 out->out_rrr(s, type, cond,
                              new_args[0], new_args[1], new_args[2]);
             }
+        }
+        break;
+
+    case INDEX_op_lea:
+        {
+            const TCGOutOpLea *out = &outop_lea;
+            int sh = new_args[3];
+            tcg_target_long imm = new_args[4];
+
+            tcg_debug_assert(!const_args[1]);
+            tcg_debug_assert(!const_args[2]);
+            tcg_debug_assert(TCG_TARGET_lea_sh_valid(type, sh));
+            tcg_debug_assert(TCG_TARGET_lea_imm_valid(type, imm));
+
+            out->out(s, type, new_args[0], new_args[1], new_args[2], sh, imm);
         }
         break;
 

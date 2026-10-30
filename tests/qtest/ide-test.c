@@ -839,7 +839,7 @@ static void test_flush(void)
     make_dirty(qts, 0);
 
     /* Delay the completion of the flush request until we explicitly do it */
-    g_free(qtest_hmp(qts, "qemu-io ide0-hd0 \"break flush_to_os A\""));
+    qtest_qemu_io(qts, "ide0-hd0", "break flush_to_os A");
 
     /* FLUSH CACHE command on device 0*/
     qpci_io_writeb(dev, ide_bar, reg_device, 0);
@@ -851,7 +851,7 @@ static void test_flush(void)
     assert_bit_clear(data, DF | ERR | DRQ);
 
     /* Complete the command */
-    g_free(qtest_hmp(qts, "qemu-io ide0-hd0 \"resume A\""));
+    qtest_qemu_io(qts, "ide0-hd0", "resume A");
 
     /* Check registers */
     data = qpci_io_readb(dev, ide_bar, reg_device);
@@ -1345,11 +1345,34 @@ static void ide_prepare_markers(QTestState *qts, QPCIDevice *dev,
     ide_write_marker(qts, dev, ide_bar, 63, CHS_MARKER_DEFAULT);
 }
 
-static void ide_hmp_quiet(QTestState *qts, const char *command)
+static void ide_snapshot_save(QTestState *qts, const char *tag,
+                              const char *vmstate, const char *device)
 {
-    g_autofree char *out = qtest_hmp(qts, "%s", command);
+    qtest_qmp_assert_success(qts,
+        "{ 'execute': 'snapshot-save',"
+        "  'arguments': {"
+        "    'job-id': 'save0',"
+        "    'tag': %s,"
+        "    'vmstate': %s,"
+        "    'devices': [%s]"
+        "  }"
+        "}", tag, vmstate, device);
+    qtest_qmp_job_wait(qts, "save0");
+}
 
-    g_assert_cmpstr(out, ==, "");
+static void ide_snapshot_load(QTestState *qts, const char *tag,
+                              const char *vmstate, const char *device)
+{
+    qtest_qmp_assert_success(qts,
+        "{ 'execute': 'snapshot-load',"
+        "  'arguments': {"
+        "    'job-id': 'load0',"
+        "    'tag': %s,"
+        "    'vmstate': %s,"
+        "    'devices': [%s]"
+        "  }"
+        "}", tag, vmstate, device);
+    qtest_qmp_job_wait(qts, "load0");
 }
 
 static char *ide_migration_status(QTestState *qts)
@@ -1476,13 +1499,13 @@ static void test_migrate_chs_snapshot(void)
     /* Snapshot taken while the default translation is in effect */
     ide_read_chs_marker(qts, dev, ide_bar, 0, 1, 1, marker);
     g_assert_cmpstr(marker, ==, CHS_MARKER_DEFAULT);
-    ide_hmp_quiet(qts, "savevm s0");
+    ide_snapshot_save(qts, "s0", "hda", "hda");
 
     ide_set_translation(dev, ide_bar, 8, 32);
     ide_read_chs_marker(qts, dev, ide_bar, 0, 1, 1, marker);
     g_assert_cmpstr(marker, ==, CHS_MARKER_CUSTOM);
 
-    ide_hmp_quiet(qts, "loadvm s0");
+    ide_snapshot_load(qts, "s0", "hda", "hda");
 
     ide_read_chs_marker(qts, dev, ide_bar, 0, 1, 1, marker);
     g_assert_cmpstr(marker, ==, CHS_MARKER_DEFAULT);

@@ -186,6 +186,7 @@ static bool decode_opcode_can_jump(int opcode)
         (GET_ATTRIB(opcode, A_CALL)) ||
         (opcode == J2_trap0) ||
         (opcode == J2_trap1) ||
+        (opcode == J2_trap2) ||
         (opcode == J2_rte) ||
         (opcode == J2_pause)) {
         /* Exception to A_JUMP attribute */
@@ -600,8 +601,11 @@ decode_set_slot_number(Packet *pkt)
     for (i = 0, slot = 3; i < pkt->num_insns; i++) {
         SlotMask valid_slots = get_valid_slots(pkt, i);
 
-        while (!(valid_slots & (1 << slot))) {
+        while (slot >= 0 && !(valid_slots & (1 << slot))) {
             slot--;
+        }
+        if (slot < 0) {
+            return false;
         }
         pkt->insn[i].slot = slot;
         if (slot) {
@@ -692,52 +696,19 @@ bool opcode_supported(uint16_t opcode, const HexagonCPUDef *hex_def)
 }
 
 /*
- * Check for GPR write conflicts in the packet.
- * A conflict exists when a register is written by more than one instruction
- * and at least one of those writes is unconditional.
- *
- * TODO: handle the more general case of any
- * packet w/multiple-register-write operands.
+ * Some encodings of an otherwise supported opcode are reserved on newer
+ * versions.  HEX_VER_ANY (used when only disassembling) accepts everything.
  */
-static bool pkt_has_write_conflict(Packet *pkt)
+bool encoding_supported(uint16_t opcode, uint32_t encoding,
+                        const HexagonCPUDef *hex_def)
 {
-    DECLARE_BITMAP(all_dest_gprs, 32) = { 0 };
-    DECLARE_BITMAP(wreg_mult_gprs, 32) = { 0 };
-    DECLARE_BITMAP(uncond_wreg_gprs, 32) = { 0 };
-    DECLARE_BITMAP(conflict, 32);
-
-    for (int i = 0; i < pkt->num_insns; i++) {
-        Insn *insn = &pkt->insn[i];
-        int dest = insn->dest_idx;
-
-        if (dest < 0 || !insn->dest_is_gpr) {
-            continue;
-        }
-
-        int rnum = insn->regno[dest];
-        bool is_uncond = !GET_ATTRIB(insn->opcode, A_CONDEXEC);
-
-        if (test_bit(rnum, all_dest_gprs)) {
-            set_bit(rnum, wreg_mult_gprs);
-        }
-        set_bit(rnum, all_dest_gprs);
-        if (is_uncond) {
-            set_bit(rnum, uncond_wreg_gprs);
-        }
-
-        if (insn->dest_is_pair) {
-            if (test_bit(rnum + 1, all_dest_gprs)) {
-                set_bit(rnum + 1, wreg_mult_gprs);
-            }
-            set_bit(rnum + 1, all_dest_gprs);
-            if (is_uncond) {
-                set_bit(rnum + 1, uncond_wreg_gprs);
-            }
-        }
+    /* Bit 7 of L4_loadw_phys became reserved in v83. */
+    if (hex_def->hex_version != HEX_VER_ANY &&
+        hex_def->hex_version >= HEX_VER_V83 &&
+        opcode == L4_loadw_phys && (encoding & 0x80)) {
+        return false;
     }
-
-    bitmap_and(conflict, wreg_mult_gprs, uncond_wreg_gprs, 32);
-    return !bitmap_empty(conflict, 32);
+    return true;
 }
 
 /*
@@ -759,10 +730,6 @@ int decode_packet(DisasContext *ctx, int max_words, const uint32_t *words,
 
     /* Initialize */
     memset(pkt, 0, sizeof(*pkt));
-    for (i = 0; i < INSTRUCTIONS_MAX; i++) {
-        pkt->insn[i].dest_idx = -1;
-        pkt->insn[i].new_read_idx = -1;
-    }
     /* Try to build packet */
     while (!end_of_packet && (words_read < max_words)) {
         Insn *insn = &pkt->insn[num_insns];
@@ -772,6 +739,9 @@ int decode_packet(DisasContext *ctx, int max_words, const uint32_t *words,
         new_insns = decode_insns(ctx, insn, encoding32);
         if (new_insns == 0) {
             /* Invalid instruction encoding */
+            return 0;
+        }
+        if (!encoding_supported(insn->opcode, encoding32, ctx->hex_def)) {
             return 0;
         }
         /*
@@ -837,7 +807,6 @@ int decode_packet(DisasContext *ctx, int max_words, const uint32_t *words,
             /* Invalid packet */
             return 0;
         }
-        pkt->pkt_has_write_conflict = pkt_has_write_conflict(pkt);
     }
     decode_fill_newvalue_regno(pkt);
 

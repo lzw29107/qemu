@@ -1,6 +1,6 @@
 # THIS FILE WAS AUTO-GENERATED
 #
-#  $ lcitool dockerfile --layers all fedora-43 qemu
+#  $ lcitool dockerfile --layers all --host-arch x86_64 fedora-43 qemu
 #
 # https://gitlab.com/libvirt/libvirt-ci
 
@@ -104,6 +104,8 @@ exec "$@"\n' > /usr/bin/nosync && \
                        pkgconfig \
                        pulseaudio-libs-devel \
                        python3 \
+                       python3-numpy \
+                       python3-opencv \
                        python3-pip \
                        python3-setuptools \
                        python3-sphinx \

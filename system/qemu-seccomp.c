@@ -76,13 +76,6 @@ const struct scmp_arg_cmp sched_setscheduler_arg[] = {
     { SCMP_SYS(clone),                  QEMU_SECCOMP_SET_SPAWN, \
       ARRAY_SIZE(clone_arg ## flag), clone_arg ## flag, SCMP_ACT_ERRNO(EPERM) }
 
-/* If no CLONE_* flags are set, except CSIGNAL, deny */
-const struct scmp_arg_cmp clone_arg_none[] = {
-    { .arg = CLONE_FLAGS_ARG,
-      .op = SCMP_CMP_MASKED_EQ,
-      .datum_a = ~(CSIGNAL), .datum_b = 0 }
-};
-
 /*
  * pthread_create should always set all of these.
  */
@@ -219,8 +212,6 @@ static const struct QemuSeccompSyscall denylist[] = {
       0, NULL, SCMP_ACT_ERRNO(EPERM) },
     { SCMP_SYS(execve),                 QEMU_SECCOMP_SET_SPAWN,
       0, NULL, SCMP_ACT_ERRNO(EPERM) },
-    { SCMP_SYS(clone),                  QEMU_SECCOMP_SET_SPAWN,
-      ARRAY_SIZE(clone_arg_none), clone_arg_none, SCMP_ACT_ERRNO(EPERM) },
     RULE_CLONE_FLAG(CLONE_VM),
     RULE_CLONE_FLAG(CLONE_FS),
     RULE_CLONE_FLAG(CLONE_FILES),
@@ -249,10 +240,13 @@ static const struct QemuSeccompSyscall denylist[] = {
       0, NULL, SCMP_ACT_ERRNO(ENOSYS) },
 #endif
 #ifdef __SNR_execveat
-    { SCMP_SYS(execveat),               QEMU_SECCOMP_SET_SPAWN },
+    { SCMP_SYS(execveat),               QEMU_SECCOMP_SET_SPAWN,
+      0, NULL, SCMP_ACT_ERRNO(EPERM) },
 #endif
-    { SCMP_SYS(setns),                  QEMU_SECCOMP_SET_SPAWN },
-    { SCMP_SYS(unshare),                QEMU_SECCOMP_SET_SPAWN },
+    { SCMP_SYS(setns),                  QEMU_SECCOMP_SET_SPAWN,
+      0, NULL, SCMP_ACT_ERRNO(EPERM) },
+    { SCMP_SYS(unshare),                QEMU_SECCOMP_SET_SPAWN,
+      0, NULL, SCMP_ACT_ERRNO(EPERM) },
     /* resource control */
     { SCMP_SYS(setpriority),            QEMU_SECCOMP_SET_RESOURCECTL,
       0, NULL, SCMP_ACT_ERRNO(EPERM) },
@@ -337,6 +331,12 @@ static int seccomp_start(uint32_t seccomp_opts, Error **errp)
         if (!(seccomp_opts & denylist[i].set)) {
             continue;
         }
+        /*
+         * action == 0 is SCMP_ACT_KILL_THREAD which is not
+         * something we ever want to use. Validate it to protect
+         * against missing struct field initializers
+         */
+        assert(denylist[i].action);
 
         action = qemu_seccomp_update_action(denylist[i].action);
         rc = seccomp_rule_add_array(ctx, action, denylist[i].num,

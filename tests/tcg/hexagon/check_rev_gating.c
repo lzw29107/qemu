@@ -3,9 +3,15 @@
  * are rejected with SIGILL.
  *
  * Compiled with -mv66 so that e_flags selects CPU v66. The test embeds
- * a v68 instruction (L2_loadw_aq: "r0 = memw_aq(r0)") via .word
- * encoding. The revision-gated decoder must reject it, and linux-user
- * must deliver SIGILL.
+ * instructions from v68 up through v81 via .word encoding: the
+ * assembler enforces the selected CPU's own minimum version, so none
+ * of these -- including ones it otherwise knows how to assemble at
+ * their own target, such as callrh or unpause -- can be written as
+ * themselves in a file built for v66. The v79 non-temporal hints
+ * (":nt") aren't known to the assembler at any target yet, so those
+ * would need .word regardless. The revision-gated decoder must reject
+ * representative instructions from each family, and linux-user must
+ * deliver SIGILL.
  *
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: GPL-2.0-or-later
@@ -102,6 +108,32 @@ TRY_FUNC(v73_callrh,
          ".word 0x50c5c000    /* callrh r5 */\n")
 TRY_FUNC(v73_jumprh,
          ".word 0x52c0c000    /* jumprh r0 */\n")
+TRY_FUNC(v73_unpause,
+         ".word 0x57e0d000    /* unpause */\n")
+
+TRY_FUNC(v79_storeri_pi_nt,
+         ".word 0xaa82c308    /* memw(r2++#4):nt = r3 */\n")
+TRY_FUNC(v79_pstorerit_pi_nt,
+         ".word 0xaa82e308    /* if (p0) memw(r2++#4):nt = r3 */\n")
+TRY_FUNC(v79_pstorerif_pi_nt,
+         ".word 0xaa82e30c    /* if (!p0) memw(r2++#4):nt = r3 */\n")
+TRY_FUNC(v79_dczeroa_nt,
+         ".word 0xa0c2e000    /* dczeroa(r2):nt */\n")
+TRY_FUNC(v79_dcfetchbo_nt,
+         ".word 0x9402e000    /* dcfetch(r2+#0):nt */\n")
+
+TRY_FUNC(v83_callr_rb,
+         ".word 0x5020c000    /* callr_rb r0 */\n")
+TRY_FUNC(v83_nop_rb,
+         ".word 0x7f80c000    /* nop_rb */\n")
+TRY_FUNC(v83_vsfadd,
+         ".word 0xeb02c440    /* r1:0 = vsfadd(r3:2, r5:4) */\n")
+
+TRY_FUNC(v79hvx_vmerge_qf,
+         ".word 0x1f01e0e2    /* v2 = vmerge(v0.x, v1.w) */\n")
+
+TRY_FUNC(v81hvx_veqhf,
+         ".word 0x1f82c11c    /* q0 = vcmp.eq(v1.hf, v2.hf) */\n")
 
 int main(void)
 {
@@ -133,6 +165,20 @@ int main(void)
 
     assert(try_v73_callrh() == SIGILL);
     assert(try_v73_jumprh() == SIGILL);
+    assert(try_v73_unpause() == SIGILL);
+
+    assert(try_v79_storeri_pi_nt() == SIGILL);
+    assert(try_v79_pstorerit_pi_nt() == SIGILL);
+    assert(try_v79_pstorerif_pi_nt() == SIGILL);
+    assert(try_v79_dczeroa_nt() == SIGILL);
+    assert(try_v79_dcfetchbo_nt() == SIGILL);
+    assert(try_v83_callr_rb() == SIGILL);
+    assert(try_v83_nop_rb() == SIGILL);
+    assert(try_v83_vsfadd() == SIGILL);
+
+    assert(try_v79hvx_vmerge_qf() == SIGILL);
+
+    assert(try_v81hvx_veqhf() == SIGILL);
 
     assert(signals_handled == expected_signals);
 

@@ -24,14 +24,6 @@ const char *target_name(void);
 unsigned target_long_bits(void);
 
 /**
- * target_machine_typename:
- *
- * Returns: Name of the QOM interface implemented by machines
- *          usable on this target binary.
- */
-const char *target_machine_typename(void);
-
-/**
  * target_cpu_type:
  *
  * Returns: target CPU base QOM type name (i.e. TYPE_X86_CPU).
@@ -49,6 +41,14 @@ const char *target_cpu_type(void);
  * well what you are doing!
  */
 bool target_big_endian(void);
+
+/**
+ * target_heterogeneous:
+ *
+ * Returns true if current binary has support for running several target
+ * architectures at once (heterogeneous emulation).
+ */
+bool target_heterogeneous(void);
 
 /**
  * target_base_arm:
@@ -70,6 +70,27 @@ bool target_arm(void);
  * Returns whether the target architecture is Aarch64.
  */
 bool target_aarch64(void);
+
+/**
+ * target_m68k:
+ *
+ * Returns whether the target architecture is M68K.
+ */
+bool target_m68k(void);
+
+/**
+ * target_hexagon:
+ *
+ * Returns whether the target architecture is Hexagon.
+ */
+bool target_hexagon(void);
+
+/**
+ * target_or1k:
+ *
+ * Returns whether the target architecture is OpenRISC 1000.
+ */
+bool target_or1k(void);
 
 /**
  * target_base_ppc:
@@ -98,6 +119,13 @@ bool target_ppc64(void);
  * Returns whether the target architecture is S390x.
  */
 bool target_s390x(void);
+
+/**
+ * target_base_riscv:
+ *
+ * Returns whether the target architecture is RISC-V 32-bit or 64-bit.
+ */
+bool target_base_riscv(void);
 
 /**
  * target_riscv64:

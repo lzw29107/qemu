@@ -1,10 +1,10 @@
 # THIS FILE WAS AUTO-GENERATED
 #
-#  $ lcitool dockerfile --layers all --cross-arch riscv64 debian-13 qemu
+#  $ lcitool dockerfile --layers all --host-arch x86_64 --cross-arch riscv64 debian-13 qemu
 #
 # https://gitlab.com/libvirt/libvirt-ci
 
-FROM docker.io/library/debian:13-slim
+FROM docker.io/amd64/debian:13-slim
 
 RUN export DEBIAN_FRONTEND=noninteractive && \
     apt-get update && \
@@ -41,6 +41,8 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
                       openssh-client \
                       pkgconf \
                       python3 \
+                      python3-numpy \
+                      python3-opencv \
                       python3-pip \
                       python3-setuptools \
                       python3-sphinx \
@@ -129,7 +131,7 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
                       libsdl2-dev:riscv64 \
                       libsdl2-image-dev:riscv64 \
                       libseccomp-dev:riscv64 \
-                      libselinux1-dev:riscv64 \
+                      libselinux-dev:riscv64 \
                       libslirp-dev:riscv64 \
                       libsnappy-dev:riscv64 \
                       libsndio-dev:riscv64 \

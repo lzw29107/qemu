@@ -52,7 +52,8 @@ void qemu_chr_fe_deinit(CharFrontend *c, bool del);
  * associated Chardev.
  * Note: avoid this function as the driver should never be accessed directly,
  *       especially by the frontends that support chardevice hotswap.
- *       Consider qemu_chr_fe_backend_connected() to check for driver existence
+ *       Consider qemu_chr_fe_backend_connected() to check for driver
+ *       existence or qemu_chr_fe_backend_name() if you need the name.
  */
 Chardev *qemu_chr_fe_get_driver(CharFrontend *c);
 
@@ -69,6 +70,16 @@ bool qemu_chr_fe_backend_connected(CharFrontend *c);
  * Returns: true if the backend associated with @c is open.
  */
 bool qemu_chr_fe_backend_open(CharFrontend *c);
+
+/**
+ * qemu_chr_fe_backend_name:
+ *
+ * Returns: caller freeable string or NULL
+ */
+static inline char *qemu_chr_fe_backend_name(CharFrontend *c)
+{
+    return (c->chr && c->chr->label) ? g_strdup(c->chr->label) : NULL;
+}
 
 /**
  * qemu_chr_fe_set_handlers_full:
@@ -156,6 +167,16 @@ int qemu_chr_fe_wait_connected(CharFrontend *c, Error **errp);
  * Without associated Chardev, do nothing.
  */
 void qemu_chr_fe_set_echo(CharFrontend *c, bool echo);
+
+/**
+ * qemu_chr_fe_get_winsize:
+ * @cols: the address for storing columns
+ * @rows: the address for storing rows
+ *
+ * Get the size of the terminal connected to the chardev backend.
+ * Returns *cols = *rows = 0, if no associated Chardev.
+ */
+void qemu_chr_fe_get_winsize(CharFrontend *c, uint16_t *cols, uint16_t *rows);
 
 /**
  * qemu_chr_fe_set_open:

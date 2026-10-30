@@ -361,7 +361,7 @@ static int do_strtosz(const char *nptr, const char **end,
          */
         double fraction = 0.0;
 
-        if (retval == 0 && *endptr == '.' && !isdigit(endptr[1])) {
+        if (retval == 0 && *endptr == '.' && !qemu_isdigit(endptr[1])) {
             /* If we got here, we parsed at least one digit already. */
             endptr++;
         } else {
@@ -1071,6 +1071,12 @@ const char *iec_binary_prefix(unsigned int exp2)
 
     assert(exp2 % 10 == 0 && exp2 / 10 < ARRAY_SIZE(prefixes));
     return prefixes[exp2 / 10];
+}
+
+const char *str_array_elem_or_null(const char *const *array,
+                                   size_t nelem, uint64_t index)
+{
+    return index >= nelem ? NULL : array[index];
 }
 
 /*

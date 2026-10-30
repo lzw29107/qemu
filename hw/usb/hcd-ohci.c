@@ -74,6 +74,7 @@ struct ohci_hcca {
 /* Flags in the head field of an Endpoint Descriptor. */
 #define OHCI_ED_H         1
 #define OHCI_ED_C         2
+#define OHCI_ED_HEAD_RSVD   (1 << 2 | 1 << 3)
 
 /* Bitfields for the first word of a Transfer Descriptor. */
 #define OHCI_TD_R         (1 << 18)
@@ -371,6 +372,8 @@ void ohci_hard_reset(OHCIState *ohci)
     ohci_soft_reset(ohci);
     ohci->ctl = 0;
     ohci_roothub_reset(ohci);
+    ohci->big_endian = false;
+    ohci->consistency_check = false;
 }
 
 /* Get an array of dwords from main memory */
@@ -576,7 +579,6 @@ static int ohci_service_iso_td(OHCIState *ohci, struct ohci_ed *ed)
     int i;
     USBDevice *dev;
     USBEndpoint *ep;
-    USBPacket *pkt;
     QEMU_UNINITIALIZED uint8_t buf[8192];
     bool int_req;
     struct ohci_iso_td iso_td;
@@ -739,24 +741,31 @@ static int ohci_service_iso_td(OHCIState *ohci, struct ohci_ed *ed)
         return 1;
     }
     ep = usb_ep_get(dev, pid, OHCI_BM(ed->flags, ED_EN));
-    pkt = g_new0(USBPacket, 1);
-    usb_packet_init(pkt);
-    int_req = relative_frame_number == frame_count &&
-              OHCI_BM(iso_td.flags, TD_DI) == 0;
-    usb_packet_setup(pkt, pid, ep, 0, addr, false, int_req);
-    usb_packet_addbuf(pkt, buf, len);
-    usb_handle_packet(dev, pkt);
+    if (ep->type == USB_ENDPOINT_XFER_ISOC) {
+        USBPacket *pkt = g_new0(USBPacket, 1);
 
-    /* The USB core guarantees to never defer ISO TDs. */
-    assert(pkt->status != USB_RET_ASYNC);
+        usb_packet_init(pkt);
+        int_req = relative_frame_number == frame_count &&
+            OHCI_BM(iso_td.flags, TD_DI) == 0;
+        usb_packet_setup(pkt, pid, ep, 0, addr, false, int_req);
+        usb_packet_addbuf(pkt, buf, len);
+        usb_handle_packet(dev, pkt);
 
-    if (pkt->status == USB_RET_SUCCESS) {
-        ret = pkt->actual_length;
+        /* The USB core guarantees to never defer ISO TDs. */
+        assert(pkt->status != USB_RET_ASYNC);
+
+        if (pkt->status == USB_RET_SUCCESS) {
+            ret = pkt->actual_length;
+        } else {
+            ret = pkt->status;
+        }
+        usb_packet_cleanup(pkt);
+        g_free(pkt);
     } else {
-        ret = pkt->status;
+        /* Attempted iso transfer to non-iso endpoint */
+        ret = USB_RET_NAK;
+        trace_usb_ohci_iso_td_to_non_iso_endpoint(ep->nr);
     }
-    usb_packet_cleanup(pkt);
-    g_free(pkt);
 
     trace_usb_ohci_iso_td_so(start_offset, end_offset, start_addr, end_addr,
                              str, len, ret);
@@ -864,6 +873,18 @@ static void ohci_td_pkt(const char *msg, const uint8_t *buf, size_t len)
         }
 
         p += sprintf(p, " %.2x", buf[i]);
+    }
+}
+
+static void ohci_bswap_buf(uint8_t *buf, size_t len)
+{
+    uint32_t w;
+    while (len >= sizeof(w)) {
+        memcpy(&w, buf, sizeof(w));
+        w = bswap32(w);
+        memcpy(buf, &w, sizeof(w));
+        buf += sizeof(w);
+        len -= sizeof(w);
     }
 }
 
@@ -975,6 +996,9 @@ static int ohci_service_td(OHCIState *ohci, struct ohci_ed *ed)
                                  DMA_DIRECTION_TO_DEVICE)) {
                     ohci_die(ohci);
                 }
+                if (ohci->big_endian) {
+                    ohci_bswap_buf(ohci->usb_buf, pktlen);
+                }
             }
         }
     }
@@ -1004,16 +1028,23 @@ static int ohci_service_td(OHCIState *ohci, struct ohci_ed *ed)
             trace_usb_ohci_td_too_many_pending(ep->nr);
             return 1;
         }
-        usb_packet_setup(&ohci->usb_packet, pid, ep, 0, addr, !flag_r,
-                         OHCI_BM(td.flags, TD_DI) == 0);
-        usb_packet_addbuf(&ohci->usb_packet, ohci->usb_buf, pktlen);
-        usb_handle_packet(dev, &ohci->usb_packet);
-        trace_usb_ohci_td_packet_status(ohci->usb_packet.status);
+        if (ep->type != USB_ENDPOINT_XFER_ISOC) {
+            usb_packet_setup(&ohci->usb_packet, pid, ep, 0, addr, !flag_r,
+                             OHCI_BM(td.flags, TD_DI) == 0);
+            usb_packet_addbuf(&ohci->usb_packet, ohci->usb_buf, pktlen);
+            usb_handle_packet(dev, &ohci->usb_packet);
+            trace_usb_ohci_td_packet_status(ohci->usb_packet.status);
 
-        if (ohci->usb_packet.status == USB_RET_ASYNC) {
-            usb_device_flush_ep_queue(dev, ep);
-            ohci->async_td = addr;
-            return 1;
+            if (ohci->usb_packet.status == USB_RET_ASYNC) {
+                usb_device_flush_ep_queue(dev, ep);
+                ohci->async_td = addr;
+                return 1;
+            }
+        } else {
+            /* Attempted non-iso transfer to iso endpoint */
+            ohci->usb_packet.status = USB_RET_NAK;
+            ohci->usb_packet.actual_length = 0;
+            trace_usb_ohci_td_to_iso_endpoint(ep->nr);
         }
     }
     if (ohci->usb_packet.status == USB_RET_SUCCESS) {
@@ -1024,6 +1055,9 @@ static int ohci_service_td(OHCIState *ohci, struct ohci_ed *ed)
 
     if (ret >= 0) {
         if (dir == OHCI_TD_DIR_IN) {
+            if (ohci->big_endian) {
+                ohci_bswap_buf(ohci->usb_buf, ret);
+            }
             if (ohci_copy_td(ohci, &td, ohci->usb_buf, ret,
                              DMA_DIRECTION_FROM_DEVICE)) {
                 ohci_die(ohci);
@@ -1108,6 +1142,13 @@ static int ohci_service_td(OHCIState *ohci, struct ohci_ed *ed)
         ohci->done_count = i;
     }
 exit_no_retire:
+    if (ohci->media_error) {
+        int cc = OHCI_BM(td.flags, TD_CC);
+        /* only these 2 errors will ever actually be possible in qemu */
+        if (cc == OHCI_CC_DEVICENOTRESPONDING || cc == OHCI_CC_UNDEXPETEDPID) {
+            ohci->media_error(ohci);
+        }
+    }
     if (ohci_put_td(ohci, addr, &td)) {
         ohci_die(ohci);
         return 1;
@@ -1133,6 +1174,13 @@ static int ohci_service_ed_list(OHCIState *ohci, uint32_t head)
 
         if (ohci_read_ed(ohci, cur, &ed)) {
             trace_usb_ohci_ed_read_error(cur);
+            ohci_die(ohci);
+            return 0;
+        }
+        if (ohci->consistency_check && (ed.head & OHCI_ED_HEAD_RSVD)) {
+            if (ohci->descriptor_error) {
+                ohci->descriptor_error(ohci);
+            }
             ohci_die(ohci);
             return 0;
         }

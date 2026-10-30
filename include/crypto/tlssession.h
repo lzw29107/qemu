@@ -167,20 +167,6 @@ void qcrypto_tls_session_free(QCryptoTLSSession *sess);
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(QCryptoTLSSession, qcrypto_tls_session_free)
 
 /**
- * qcrypto_tls_session_require_thread_safety:
- * @sess: the TLS session object
- *
- * Mark that this TLS session will require thread safety
- * for concurrent I/O in both directions. This must be
- * called before the handshake is performed.
- *
- * This will activate a workaround for GNUTLS thread
- * safety issues, where appropriate for the negotiated
- * TLS session parameters.
- */
-void qcrypto_tls_session_require_thread_safety(QCryptoTLSSession *sess);
-
-/**
  * qcrypto_tls_session_check_credentials:
  * @sess: the TLS session object
  * @errp: pointer to a NULL-initialized error object
@@ -207,6 +193,31 @@ typedef ssize_t (*QCryptoTLSSessionReadFunc)(void *buf,
                                              size_t len,
                                              void *opaque,
                                              Error **errp);
+
+/**
+ * qcrypto_tls_session_write_cork:
+ * @sess: the TLS session object
+ *
+ * Causes future qcrypto_tls_session_write() calls to encrypt
+ * and queue data, without sending on the wire.
+ */
+void qcrypto_tls_session_write_cork(QCryptoTLSSession *sess);
+
+/**
+ * qcrypto_tls_session_write_uncork:
+ * @sess: the TLS session object
+ * @errp: pointer to a NULL-initialized error object
+ *
+ * Attempt to send previously queued data. If the underlying
+ * stream is non-blocking, then only a subset of data (if any)
+ * may be written. To process outstanding data, this method
+ * must be called again until it returns 0.
+ *
+ * Returns: the number of bytes remaining to be sent,
+ * or -1 on error.
+ */
+ssize_t qcrypto_tls_session_write_uncork(QCryptoTLSSession *sess,
+                                         Error **errp);
 
 /**
  * qcrypto_tls_session_set_callbacks:

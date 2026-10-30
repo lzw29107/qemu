@@ -1038,6 +1038,13 @@ initial RISC-V QEMU port. Its usage was always been unclear: users don't know
 what to expect from a CPU called 'any', and in fact the CPU does not do anything
 special that isn't already done by the default CPUs rv32/rv64.
 
+RISC-V CPU properties which start with capital 'Z' (removed in 10.1)
+''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+All RISC-V CPU properties which start with capital 'Z' have been removed.
+They were wrongly added with capital 'Z' in the past. CPU properties
+with lower-case names are used instead.
+
 Power8E and Power8NVL CPUs (removed in 11.1)
 ''''''''''''''''''''''''''''''''''''''''''''
 
@@ -1250,6 +1257,16 @@ The default machine option has been removed, forcing users to always set the
 machine they want to use to avoid confusion.  Existing users of the ``spike``
 machine must ensure that they're setting the ``spike`` machine in the
 command line (``-M spike``).
+
+Arm ``musicpal`` machine (removed in 11.2)
+''''''''''''''''''''''''''''''''''''''''''
+
+The ``musicpal`` machine was an emulation of the Freecom MusicPal, an
+"internet radio" device from the mid-2000s. This hardware was never
+supported in upstream Linux, was based on a Marvell SoC with no public
+documentation, and is now obsolete. We accidentally broke booting this
+board in 2024, without anybody noticing; it has therefore been removed
+without a deprecation period.
 
 linux-user mode CPUs
 --------------------

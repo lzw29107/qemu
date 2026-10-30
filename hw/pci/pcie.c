@@ -169,18 +169,36 @@ void pcie_cap_fill_link_ep_usp(PCIDevice *dev, PCIExpLinkWidth width,
                                PCIExpLinkSpeed speed, bool flitmode)
 {
     uint8_t *exp_cap = dev->config + dev->exp.exp_cap;
+    PCIDevice *upstream;
 
     /*
-     * For an end point or USP need to set the current status as well
-     * as the capabilities.
+     * For an endpoint or USP, set Link Status as well as capabilities.
+     * Provisionally use this device's width/speed, then adopt the upstream
+     * port's values so both ends of an emulated link agree.  The upstream
+     * LNKSTA is already clamped to the negotiated link capabilities via
+     * pcie_sync_bridge_lnk().
      */
-    pci_long_test_and_clear_mask(exp_cap + PCI_EXP_LNKSTA,
+    pci_word_test_and_clear_mask(exp_cap + PCI_EXP_LNKSTA,
                                  PCI_EXP_LNKSTA_CLS | PCI_EXP_LNKSTA_NLW);
-    pci_long_test_and_set_mask(exp_cap + PCI_EXP_LNKSTA,
+    pci_word_test_and_set_mask(exp_cap + PCI_EXP_LNKSTA,
                                QEMU_PCI_EXP_LNKSTA_NLW(width) |
                                QEMU_PCI_EXP_LNKSTA_CLS(speed));
 
     pcie_cap_fill_lnk(exp_cap, width, speed, flitmode);
+
+    upstream = pci_bridge_get_device(pci_get_bus(dev));
+    if (upstream && pci_is_express_downstream_port(upstream)) {
+        uint8_t *up_exp = upstream->config + upstream->exp.exp_cap;
+        uint16_t lnksta;
+
+        pcie_sync_bridge_lnk(upstream);
+        lnksta = pci_get_word(up_exp + PCI_EXP_LNKSTA);
+        pci_word_test_and_clear_mask(exp_cap + PCI_EXP_LNKSTA,
+                                     PCI_EXP_LNKSTA_CLS | PCI_EXP_LNKSTA_NLW);
+        pci_word_test_and_set_mask(exp_cap + PCI_EXP_LNKSTA,
+                                   lnksta & (PCI_EXP_LNKSTA_CLS |
+                                             PCI_EXP_LNKSTA_NLW));
+    }
 }
 
 static void pcie_cap_fill_slot_lnk(PCIDevice *dev)
@@ -508,7 +526,7 @@ static void pcie_cap_slot_plug_common(PCIDevice *hotplug_dev, DeviceState *dev,
     }
 }
 
-void pcie_cap_slot_pre_plug_cb(HotplugHandler *hotplug_dev, DeviceState *dev,
+void pcie_cap_slot_pre_plug_cb(const HotplugHandler *hotplug_dev, DeviceState *dev,
                                Error **errp)
 {
     PCIDevice *hotplug_pdev = PCI_DEVICE(hotplug_dev);
@@ -525,7 +543,7 @@ void pcie_cap_slot_pre_plug_cb(HotplugHandler *hotplug_dev, DeviceState *dev,
     pcie_cap_slot_plug_common(PCI_DEVICE(hotplug_dev), dev, errp);
 }
 
-void pcie_cap_slot_plug_cb(HotplugHandler *hotplug_dev, DeviceState *dev,
+void pcie_cap_slot_plug_cb(const HotplugHandler *hotplug_dev, DeviceState *dev,
                            Error **errp)
 {
     PCIDevice *hotplug_pdev = PCI_DEVICE(hotplug_dev);
@@ -571,7 +589,7 @@ void pcie_cap_slot_plug_cb(HotplugHandler *hotplug_dev, DeviceState *dev,
     }
 }
 
-void pcie_cap_slot_unplug_cb(HotplugHandler *hotplug_dev, DeviceState *dev,
+void pcie_cap_slot_unplug_cb(const HotplugHandler *hotplug_dev, DeviceState *dev,
                              Error **errp)
 {
     qdev_unrealize(dev);
@@ -579,7 +597,7 @@ void pcie_cap_slot_unplug_cb(HotplugHandler *hotplug_dev, DeviceState *dev,
 
 static void pcie_unplug_device(PCIBus *bus, PCIDevice *dev, void *opaque)
 {
-    HotplugHandler *hotplug_ctrl = qdev_get_hotplug_handler(DEVICE(dev));
+    const HotplugHandler *hotplug_ctrl = qdev_get_hotplug_handler(DEVICE(dev));
 
     if (dev->partially_hotplugged) {
         dev->qdev.pending_deleted_event = false;
@@ -608,7 +626,7 @@ static void pcie_cap_slot_do_unplug(PCIDevice *dev)
                                PCI_EXP_SLTSTA_PDC);
 }
 
-void pcie_cap_slot_unplug_request_cb(HotplugHandler *hotplug_dev,
+void pcie_cap_slot_unplug_request_cb(const HotplugHandler *hotplug_dev,
                                      DeviceState *dev, Error **errp)
 {
     Error *local_err = NULL;
